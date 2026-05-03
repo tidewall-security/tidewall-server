@@ -1,0 +1,20 @@
+services:
+  tidewall:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./policy.yaml:/app/policy.yaml:ro
+      - tidewall-data:/app/data
+    environment:
+      - POLICY_FILE=/app/policy.yaml
+      - DB_URL=sqlite:///data/tidewall.db
+      - LOG_LEVEL=info
+      - AUTH_ENABLED=false
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+volumes:
+  tidewall-data:

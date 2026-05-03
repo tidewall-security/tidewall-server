@@ -1,0 +1,228 @@
+"""Pydantic v2 models matching the the Tidewall API contract.
+
+These models define the exact shape of requests and responses for the
+``/v1/guard_chat_completions`` and ``/v1/unredact`` endpoints.  The field
+names and nesting deliberately mirror an industry proprietary API so
+that clients (SDK, browser extension) can switch between AIDR-style platforms and Tidewall
+without code changes.
+
+Every response model uses ``ConfigDict(extra="allow")`` for forward
+compatibility — new fields added by future API versions pass through
+without breaking deserialization.
+
+Data flow::
+
+    Client → GuardRequest → guard.py → ScannerEngine → GuardResult → GuardResponse → Client
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+# ===================================================================
+# Request models
+# ===================================================================
+
+
+class GuardRequest(BaseModel):
+    """Inbound guard evaluation request.
+
+    ``guard_input`` contains ``{"messages": [...]}`` in OpenAI chat format.
+    ``event_type`` controls which detectors run: "input" (pre-LLM),
+    "output" (post-LLM), or "tool_listing" (MCP tool filtering).
+    """
+
+    guard_input: dict
+    event_type: str = "input"
+    app_id: str | None = None
+    user_id: str | None = None
+    llm_provider: str | None = None
+    model: str | None = None
+    model_version: str | None = None
+    source_ip: str | None = None
+    source_location: str | None = None
+    tenant_id: str | None = None
+    collector_instance_id: str | None = None
+    extra_info: dict | None = None
+    input_fpe_context: str | None = None
+
+
+class UnredactRequest(BaseModel):
+    """Request to reverse a previous redaction."""
+
+    redacted_data: Any
+    fpe_context: str
+
+
+# ===================================================================
+# Detector data schemas
+# ===================================================================
+
+
+class AnalyzerResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    analyzer: str
+    confidence: float
+
+
+class MaliciousPromptData(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    action: str
+    analyzer_responses: list[AnalyzerResponse]
+
+
+class PiiEntity(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: str
+    value: str
+    action: str
+    start_pos: int
+
+
+class ConfidentialAndPiiEntityData(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    entities: list[PiiEntity]
+
+
+class SecretAndKeyEntityData(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    entities: list[PiiEntity]
+
+
+class MaliciousEntity(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: str
+    value: str
+    start_pos: int
+    raw: str
+
+
+class MaliciousEntityData(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    entities: list[MaliciousEntity]
+
+
+class CustomEntityData(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    entities: list[PiiEntity]
+
+
+class CompetitorsData(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    action: str
+    entities: list[str]
+
+
+class LanguageInfo(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    language: str
+    confidence: float
+
+
+class LanguageData(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    action: str
+    languages: list[LanguageInfo]
+
+
+class TopicInfo(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    topic: str
+    confidence: float
+
+
+class TopicData(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    action: str
+    topics: list[TopicInfo]
+
+
+class EmojiInfo(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    slug: str
+    char: str
+
+
+class EmojiData(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    action: str
+    emojis: list[EmojiInfo]
+
+
+class CodeData(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    action: str
+    language: str
+
+
+# ===================================================================
+# Response models
+# ===================================================================
+
+
+class GuardResult(BaseModel):
+    """Core verdict from the guard evaluation pipeline.
+
+    ``blocked``: True if a blocker detector fired (prompt rejected).
+    ``transformed``: True if any redactor modified the text.
+    ``guard_output``: Sanitized messages (only set when transformed=True).
+    ``detectors``: Per-detector results keyed by detector name.
+    ``access_rules``: Per-rule match results.
+    ``fpe_context``: Opaque token for reversing redaction via /v1/unredact.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    blocked: bool
+    transformed: bool
+    guard_output: dict | None = None
+    policy: str
+    detectors: dict = Field(default_factory=dict)
+    access_rules: dict = Field(default_factory=dict)
+    fpe_context: str | None = None
+
+
+class GuardResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    request_id: str
+    request_time: str
+    response_time: str
+    status: str
+    summary: str
+    result: GuardResult
+
+
+class UnredactResult(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    data: Any
+
+
+class UnredactResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    request_id: str
+    request_time: str
+    response_time: str
+    status: str
+    summary: str
+    result: UnredactResult

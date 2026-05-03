@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tidewall — Visibility</title>
+  <link rel="stylesheet" href="/static/css/theme.css?v=1774734365">
+</head>
+<body>
+  <div id="nav"></div>
+  <main class="page-content">
+    <div class="page-header">
+      <h1>Visibility</h1>
+      <p class="text-muted">AI usage patterns and detection flows</p>
+    </div>
+
+    <!-- Stats row -->
+    <div class="stats-row" id="statsRow"></div>
+
+    <!-- Main layout: chart + sidebar -->
+    <div class="vis-layout">
+      <div class="vis-chart">
+        <div id="sankeyChart" style="width:100%; height:500px;"></div>
+        <div id="chartEmpty" class="empty-state" style="display:none;">
+          <p>No flow data available yet. Send some requests to see activity.</p>
+        </div>
+      </div>
+      <div class="vis-sidebar sidebar">
+        <div id="detectorBars"></div>
+        <div id="topActors" style="margin-top:var(--space-lg);"></div>
+        <div style="margin-top:var(--space-lg);">
+          <button class="btn btn-ghost" id="refreshBtn" style="width:100%;">Refresh</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/vendor/echarts.min.js?v=1774734365"></script>
+  <!-- Lib modules -->
+  <script src="/static/js/lib/format.js?v=1774734365"></script>
+  <script src="/static/js/lib/status.js?v=1774734365"></script>
+  <script src="/static/js/lib/messages.js?v=1774734365"></script>
+  <script src="/static/js/lib/filters.js?v=1774734365"></script>
+  <script src="/static/js/lib/sankey.js?v=1774734365"></script>
+  <script src="/static/js/lib/json-highlight.js?v=1774734365"></script>
+  <script src="/static/js/auth.js?v=1774734365"></script>
+  <script src="/static/js/utils.js?v=1774734365"></script>
+  <script src="/static/js/api.js?v=1774734365"></script>
+  <script src="/static/js/nav.js?v=1774734365"></script>
+  <script src="/static/js/visibility.js?v=1774734365"></script>
+  <script>renderNav('visibility');</script>
+</body>
+</html>

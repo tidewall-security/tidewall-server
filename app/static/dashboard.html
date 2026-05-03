@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tidewall — AI Security Dashboard</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #0d1117;
+    color: #c9d1d9;
+    min-height: 100vh;
+    padding: 0;
+  }
+
+  /* ---- Header ---- */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 28px;
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+  }
+  .header h1 {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: .3px;
+  }
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-size: 13px;
+  }
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(63, 185, 80, .12);
+    color: #3fb950;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .status-dot {
+    width: 7px; height: 7px;
+    background: #3fb950;
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .4; }
+  }
+
+  .toggle-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+    color: #8b949e;
+  }
+  .toggle-label input { accent-color: #58a6ff; }
+
+  /* ---- Layout ---- */
+  .container { padding: 24px 28px; max-width: 1400px; margin: 0 auto; }
+
+  /* ---- Stats Cards ---- */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .stat-card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 20px 24px;
+  }
+  .stat-card .label {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .8px;
+    color: #8b949e;
+    margin-bottom: 6px;
+  }
+  .stat-card .value {
+    font-size: 32px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat-card .sub {
+    font-size: 12px;
+    color: #8b949e;
+    margin-top: 4px;
+  }
+  .c-red    { color: #f85149; }
+  .c-yellow { color: #d29922; }
+  .c-green  { color: #3fb950; }
+  .c-blue   { color: #58a6ff; }
+
+  /* ---- Detector Breakdown ---- */
+  .section-title {
+    font-size: 14px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    color: #8b949e;
+    margin-bottom: 12px;
+  }
+  .detectors-panel {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 20px 24px;
+    margin-bottom: 24px;
+  }
+  .det-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .det-row:last-child { margin-bottom: 0; }
+  .det-name {
+    width: 200px;
+    font-size: 13px;
+    color: #c9d1d9;
+    flex-shrink: 0;
+    font-family: "SF Mono", SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+  }
+  .det-bar-wrap {
+    flex: 1;
+    height: 20px;
+    background: #21262d;
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+  }
+  .det-bar {
+    height: 100%;
+    border-radius: 4px;
+    transition: width .4s ease;
+    min-width: 2px;
+  }
+  .det-count {
+    width: 40px;
+    text-align: right;
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---- Events Table ---- */
+  .events-panel {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .events-panel table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .events-panel thead th {
+    background: #21262d;
+    padding: 10px 14px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    color: #8b949e;
+    border-bottom: 1px solid #30363d;
+  }
+  .events-panel tbody td {
+    padding: 10px 14px;
+    border-bottom: 1px solid #21262d;
+    vertical-align: top;
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .events-panel tbody tr:hover { background: rgba(88, 166, 255, .04); }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+  .badge-blocked     { background: rgba(248, 81, 73, .15); color: #f85149; }
+  .badge-transformed { background: rgba(210, 153, 34, .15); color: #d29922; }
+  .badge-clean       { background: rgba(63, 185, 80, .12); color: #3fb950; }
+
+  .det-tags { display: flex; gap: 4px; flex-wrap: wrap; }
+  .det-tag {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: #21262d;
+    color: #8b949e;
+  }
+  .det-tag.active { background: rgba(88, 166, 255, .15); color: #58a6ff; }
+
+  .latency { font-variant-numeric: tabular-nums; color: #8b949e; }
+
+  .empty-state {
+    text-align: center;
+    padding: 48px;
+    color: #484f58;
+    font-size: 14px;
+  }
+
+  @media (max-width: 900px) {
+    .stats-row { grid-template-columns: repeat(2, 1fr); }
+    .det-name { width: 140px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Tidewall &mdash; AI Security Dashboard</h1>
+  <div class="header-right">
+    <span class="status-pill"><span class="status-dot"></span> System Online</span>
+    <label class="toggle-label">
+      <input type="checkbox" id="autoRefresh" checked>
+      Auto-refresh (5s)
+    </label>
+  </div>
+</div>
+
+<div class="container">
+  <!-- Stats Row -->
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="label">Total Requests</div>
+      <div class="value c-blue" id="statTotal">--</div>
+      <div class="sub" id="statLatency">avg latency: --</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Blocked</div>
+      <div class="value c-red" id="statBlocked">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Transformed</div>
+      <div class="value c-yellow" id="statTransformed">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Clean</div>
+      <div class="value c-green" id="statClean">--</div>
+    </div>
+  </div>
+
+  <!-- Detector Breakdown -->
+  <div class="section-title">Detector Breakdown</div>
+  <div class="detectors-panel" id="detectorsPanel">
+    <div class="empty-state">No data yet</div>
+  </div>
+
+  <!-- Events Table -->
+  <div class="section-title">Recent Events</div>
+  <div class="events-panel">
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Request ID</th>
+          <th>Status</th>
+          <th>Event</th>
+          <th>Detectors</th>
+          <th>Summary</th>
+          <th>Latency</th>
+        </tr>
+      </thead>
+      <tbody id="eventsBody">
+        <tr><td colspan="7" class="empty-state">No events yet</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  const DET_COLORS = {
+    malicious_prompt: "#f85149",
+    confidential_and_pii_entity: "#d29922",
+    secret_and_key_entity: "#d29922",
+    custom_entity: "#d29922",
+    malicious_entity: "#f85149",
+    topic: "#58a6ff",
+    language: "#58a6ff",
+    code: "#58a6ff",
+    competitors: "#a371f7",
+    emoji: "#a371f7",
+  };
+
+  let refreshTimer = null;
+
+  // ---- Fetch helpers ----
+  async function fetchStats() {
+    try {
+      const r = await fetch("/v1/logs/stats");
+      return await r.json();
+    } catch { return null; }
+  }
+
+  async function fetchLogs() {
+    try {
+      const r = await fetch("/v1/logs?limit=50");
+      return await r.json();
+    } catch { return []; }
+  }
+
+  // ---- Render stats ----
+  function renderStats(s) {
+    if (!s) return;
+    document.getElementById("statTotal").textContent = s.total;
+    document.getElementById("statBlocked").textContent = s.blocked;
+    document.getElementById("statTransformed").textContent = s.transformed;
+    document.getElementById("statClean").textContent = s.clean;
+    document.getElementById("statLatency").textContent =
+      "avg latency: " + (s.avg_latency_ms ? s.avg_latency_ms.toFixed(1) + " ms" : "--");
+  }
+
+  // ---- Render detector bars ----
+  function renderDetectors(s) {
+    const panel = document.getElementById("detectorsPanel");
+    const counts = s && s.detector_counts ? s.detector_counts : {};
+    const names = Object.keys(counts);
+    if (names.length === 0) {
+      panel.innerHTML = '<div class="empty-state">No detections recorded yet</div>';
+      return;
+    }
+    const max = Math.max(...Object.values(counts), 1);
+    let html = "";
+    // Sort by count desc
+    names.sort((a, b) => counts[b] - counts[a]);
+    for (const name of names) {
+      const pct = Math.max((counts[name] / max) * 100, 2);
+      const color = DET_COLORS[name] || "#58a6ff";
+      html += `<div class="det-row">
+        <span class="det-name">${escHtml(name)}</span>
+        <div class="det-bar-wrap">
+          <div class="det-bar" style="width:${pct}%;background:${color}"></div>
+        </div>
+        <span class="det-count" style="color:${color}">${counts[name]}</span>
+      </div>`;
+    }
+    panel.innerHTML = html;
+  }
+
+  // ---- Render events table ----
+  function renderEvents(events) {
+    const tbody = document.getElementById("eventsBody");
+    if (!events || events.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No events yet</td></tr>';
+      return;
+    }
+    let html = "";
+    for (const ev of events) {
+      const status = ev.blocked ? "blocked" : ev.transformed ? "transformed" : "clean";
+      const badgeClass = "badge-" + status;
+
+      // Detector tags
+      let detTags = "";
+      if (ev.detectors_json && typeof ev.detectors_json === "object") {
+        for (const [dn, di] of Object.entries(ev.detectors_json)) {
+          const active = di && di.detected ? " active" : "";
+          detTags += `<span class="det-tag${active}">${escHtml(dn)}</span>`;
+        }
+      }
+
+      // Format timestamp
+      let timeStr = ev.timestamp || "";
+      try {
+        const d = new Date(timeStr);
+        timeStr = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      } catch {}
+
+      const latency = ev.latency_ms != null ? ev.latency_ms.toFixed(1) + " ms" : "--";
+
+      html += `<tr>
+        <td>${escHtml(timeStr)}</td>
+        <td style="font-family:monospace;font-size:11px">${escHtml(ev.request_id || "")}</td>
+        <td><span class="badge ${badgeClass}">${status}</span></td>
+        <td>${escHtml(ev.event_type || "")}</td>
+        <td><div class="det-tags">${detTags}</div></td>
+        <td title="${escAttr(ev.summary || "")}">${escHtml(truncate(ev.summary || "", 60))}</td>
+        <td class="latency">${latency}</td>
+      </tr>`;
+    }
+    tbody.innerHTML = html;
+  }
+
+  // ---- Utilities ----
+  function escHtml(s) {
+    const d = document.createElement("div");
+    d.textContent = s;
+    return d.innerHTML;
+  }
+  function escAttr(s) {
+    return s.replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  }
+  function truncate(s, n) {
+    return s.length > n ? s.slice(0, n) + "..." : s;
+  }
+
+  // ---- Refresh cycle ----
+  async function refresh() {
+    const [stats, logs] = await Promise.all([fetchStats(), fetchLogs()]);
+    renderStats(stats);
+    renderDetectors(stats);
+    renderEvents(logs);
+  }
+
+  function startAutoRefresh() {
+    stopAutoRefresh();
+    refreshTimer = setInterval(refresh, 5000);
+  }
+  function stopAutoRefresh() {
+    if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+  }
+
+  document.getElementById("autoRefresh").addEventListener("change", function () {
+    if (this.checked) { startAutoRefresh(); } else { stopAutoRefresh(); }
+  });
+
+  // Initial load
+  refresh();
+  startAutoRefresh();
+})();
+</script>
+</body>
+</html>

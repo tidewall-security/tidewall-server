@@ -1,0 +1,9 @@
+detectors:
+  malicious_prompt:
+    action: block
+    enabled: true
+    injection_label: jailbreak
+    model: qualifire/prompt-injection-jailbreak-sentinel-v2
+    threshold: 0.9
+name: benchmark_policy
+report_only: false

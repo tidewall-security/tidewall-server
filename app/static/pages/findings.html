@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tidewall — Findings</title>
+  <link rel="stylesheet" href="/static/css/theme.css?v=1774734365">
+</head>
+<body>
+  <div id="nav"></div>
+  <main class="page-content">
+    <div class="page-header">
+      <h1>Findings</h1>
+      <p class="text-muted">AI interaction events and detection results</p>
+    </div>
+
+    <!-- Stats row -->
+    <div class="stats-row" id="statsRow"></div>
+
+    <!-- Filter toolbar -->
+    <div class="filter-toolbar">
+      <div class="filter-pills" id="statusFilter"></div>
+      <input type="text" class="filter-search" id="searchInput" placeholder="Filter findings..." />
+      <label class="auto-refresh-toggle">
+        <input type="checkbox" id="autoRefresh" checked />
+        Auto-refresh
+      </label>
+      <button id="clearLogs" class="btn btn-danger" style="margin-left:auto;padding:6px 14px;font-size:12px;" title="Delete all findings">Clear All</button>
+    </div>
+
+    <!-- Events table -->
+    <div class="table-container">
+      <table class="data-table" id="eventsTable">
+        <thead>
+          <tr>
+            <th style="width:30px;"></th>
+            <th>Time</th>
+            <th>Status</th>
+            <th>Findings</th>
+            <th>Actor</th>
+            <th>Application</th>
+            <th>Model</th>
+            <th>Input</th>
+          </tr>
+        </thead>
+        <tbody id="eventsBody"></tbody>
+      </table>
+    </div>
+
+    <!-- Pagination -->
+    <div class="pagination" id="pagination"></div>
+  </main>
+
+  <!-- Lib modules -->
+  <script src="/static/js/lib/format.js?v=1774734365"></script>
+  <script src="/static/js/lib/status.js?v=1774734365"></script>
+  <script src="/static/js/lib/messages.js?v=1774734365"></script>
+  <script src="/static/js/lib/filters.js?v=1774734365"></script>
+  <script src="/static/js/lib/sankey.js?v=1774734365"></script>
+  <script src="/static/js/lib/json-highlight.js?v=1774734365"></script>
+  <script src="/static/js/auth.js?v=1774734365"></script>
+  <script src="/static/js/utils.js?v=1774734365"></script>
+  <script src="/static/js/api.js?v=1774734365"></script>
+  <script src="/static/js/nav.js?v=1774734365"></script>
+  <script src="/static/js/findings.js?v=1774734365"></script>
+  <script>renderNav('findings');</script>
+</body>
+</html>

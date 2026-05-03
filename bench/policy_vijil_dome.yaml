@@ -1,0 +1,11 @@
+name: "benchmark_vijil_dome"
+report_only: false
+
+detectors:
+  malicious_prompt:
+    enabled: true
+    action: block
+    threshold: 0.9
+    model: vijil/vijil_dome_prompt_injection_detection
+    tokenizer: answerdotai/ModernBERT-base
+    injection_label: 1

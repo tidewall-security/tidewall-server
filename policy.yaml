@@ -1,0 +1,64 @@
+name: "default_policy"
+report_only: false
+
+detectors:
+  malicious_prompt:
+    enabled: true
+    action: block
+    threshold: 0.9
+    model: vijil/vijil_dome_prompt_injection_detection
+    tokenizer: answerdotai/ModernBERT-base
+    injection_label: 1
+
+  confidential_and_pii_entity:
+    enabled: true
+    action: redact
+
+  secret_and_key_entity:
+    enabled: true
+    action: redact
+
+  topic:
+    enabled: true
+    action: report
+    topics:
+      - violence
+      - drugs
+      - hate_speech
+      - self-harm
+      - weapons
+    threshold: 0.7
+    toxicity_threshold: 0.7
+
+  language:
+    enabled: true
+    action: report
+    valid_languages:
+      - en
+
+  code:
+    enabled: true
+    action: report
+    languages:
+      - Python
+      - JavaScript
+      - Java
+      - Go
+
+  competitors:
+    enabled: false
+    action: report
+    competitors: []
+
+  custom_entity:
+    enabled: false
+    action: redact
+    patterns: []
+
+  malicious_entity:
+    enabled: true
+    action: report
+
+  emoji:
+    enabled: true
+    action: report

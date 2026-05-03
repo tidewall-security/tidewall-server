@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tidewall — Sandbox</title>
+  <link rel="stylesheet" href="/static/css/theme.css?v=1774734365">
+</head>
+<body>
+  <div id="nav"></div>
+  <main class="page-content sandbox-page">
+    <div class="page-header">
+      <h1>Sandbox</h1>
+      <p class="text-muted">Test prompts against Tidewall policies in real-time</p>
+    </div>
+    <div class="sandbox-presets" id="presets"></div>
+    <div class="sandbox-chat" id="chatArea">
+      <div class="sandbox-empty" id="emptyState">
+        <div class="empty-icon" style="font-size:48px;color:var(--brand);margin-bottom:16px;">&#9670;</div>
+        <p style="color:var(--text-primary);font-size:16px;font-weight:500;">Test prompts against your Tidewall policies</p>
+        <p class="text-muted text-sm">Click a preset above or type your own prompt below</p>
+      </div>
+    </div>
+    <div class="sandbox-input">
+      <select class="sandbox-event-type" id="eventType">
+        <option value="input">Input</option>
+        <option value="output">Output</option>
+      </select>
+      <input type="text" id="promptInput" placeholder="Type a prompt to test..." />
+      <button class="btn btn-primary sandbox-send" id="sendBtn">&rarr;</button>
+    </div>
+  </main>
+  <!-- Lib modules -->
+  <script src="/static/js/lib/format.js?v=1774734365"></script>
+  <script src="/static/js/lib/status.js?v=1774734365"></script>
+  <script src="/static/js/lib/messages.js?v=1774734365"></script>
+  <script src="/static/js/lib/filters.js?v=1774734365"></script>
+  <script src="/static/js/lib/sankey.js?v=1774734365"></script>
+  <script src="/static/js/lib/json-highlight.js?v=1774734365"></script>
+  <script src="/static/js/auth.js?v=1774734365"></script>
+  <script src="/static/js/utils.js?v=1774734365"></script>
+  <script src="/static/js/api.js?v=1774734365"></script>
+  <script src="/static/js/nav.js?v=1774734365"></script>
+  <script src="/static/js/sandbox.js?v=1774734365"></script>
+  <script>renderNav('sandbox');</script>
+</body>
+</html>

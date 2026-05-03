@@ -1,0 +1,58 @@
+
+[1;92mAIGuard Efficacy Report[0m
+Sentinel v1 @ threshold=0.5
+Report generated at: 2026-03-30 19:20:05 BST (UTC+0100)
+CMD: aiguard_lab.py --input_file /Users/jonw/AIDR/tmp/pangea-aiguard-lab/data/test_dataset.jsonl --service aidr --detectors malicious-prompt --rps 25 --report_title Sentinel v1 @ threshold=0.5 --summary_report_file /Users/jonw/AIDR/aidr-lite/bench/results/sentinel_v1_t0.5.summary.txt --fps_out_csv /Users/jonw/AIDR/aidr-lite/bench/results/sentinel_v1_t0.5.fps.csv --fns_out_csv /Users/jonw/AIDR/aidr-lite/bench/results/sentinel_v1_t0.5.fns.csv --print_label_stats
+Input dataset: /Users/jonw/AIDR/tmp/pangea-aiguard-lab/data/test_dataset.jsonl
+Service: ai-guard
+Total Calls: 900
+Requests per second: 25
+Average duration: 1.1076 seconds
+Total duration: 51.32 seconds
+
+[91mErrors: Counter()[0m
+
+--[92mOverall Counts:[0m--
+[32mTrue Positives: 127[0m
+[32mTrue Negatives: 728[0m
+[31mFalse Positives: 29[0m
+[31mFalse Negatives: 16[0m
+
+Accuracy: [32m0.9500[0m
+Precision: [32m0.8141[0m
+Recall: [32m0.8881[0m
+F1 Score: [32m0.8495[0m
+Specificity: [32m0.9617[0m
+False Positive Rate: [31m0.0383[0m
+False Negative Rate: [31m0.1119[0m
+
+[92m-- Info on Test Cases Saved for Reporting [0m--
+track_tp_and_tn_cases: False
+Total Test Cases Saved: 45
+[31mSaved Test Cases with FPs: 29[0m
+[31mSaved Test Cases with FNs: 16[0m
+[32mSaved Test Cases with TPs: 0[0m
+[32mSaved Test Cases with TNs: 0[0m
+[31mSummary of Per-detector FPs: {'malicious-prompt': 29}[0m
+[31mSummary of Per-detector FNs: {'malicious-prompt': 16}[0m
+
+[32mSummary of Per-detector TPs: {'malicious-prompt': 127}[0m
+[32mSummary of Per-detector TNs: {'malicious-prompt': 728}[0m
+
+--[92mDetector: malicious-prompt[0m--
+[32mTrue Positives: 127[0m
+[32mTrue Negatives: 728[0m
+[31mFalse Positives: 29[0m
+[31mFalse Negatives: 16[0m
+
+Accuracy: [32m0.9500[0m
+Precision: [32m0.8141[0m
+Recall: [32m0.8881[0m
+F1 Score: [32m0.8495[0m
+Specificity: [32m0.9617[0m
+False Positive Rate: [31m0.0383[0m
+False Negative Rate: [31m0.1119[0m
+
+--[92mLabel-wise False Positives and False Negatives:[0m--
+Label Stats: {'malicious-prompt': {'FP': 29, 'FN': 16}}
+	Label: malicious-prompt, False Positives: 29, False Negatives: 16
