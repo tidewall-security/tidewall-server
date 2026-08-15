@@ -24,13 +24,37 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.config import PolicyConfig
-from app.detectors.base import BaseDetector
+from app.detectors.base import BaseDetector, DetectorStatus, FailureCode
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Scan result
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class FailedDetector:
+    """A detector that could not be constructed, or that failed while running.
+
+    Carrying construction failures as *values* rather than dropping them is the
+    point: ``_make_detector`` used to return ``None`` on any error, so a
+    detector that failed to build simply vanished from the engine and there was
+    nothing left to enforce on. A failed slot keeps it visible.
+    """
+
+    name: str
+    code: FailureCode
+    action: str = "report"
+
+    @property
+    def enforcing(self) -> bool:
+        """True if this detector was configured to block or redact.
+
+        A failed reporter degrades observability. A failed blocker or redactor
+        degrades *protection*, which is what makes a request unsafe to allow.
+        """
+        return self.action in ("block", "redact")
 
 
 @dataclass
@@ -42,6 +66,31 @@ class ScanResult:
     guard_output_text: str | None = None
     detectors: dict[str, dict] = field(default_factory=dict)
     summary_parts: list[str] = field(default_factory=list)
+    failures: list[FailedDetector] = field(default_factory=list)
+
+    @property
+    def degraded(self) -> bool:
+        """True if any detector failed, so the clean verdict is not trustworthy."""
+        return bool(self.failures)
+
+    @property
+    def enforcement_degraded(self) -> bool:
+        """True if a *blocking or redacting* detector failed.
+
+        This is the condition that must not be allowed through: the request was
+        not actually protected, whatever the other detectors reported.
+        """
+        return any(f.enforcing for f in self.failures)
+
+    def record_failure(self, name: str, code: FailureCode, action: str = "report") -> None:
+        """Record a detector failure and reflect it in the per-detector payload."""
+        self.failures.append(FailedDetector(name=name, code=code, action=action))
+        self.detectors[name] = {
+            "detected": False,
+            "data": None,
+            "status": DetectorStatus.FAILED.value,
+            "failure_code": code.value,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -81,12 +130,23 @@ _DETECTOR_REGISTRY: dict[str, tuple[str, str]] = {
 }
 
 
-def _make_detector(name: str, config: dict[str, Any], **kwargs: Any) -> BaseDetector | None:
-    """Dynamically instantiate a detector by policy name."""
+def _make_detector(
+    name: str, config: dict[str, Any], **kwargs: Any
+) -> tuple[BaseDetector | None, FailureCode | None]:
+    """Dynamically instantiate a detector by policy name.
+
+    Returns ``(detector, None)`` on success or ``(None, code)`` on failure.
+
+    This used to return a bare ``None`` for three quite different causes — an
+    unknown detector name, an import error, and a constructor raising — and the
+    caller treated all of them as "skip this detector". A configured security
+    control silently disappeared and the engine reported success. Distinguishing
+    the causes is what lets the caller keep a failed slot and enforce on it.
+    """
     entry = _DETECTOR_REGISTRY.get(name)
     if entry is None:
-        logger.debug("No implementation for detector '%s' — skipping", name)
-        return None
+        logger.warning("No implementation for detector '%s'", name)
+        return None, FailureCode.DETECTOR_UNKNOWN
 
     module_path, class_name = entry
     try:
@@ -94,10 +154,18 @@ def _make_detector(name: str, config: dict[str, Any], **kwargs: Any) -> BaseDete
 
         mod = importlib.import_module(module_path)
         cls = getattr(mod, class_name)
-        return cls(config, **kwargs)  # type: ignore[no-any-return]
-    except Exception as exc:
-        logger.warning("Failed to instantiate detector '%s': %s", name, exc)
-        return None
+    except Exception:
+        # Exception detail is logged here and nowhere else — it can carry file
+        # paths and configuration values, and must not reach a response or an
+        # audit row.
+        logger.warning("Failed to import detector '%s'", name, exc_info=True)
+        return None, FailureCode.IMPORT_FAILED
+
+    try:
+        return cls(config, **kwargs), None
+    except Exception:
+        logger.warning("Failed to instantiate detector '%s'", name, exc_info=True)
+        return None, FailureCode.CONSTRUCT_FAILED
 
 
 # ---------------------------------------------------------------------------
@@ -119,8 +187,23 @@ class ScannerEngine:
         self._use_onnx = use_onnx
         # ALL detectors initialized once at startup
         self._detectors: list[tuple[str, BaseDetector]] = []
+        # Detectors the policy enabled but which could not be constructed.
+        # These are not dropped: every scan reports them as failures so a
+        # missing security control cannot be mistaken for a clean result.
+        self._construction_failures: list[FailedDetector] = []
 
-        for det_name in _DETECTOR_ORDER:
+        # Known detectors run in priority order; any *unknown* name the policy
+        # enables is visited afterwards so it can be reported as a failure.
+        # Iterating only _DETECTOR_ORDER meant a misspelled or unimplemented
+        # detector was never looked for at all — a fail-open one level below
+        # the one _make_detector was guarding, since nothing ever asked for it.
+        unknown_names = [
+            name
+            for name, cfg in policy.detectors.items()
+            if name not in _DETECTOR_ORDER and cfg is not None and cfg.enabled
+        ]
+
+        for det_name in [*_DETECTOR_ORDER, *unknown_names]:
             det_cfg = policy.detectors.get(det_name)
             if det_cfg is None or not det_cfg.enabled:
                 continue
@@ -128,12 +211,50 @@ class ScannerEngine:
             cfg_dict = det_cfg.model_dump()
             cfg_dict["use_onnx"] = use_onnx
             if det_name == "malicious_prompt" and self._session_factory:
-                detector = _make_detector(det_name, cfg_dict, session_factory=self._session_factory)
+                detector, code = _make_detector(det_name, cfg_dict, session_factory=self._session_factory)
             else:
-                detector = _make_detector(det_name, cfg_dict)
+                detector, code = _make_detector(det_name, cfg_dict)
+
             if detector is not None:
                 self._detectors.append((det_name, detector))
                 logger.info("Loaded detector: %s (action=%s)", det_name, det_cfg.action)
+            else:
+                assert code is not None  # _make_detector returns one or the other
+                self._construction_failures.append(
+                    FailedDetector(name=det_name, code=code, action=det_cfg.action)
+                )
+                logger.error(
+                    "Detector '%s' (action=%s) is enabled by policy but could not be "
+                    "constructed: %s. Scans will report a degraded verdict.",
+                    det_name,
+                    det_cfg.action,
+                    code.value,
+                )
+
+    @property
+    def construction_failures(self) -> list[FailedDetector]:
+        """Detectors the policy enabled that could not be built.
+
+        The activation protocol's startup preflight reads this to decide whether
+        a candidate runtime is servable at all — an engine that silently omits a
+        detector is not a successfully built runtime.
+        """
+        return list(self._construction_failures)
+
+    @property
+    def is_enforcement_complete(self) -> bool:
+        """True if every enabled blocking/redacting detector was constructed."""
+        return not any(f.enforcing for f in self._construction_failures)
+
+    def _seed_construction_failures(self, result: ScanResult) -> None:
+        """Report construction failures on every scan, not just at startup.
+
+        A detector that failed to build is missing for the lifetime of the
+        engine, so every request it should have covered is degraded — not only
+        the first one after boot.
+        """
+        for failure in self._construction_failures:
+            result.record_failure(failure.name, failure.code, failure.action)
 
     @classmethod
     def from_detectors(
@@ -168,6 +289,7 @@ class ScannerEngine:
     ) -> ScanResult:
         """Run all enabled detectors on *text* and return aggregated result."""
         result = ScanResult()
+        self._seed_construction_failures(result)
         current_text = text
 
         for det_name, detector in self._detectors:
@@ -187,14 +309,27 @@ class ScannerEngine:
                     det_result = detector.scan(current_text, vault=vault)
                 else:
                     det_result = detector.scan(current_text)
-            except Exception as exc:
-                logger.error("Detector '%s' raised: %s", det_name, exc)
-                result.detectors[det_name] = {"detected": False, "data": None}
+            except Exception:
+                logger.error("Detector '%s' raised during scan", det_name, exc_info=True)
+                result.record_failure(det_name, FailureCode.SCAN_FAILED, detector.action)
+                continue
+
+            # A detector may also report failure by value rather than raising —
+            # most know far better than we do why they could not run.
+            if det_result.status is DetectorStatus.FAILED:
+                assert det_result.failure_code is not None
+                logger.error(
+                    "Detector '%s' reported failure: %s",
+                    det_name,
+                    det_result.failure_code.value,
+                )
+                result.record_failure(det_name, det_result.failure_code, detector.action)
                 continue
 
             result.detectors[det_name] = {
                 "detected": det_result.detected,
                 "data": det_result.data,
+                "status": det_result.status.value,
             }
 
             if not det_result.detected:
@@ -237,20 +372,35 @@ class ScannerEngine:
         reusing the same vault (so unredact works across all messages).
         """
         result = ScanResult()
+        self._seed_construction_failures(result)
         current_text = text
 
         for det_name, detector in self._detectors:
             if not detector.can_redact:
                 continue
 
+            failure_code: FailureCode | None = None
             try:
                 if det_name == "confidential_and_pii_entity" and vault is not None:
                     det_result = detector.scan(current_text, vault=vault)
                 else:
                     det_result = detector.scan(current_text)
-            except Exception as exc:
-                logger.error("Detector '%s' raised: %s", det_name, exc)
-                continue
+                if det_result.status is DetectorStatus.FAILED:
+                    failure_code = det_result.failure_code
+            except Exception:
+                logger.error("Redactor '%s' raised", det_name, exc_info=True)
+                failure_code = FailureCode.REDACTION_FAILED
+
+            if failure_code is not None:
+                # A redactor failed. Everything redacted so far is discarded:
+                # the remaining redactors never ran, so `current_text` may still
+                # contain exactly the PII or secrets a later one would have
+                # removed. Returning it — even partially cleaned — is the
+                # disclosure this path exists to prevent.
+                result.record_failure(det_name, failure_code, detector.action)
+                result.transformed = False
+                result.guard_output_text = None
+                return result
 
             if det_result.detected and det_result.sanitized_text:
                 result.transformed = True
