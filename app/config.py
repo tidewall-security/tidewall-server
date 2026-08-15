@@ -27,6 +27,11 @@ class Settings(BaseModel):
     PREWARM: bool = True
     AUTH_ENABLED: bool = False
     USE_ONNX: bool = False
+    # Operator-supplied first admin credential. Consulted only when
+    # AUTH_ENABLED is set and no API keys exist yet; only its hash is stored.
+    # Tidewall never generates this, because a generated value would have to be
+    # emitted to logs or stdout to reach the operator, where it would persist.
+    BOOTSTRAP_KEY: str | None = None
 
     @classmethod
     def from_env(cls) -> Settings:

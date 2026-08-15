@@ -17,7 +17,7 @@ The schema mirrors industry AI security platforms data model with these table gr
 
 **Event storage**:
     Interaction — one row per guard evaluation (the audit trail)
-    Vault — pickled PII vaults for reversible redaction (/v1/unredact)
+    Vault — JSON-encoded PII vaults for reversible redaction (/v1/unredact)
     ActivityLog — admin actions (policy changes, key creation, etc.)
 
 **Settings**:
@@ -186,6 +186,11 @@ class Vault(Base):
     containing the original PII values keyed by their placeholder tokens.
     The /v1/unredact endpoint loads the vault by ID (encoded in the
     fpe_context token) to recover original text.
+
+    Note that in practice this column currently holds only *empty* vaults, and
+    the payload format is plaintext. See :mod:`app.vault_manager` for why, and
+    for the constraint that encryption must land in the same change as the
+    persistence fix.
     """
 
     __tablename__ = "vaults"

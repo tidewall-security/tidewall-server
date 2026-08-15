@@ -11,9 +11,19 @@ span with a placeholder, store the original→placeholder mapping in the vault,
 and persist the vault to the ``vaults`` table so /v1/unredact can reverse it
 later.
 
-Persistence is JSON bytes via :meth:`to_bytes` / :meth:`from_bytes`. JSON is
-human-readable in the DB and avoids the pickle attack surface that storing
-arbitrary Python objects would carry.
+Persistence is JSON bytes via :meth:`to_bytes` / :meth:`from_bytes`, which
+avoids the pickle attack surface that storing arbitrary Python objects would
+carry.
+
+.. warning::
+
+   :meth:`to_bytes` emits **plaintext** PII. Choosing JSON over pickle was the
+   right call, but it is a separate decision from choosing plaintext over
+   ciphertext, and only the first was made. This is currently latent rather
+   than live: :class:`~app.vault_manager.VaultManager` only ever persists an
+   *empty* vault (see its module docstring), so no PII reaches the database
+   today. Any change that makes persistence work must encrypt this payload in
+   the same commit, or it creates the disclosure it was meant to fix.
 """
 
 from __future__ import annotations

@@ -1,11 +1,27 @@
 """Manages per-request TidewallVault instances with DB persistence.
 
-Vaults are JSON-serialized and stored in the ``vaults`` table so they survive
-server restarts. An in-memory LRU cache avoids DB lookups on hot paths.
+Vaults are JSON-encoded into the ``vaults`` table. Rows with an unrecognized
+format fail to deserialize and are treated as expired.
 
-The current version JSON-encodes a :class:`~app.vault.TidewallVault`.
-Rows with an unrecognized format will fail to deserialize and are treated
-as expired.
+.. warning::
+
+   **Persistence does not currently work, and reversible redaction is
+   therefore broken.** :meth:`VaultManager.create_vault` writes the vault to
+   the database while it is still *empty*, and nothing writes it back after
+   :mod:`app.detectors.pii` populates the in-memory instance —
+   :meth:`~app.vault.TidewallVault.to_bytes` has one production call site.
+
+   So every persisted row is ``{"placeholders": {}, "counters": {}}``, and
+   ``/v1/unredact`` succeeds only on an in-process cache hit. On a miss it
+   loads the empty vault and returns the *redacted* text unchanged, with
+   ``status="Success"`` — a silent data-integrity failure reported as success.
+   Across multiple workers the populating and unredacting requests are usually
+   different processes, so this is the common case rather than the edge case.
+
+   Known related defects, all tracked for the vault workstream: expiry is not
+   checked on cache hits; the cache is FIFO rather than LRU despite its name,
+   and :meth:`VaultManager.get_vault` never evicts, so the read path is
+   unbounded; and the payload is plaintext (see :mod:`app.vault`).
 """
 
 from __future__ import annotations
@@ -28,7 +44,11 @@ _MAX_CACHE = 500
 
 
 class VaultManager:
-    """DB-backed vault manager with in-memory LRU cache."""
+    """DB-backed vault manager with a bounded in-memory cache.
+
+    The cache is FIFO, not LRU: :meth:`create_vault` evicts in insertion order
+    and :meth:`get_vault` never reorders or evicts. See the module docstring.
+    """
 
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
