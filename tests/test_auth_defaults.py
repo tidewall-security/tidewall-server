@@ -86,3 +86,91 @@ def test_require_role_rejects_an_anonymous_request():
     with pytest.raises(HTTPException) as exc:
         asyncio.run(require_role("viewer")(request))
     assert exc.value.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# The bind must be the value the guard checks
+# ---------------------------------------------------------------------------
+
+
+def test_entry_point_binds_the_validated_host():
+    """The guard checked HOST while the Dockerfile bound 0.0.0.0.
+
+    Startup logged "Running WITHOUT AUTHENTICATION on 127.0.0.1" while the
+    socket listened on every interface, so the insecure-mode restriction was
+    theatre. `python -m app` now launches uvicorn from validated settings, so
+    HOST governs the socket that is actually opened.
+    """
+    import os
+    from unittest.mock import patch
+
+    from app.__main__ import serve
+
+    with patch.dict(os.environ, {"HOST": "127.0.0.1", "PORT": "9331"}, clear=False):
+        with patch("uvicorn.run") as run:
+            serve()
+
+    assert run.call_args.kwargs["host"] == "127.0.0.1"
+    assert run.call_args.kwargs["port"] == 9331
+
+
+def test_dockerfile_does_not_bind_independently_of_settings():
+    """A CMD that passes --host would reintroduce the disconnect."""
+    from pathlib import Path
+
+    dockerfile = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text()
+    cmd = [ln for ln in dockerfile.splitlines() if ln.startswith("CMD")]
+
+    assert cmd, "Dockerfile has no CMD"
+    assert "--host" not in cmd[-1], "CMD binds an address independently of Settings.HOST"
+    assert "python" in cmd[-1] and "app" in cmd[-1]
+
+
+# ---------------------------------------------------------------------------
+# Anti-framing
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_shells_cannot_be_framed():
+    """Anonymous pages plus an admin key in localStorage are framable.
+
+    A hostile origin embeds /ui/policies; script in that same-origin frame
+    reads the stored key and issues authenticated writes. No cookie is
+    involved, so SameSite does not help and CORS does not apply — the request
+    comes from Tidewall's own origin.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.security_headers import SecurityHeadersMiddleware
+
+    app = FastAPI()
+    app.add_middleware(SecurityHeadersMiddleware)
+
+    @app.get("/ui/policies")
+    async def page():
+        return {"ok": True}
+
+    resp = TestClient(app).get("/ui/policies")
+
+    assert "frame-ancestors 'none'" in resp.headers["content-security-policy"]
+    assert resp.headers["x-frame-options"] == "DENY"
+    assert resp.headers["x-content-type-options"] == "nosniff"
+
+
+def test_docs_routes_are_disabled_when_auth_is_on():
+    """Swagger UI cannot authenticate its own /openapi.json fetch.
+
+    A visibly configured route that can never work is worse than no route.
+    """
+    import os
+    from unittest.mock import patch
+
+    from app.main import create_app
+
+    with patch.dict(os.environ, {"AUTH_ENABLED": "true"}, clear=False):
+        app = create_app()
+    paths = {r.path for r in app.routes}
+
+    assert "/docs" not in paths
+    assert "/openapi.json" not in paths

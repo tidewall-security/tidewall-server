@@ -60,7 +60,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # collects an API key and attaches it to the XHR calls that do, so the
         # shell being anonymous costs nothing and removes the need to
         # authenticate a browser navigation that sends no bearer header.
-        if request.url.path.startswith("/static/") or request.url.path.startswith("/ui/"):
+        if (
+            request.url.path == "/dashboard"
+            or request.url.path.startswith("/static/")
+            or request.url.path.startswith("/ui/")
+        ):
             self._anonymous(request)
             return await call_next(request)
 

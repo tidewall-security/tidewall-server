@@ -58,6 +58,36 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
 
+    # Validate authentication configuration BEFORE touching the database.
+    # This previously ran after directory creation, migrations, seeding and
+    # service construction, so an invalid configuration created and migrated a
+    # database and only then refused to serve — a rejected config should not
+    # leave persistent state behind.
+    if not settings.AUTH_ENABLED:
+        # Running without authentication means every caller is an
+        # administrator: log reads, policy mutation, key minting, export
+        # targets that can be pointed at internal addresses. It is a local
+        # development convenience and must not be reachable off-host, so it
+        # requires an unmistakable opt-in AND a loopback bind.
+        if not settings.TIDEWALL_INSECURE_NO_AUTH:
+            raise RuntimeError(
+                "AUTH_ENABLED is false. Running without authentication makes every "
+                "caller an administrator. If that is genuinely what you want for local "
+                "development, set TIDEWALL_INSECURE_NO_AUTH=1 as well — and note it is "
+                "refused on any non-loopback bind address."
+            )
+        if not _is_loopback(settings.HOST):
+            raise RuntimeError(
+                f"AUTH_ENABLED is false and HOST is {settings.HOST!r}, which is not "
+                "loopback. Unauthenticated mode would expose an administrative control "
+                "plane to the network. Bind to 127.0.0.1 or enable authentication."
+            )
+        logging.getLogger(__name__).warning(
+            "Running WITHOUT AUTHENTICATION on %s — every caller has the admin role",
+            settings.HOST,
+        )
+
+
     # --- Database setup ---
     from app.db.engine import get_engine, get_session_factory
     from app.db.seed import seed_from_yaml
@@ -89,30 +119,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.services.policy_service import PolicyService
 
     app.state.policy_service = PolicyService(session_factory=SessionLocal, use_onnx=settings.USE_ONNX)
-
-    if not settings.AUTH_ENABLED:
-        # Running without authentication means every caller is an
-        # administrator: log reads, policy mutation, key minting, export
-        # targets that can be pointed at internal addresses. It is a local
-        # development convenience and must not be reachable off-host, so it
-        # requires an unmistakable opt-in AND a loopback bind.
-        if not settings.TIDEWALL_INSECURE_NO_AUTH:
-            raise RuntimeError(
-                "AUTH_ENABLED is false. Running without authentication makes every "
-                "caller an administrator. If that is genuinely what you want for local "
-                "development, set TIDEWALL_INSECURE_NO_AUTH=1 as well — and note it is "
-                "refused on any non-loopback bind address."
-            )
-        if not _is_loopback(settings.HOST):
-            raise RuntimeError(
-                f"AUTH_ENABLED is false and HOST is {settings.HOST!r}, which is not "
-                "loopback. Unauthenticated mode would expose an administrative control "
-                "plane to the network. Bind to 127.0.0.1 or enable authentication."
-            )
-        logging.getLogger(__name__).warning(
-            "Running WITHOUT AUTHENTICATION on %s — every caller has the admin role",
-            settings.HOST,
-        )
 
     app.state.auth_enabled = settings.AUTH_ENABLED
 
@@ -158,11 +164,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     """Build and configure the Tidewall FastAPI application."""
 
+    settings = Settings.from_env()
+
+    # Swagger UI fetches /openapi.json from the browser without an
+    # Authorization header, so a protected schema makes the stock docs page
+    # permanently broken. Shipping a visibly configured route that cannot work
+    # is worse than not having it: the routes are disabled when auth is on, and
+    # the schema stays available to an API client via the OpenAPI object.
+    _docs_enabled = not settings.AUTH_ENABLED
     app = FastAPI(
         title="Tidewall",
         description="Open-source AI security guard API server",
         version="0.3.0",
-        docs_url="/docs",
+        docs_url="/docs" if _docs_enabled else None,
+        redoc_url="/redoc" if _docs_enabled else None,
+        openapi_url="/openapi.json" if _docs_enabled else None,
         lifespan=lifespan,
     )
 
@@ -173,7 +189,10 @@ def create_app() -> FastAPI:
     # Starlette processes middleware in reverse add order (last added = outermost).
     # Auth must be added first so CORS wraps it and handles preflight OPTIONS
     # requests (which have no Authorization header) before auth runs.
+    from app.security_headers import SecurityHeadersMiddleware
+
     app.add_middleware(AuthMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

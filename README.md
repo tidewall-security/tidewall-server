@@ -119,7 +119,9 @@ uvicorn app.main:app --port 8080
 | Health Check | http://localhost:8080/health |
 | Guard API | http://localhost:8080/v1/guard_chat_completions |
 
-When `AUTH_ENABLED=true` and no keys exist, a bootstrap admin key is printed to stdout on first start.
+Authentication is enabled by default. On first start with no API keys present,
+set `BOOTSTRAP_KEY` to a secret you generate — the server installs it as the
+first admin key and stores only its hash.
 
 ---
 
@@ -156,7 +158,10 @@ When `AUTH_ENABLED=true` and no keys exist, a bootstrap admin key is printed to 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AUTH_ENABLED` | `false` | Enable API key authentication |
+| `AUTH_ENABLED` | `true` | Enable API key authentication |  
+  Authentication is on by default. Disabling it makes every caller an
+  administrator, so it additionally requires `TIDEWALL_INSECURE_NO_AUTH=1`
+  and a loopback `HOST`.
 | `DB_URL` | `sqlite:///data/tidewall.db` | SQLAlchemy database URL |
 | `POLICY_FILE` | `policy.yaml` | YAML policy file for first-boot seeding |
 | `LOG_LEVEL` | `info` | Logging verbosity |
@@ -177,13 +182,21 @@ API keys are passed as `Authorization: Bearer ak_...` headers. Each key is a col
 
 ### First Boot
 
-When `AUTH_ENABLED=true` and no keys exist:
+Authentication is on by default. With no API keys in the database, the server
+requires `BOOTSTRAP_KEY`:
+
+```bash
+export BOOTSTRAP_KEY="$(python -c 'import secrets; print("ak_" + secrets.token_hex(16))')"
+docker compose up
 ```
-==================================================
-  Tidewall Admin API Key (save this!):
-  ak_3f8b2a91e7d4c6f0ab12de3456789012
-==================================================
-```
+
+Tidewall does not generate this for you. A generated key would have to be
+emitted to logs or stdout to reach you, and both are routinely collected and
+retained — which is how a permanent administrator credential ends up in a log
+aggregator. Only the hash is stored.
+
+Starting without it fails with an explanatory error rather than creating a
+credential you cannot see.
 
 ---
 

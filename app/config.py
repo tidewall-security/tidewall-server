@@ -33,9 +33,11 @@ class Settings(BaseModel):
     # requires TIDEWALL_INSECURE_NO_AUTH=1 and a loopback bind.
     AUTH_ENABLED: bool = True
     TIDEWALL_INSECURE_NO_AUTH: bool = False
-    # Bind address, used only to verify that insecure mode cannot be exposed
-    # beyond the local host.
+    # Bind address. Authoritative: the server is launched via ``python -m app``
+    # which binds exactly this, so the insecure-mode guard constrains the real
+    # socket rather than a setting nothing reads.
     HOST: str = "0.0.0.0"
+    PORT: int = 8080
     USE_ONNX: bool = False
     # Operator-supplied first admin credential. Consulted only when
     # AUTH_ENABLED is set and no API keys exist yet; only its hash is stored.
