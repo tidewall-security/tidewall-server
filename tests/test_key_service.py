@@ -87,19 +87,38 @@ def test_lookup_invalid_key_returns_none(db_session):
     assert found is None
 
 
-def test_bootstrap_creates_admin_key_when_empty(db_session):
+def test_bootstrap_installs_operator_supplied_key_when_empty(db_session):
     from app.services.key_service import KeyService
 
     svc = KeyService(db_session)
-    raw_key = svc.bootstrap_admin_key()
-    assert raw_key is not None
-    assert raw_key.startswith("ak_")
+    assert svc.has_any_key() is False
 
-    # Verify it's in the DB
-    found = svc.lookup_key(raw_key)
+    assert svc.install_bootstrap_admin_key("ak_operator_supplied_secret") is True
+
+    found = svc.lookup_key("ak_operator_supplied_secret")
     assert found is not None
     assert found.role == "admin"
     assert found.name == "bootstrap-admin"
+
+
+def test_bootstrap_key_never_reaches_logs(db_session, caplog):
+    """P0-7 canary: the raw key must not appear in any log record.
+
+    The previous implementation logged it at warning level, putting a
+    permanent administrator bearer token into whatever collects container
+    logs.
+    """
+    import logging
+
+    from app.services.key_service import KeyService
+
+    secret = "ak_canary_must_not_be_logged_8f3a2b"
+    with caplog.at_level(logging.DEBUG):
+        KeyService(db_session).install_bootstrap_admin_key(secret)
+
+    assert secret not in caplog.text
+    for record in caplog.records:
+        assert secret not in record.getMessage()
 
 
 def test_bootstrap_skips_when_keys_exist(db_session):
@@ -107,5 +126,5 @@ def test_bootstrap_skips_when_keys_exist(db_session):
 
     svc = KeyService(db_session)
     svc.create_key(name="existing", role="admin")
-    raw_key = svc.bootstrap_admin_key()
-    assert raw_key is None  # Already have keys, skip bootstrap
+    assert svc.install_bootstrap_admin_key("ak_should_be_ignored") is False
+    assert svc.lookup_key("ak_should_be_ignored") is None

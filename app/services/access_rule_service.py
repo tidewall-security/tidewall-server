@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.db.models import AccessRule
+from app.services.policy_validation import validate_access_rules
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,11 @@ class AccessRuleService:
         then_action: str = "continue",
         else_action: str = "continue",
     ) -> AccessRule:
+        # An operator the evaluator does not implement used to return False,
+        # which for a block rule means "did not match" — so the rule never
+        # fired. Reject it here, where the administrator can see it.
+        validate_access_rules([{"conditions": conditions}])
+
         # Auto-increment sort_order
         max_order = (
             self._session.query(AccessRule.sort_order)
@@ -63,6 +69,9 @@ class AccessRuleService:
         else_action: str | None = None,
         sort_order: int | None = None,
     ) -> AccessRule:
+        if conditions is not None:
+            validate_access_rules([{"conditions": conditions}])
+
         rule = self._session.get(AccessRule, rule_id)
         if rule is None:
             raise ValueError(f"Access rule {rule_id} not found")

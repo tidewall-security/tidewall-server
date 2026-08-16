@@ -8,6 +8,7 @@ import re
 from sqlalchemy.orm import Session
 
 from app.db.models import GlobalPromptList
+from app.services.policy_validation import validate_prompt_list_entry
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,9 @@ class PromptListService:
         description: str | None = None,
         created_by: str | None = None,
     ) -> GlobalPromptList:
+        # An invalid stored regex used to be skipped at match time, so a
+        # malicious-list entry simply never matched. Reject it here.
+        validate_prompt_list_entry(pattern, match_type, where="prompt_list.pattern")
         entry = GlobalPromptList(
             list_type=list_type,
             pattern=pattern,
@@ -93,8 +97,11 @@ class PromptListService:
                 try:
                     if re.search(entry.pattern, text, re.IGNORECASE):
                         return True
-                except re.error:
-                    logger.warning("Invalid regex pattern: %s", entry.pattern)
-                    continue
+                except re.error as exc:
+                    # Skipping meant a malicious-list entry simply never
+                    # matched. Raise so the calling detector records a failure
+                    # instead of reporting a confident "no match".
+                    logger.error("Invalid regex in stored prompt list entry")
+                    raise ValueError("invalid regex in prompt list") from exc
 
         return False

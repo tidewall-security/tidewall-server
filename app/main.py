@@ -77,14 +77,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from app.services.key_service import KeyService
 
         key_session = SessionLocal()
-        key_svc = KeyService(key_session)
-        bootstrap_key = key_svc.bootstrap_admin_key()
-        if bootstrap_key:
-            print("\n" + "=" * 50)
-            print("  Tidewall Admin API Key (save this!):")
-            print(f"  {bootstrap_key}")
-            print("=" * 50 + "\n")
-        key_session.close()
+        try:
+            key_svc = KeyService(key_session)
+            if not key_svc.has_any_key():
+                # No keys exist and auth is on, so the deployment is
+                # unreachable unless the operator supplies the first
+                # credential. We refuse to start rather than generating one:
+                # a generated key has to be communicated somehow, and every
+                # available channel (logs, stdout) is collected and retained.
+                if not settings.BOOTSTRAP_KEY:
+                    raise RuntimeError(
+                        "AUTH_ENABLED is set but no API keys exist. Set "
+                        "BOOTSTRAP_KEY to a secret you generate to install the "
+                        "first admin key. Tidewall does not generate it for you "
+                        "because it would have to be emitted to logs or stdout "
+                        "to reach you, where it would persist as an "
+                        "administrator credential."
+                    )
+                key_svc.install_bootstrap_admin_key(settings.BOOTSTRAP_KEY)
+        finally:
+            key_session.close()
 
     # --- EXISTING: VaultManager and InteractionLog still needed ---
     app.state.vault_manager = VaultManager(SessionLocal)

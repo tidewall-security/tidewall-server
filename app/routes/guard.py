@@ -23,6 +23,7 @@ protection flows through this single endpoint.  The processing pipeline is:
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 from typing import Any
@@ -30,8 +31,12 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.auth.dependencies import require_role
+from app.config import OnDetectorFailure
+from app.detectors.base import FailureCode
 from app.models import GuardRequest, GuardResponse, GuardResult
 from app.utils import now_iso as _now_iso
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -92,6 +97,7 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     elif policy and policy.report_only:
         effective_report_only = policy.report_only
 
+
     access_rules_data: list[dict[str, Any]] = []
     access_rules_result: dict[str, Any] = {"action": "continue", "matched_rules": [], "blocked": False}
 
@@ -113,7 +119,20 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             "llm_provider": body.llm_provider or "",
             "source_ip": body.source_ip or "",
         }
-        access_rules_result = evaluate_access_rules(access_rules_data, request_metadata)
+        try:
+            access_rules_result = evaluate_access_rules(access_rules_data, request_metadata)
+        except ValueError:
+            # A stored rule the evaluator cannot apply. Validation rejects these
+            # at write time, so reaching here means an unvalidated write path.
+            # Blocking is the honest response: the rule might have blocked this
+            # request and we cannot tell. Raising would 500 and produce no audit
+            # record at all.
+            logger.error("Access rule could not be evaluated; blocking", exc_info=True)
+            access_rules_result = {
+                "action": "block",
+                "matched_rules": [{"name": "invalid-rule", "matched": True, "action": "block"}],
+                "blocked": True,
+            }
 
     # If access rules blocked, return immediately without running detectors
     if access_rules_result["blocked"]:
@@ -201,26 +220,56 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     guard_output: dict | None = None
     fpe_context: str | None = None
 
+    redaction_failed = False
     if scan_result.transformed:
         transformed_msgs: list[dict] = []
+        reconstruction_failed = False
         for msg in messages:
             content = msg.get("content", "")
-            if content.strip():
-                msg_result = await asyncio.to_thread(engine.scan_single, content, vault_id, vault)
-                transformed_msgs.append(
-                    {
-                        "role": msg.get("role", "user"),
-                        "content": msg_result.guard_output_text or content,
-                    }
-                )
-            else:
+            if not content.strip():
                 transformed_msgs.append({"role": msg.get("role", "user"), "content": content})
+                continue
 
-        guard_output = {"messages": transformed_msgs}
-        fpe_context = vault_mgr.encode_fpe_context(vault_id)
+            try:
+                msg_result = await asyncio.to_thread(engine.scan_single, content, vault_id, vault)
+            except Exception:
+                logger.error("Message reconstruction raised", exc_info=True)
+                scan_result.record_failure("_reconstruction", FailureCode.RECONSTRUCTION_FAILED, action="redact")
+                reconstruction_failed = True
+                break
 
-    # Handle MCP tool filtering (tool_listing events)
-    if event_type == "tool_listing" and tools:
+            if msg_result.enforcement_degraded or msg_result.guard_output_text is None:
+                # A redactor failed on this message. `guard_output_text` is
+                # deliberately None; falling back to `content` here would emit
+                # the original unredacted text, which is precisely what the
+                # failed redactor existed to prevent.
+                # Merge both the failure objects (which enforcement reads) and
+                # the detector payload (which the response, audit row and export
+                # read). Copying only the former left the per-message failure
+                # invisible everywhere a human would look for it.
+                scan_result.failures.extend(msg_result.failures)
+                scan_result.detectors.update(msg_result.detectors)
+                reconstruction_failed = True
+                break
+
+            transformed_msgs.append({"role": msg.get("role", "user"), "content": msg_result.guard_output_text})
+
+        if reconstruction_failed:
+            # Discard every message assembled so far, not just the failing one:
+            # the caller must not receive a partially sanitised conversation.
+            transformed_msgs = []
+            scan_result.transformed = False
+            guard_output = None
+            fpe_context = None
+            redaction_failed = True
+        else:
+            guard_output = {"messages": transformed_msgs}
+            fpe_context = vault_mgr.encode_fpe_context(vault_id)
+
+    # Handle MCP tool filtering (tool_listing events). Skipped after a failed
+    # redaction: rebuilding a guard_output there would re-populate the field the
+    # discard just cleared.
+    if event_type == "tool_listing" and tools and not redaction_failed:
         mcp_det = scan_result.detectors.get("mcp_validation", {})
         if mcp_det.get("detected") and mcp_det.get("data", {}).get("action") == "blocked":
             filtered_names = set(mcp_det["data"].get("filtered_tools", []))
@@ -231,10 +280,38 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
                 guard_output["tools"] = safe_tools
                 scan_result.transformed = True
 
+    # Detector failure enforcement (P0-2).
+    #
+    # A blocking or redacting detector that could not run means the request was
+    # never actually protected. Allowing it here — which is what happened before
+    # this existed — returns HTTP 200 with "No threats detected" for content
+    # nothing inspected.
+    #
+    # This is evaluated *before* the report_only downgrade below, deliberately:
+    # report_only exists so an operator can trial a policy without affecting
+    # traffic, but a detector failure is not a policy verdict to shadow, it is
+    # the absence of one. Documented as a change to what report_only guarantees.
+    failure_blocked = False
+    if scan_result.enforcement_degraded and engine.on_detector_failure is OnDetectorFailure.BLOCK:
+        failed_names = sorted({f.name for f in scan_result.failures if f.enforcing})
+        logger.error("Blocking request: enforcing detectors failed: %s", ", ".join(failed_names))
+        scan_result.blocked = True
+        failure_blocked = True
+        # Never return content the failed detectors did not get to inspect.
+        scan_result.transformed = False
+        guard_output = None
+        fpe_context = None
+        scan_result.summary_parts.append(
+            f"Blocked: required detectors could not run ({', '.join(failed_names)})."
+        )
+
     # Compute 5-value status.  In report_only mode, destructive actions
     # (block/transform) are downgraded so the request is never actually
     # modified — useful for shadow-mode evaluation of new policies.
-    if effective_report_only:
+    if failure_blocked:
+        # Not downgraded by report_only: see above.
+        status = "blocked"
+    elif effective_report_only:
         if scan_result.blocked:
             status = "alerted"
             scan_result.blocked = False
@@ -261,10 +338,31 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
         else:
             status = "allowed"
 
+    # Degradation is recorded as a reserved entry in the detectors payload,
+    # which the interaction row and every export format already carry verbatim.
+    # Without this, OCSF/AIDR/raw consumers would have to infer degradation by
+    # walking nested per-detector status or parsing the summary string — the
+    # value would reach them, but only indirectly, which is the same
+    # produced-but-not-consumed shape this work keeps tripping over.
+    failed_detector_names = sorted({f.name for f in scan_result.failures} | set(scan_result.partial))
+    if scan_result.degraded:
+        scan_result.detectors["_degraded"] = {
+            "degraded": True,
+            "failed_detectors": failed_detector_names,
+        }
+
     # Build response
     response_time = _now_iso()
     request_id = f"tw_{uuid.uuid4().hex[:16]}"
-    summary = " ".join(scan_result.summary_parts) or "No threats detected."
+    summary = " ".join(scan_result.summary_parts)
+    if not summary:
+        if scan_result.degraded:
+            # "No threats detected" is a lie when part of the scan did not run.
+            # Under on_detector_failure=report this is the only signal the
+            # caller gets, so it must not claim a complete clean scan.
+            summary = "Scan incomplete: one or more detectors could not run."
+        else:
+            summary = "No threats detected."
 
     response = GuardResponse(
         request_id=request_id,
@@ -283,6 +381,8 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
                 for r in access_rules_result["matched_rules"]
             },
             fpe_context=fpe_context,
+            degraded=scan_result.degraded,
+            failed_detectors=failed_detector_names,
         ),
     )
 

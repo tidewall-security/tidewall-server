@@ -17,7 +17,7 @@ The schema mirrors industry AI security platforms data model with these table gr
 
 **Event storage**:
     Interaction — one row per guard evaluation (the audit trail)
-    Vault — pickled PII vaults for reversible redaction (/v1/unredact)
+    Vault — JSON-encoded PII vaults for reversible redaction (/v1/unredact)
     ActivityLog — admin actions (policy changes, key creation, etc.)
 
 **Settings**:
@@ -77,6 +77,11 @@ class Policy(Base):
     type: Mapped[str] = mapped_column(String, nullable=False, default="application")
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     report_only: Mapped[bool] = mapped_column(Boolean, default=False)
+    # What to do when a blocking/redacting detector cannot run. Persisted
+    # because the enforcement decision must survive a restart and be settable
+    # through the API — a value that lives only on the transient PolicyConfig
+    # is unreachable from a normally constructed engine.
+    on_detector_failure: Mapped[str] = mapped_column(String, nullable=False, default="report")
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
@@ -186,6 +191,11 @@ class Vault(Base):
     containing the original PII values keyed by their placeholder tokens.
     The /v1/unredact endpoint loads the vault by ID (encoded in the
     fpe_context token) to recover original text.
+
+    Note that in practice this column currently holds only *empty* vaults, and
+    the payload format is plaintext. See :mod:`app.vault_manager` for why, and
+    for the constraint that encryption must land in the same change as the
+    persistence fix.
     """
 
     __tablename__ = "vaults"

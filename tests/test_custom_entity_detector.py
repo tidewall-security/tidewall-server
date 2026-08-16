@@ -28,12 +28,23 @@ def test_no_matches_returns_undetected():
     assert r.detected is False
 
 
-def test_invalid_pattern_is_skipped_gracefully():
-    # `(invalid` is malformed — should be skipped, the valid pattern still works
+def test_invalid_pattern_makes_the_detector_fail_rather_than_skip():
+    """A malformed pattern used to be skipped so the others still worked.
+
+    That silently removed whatever rule the broken pattern expressed: the
+    policy says an entity is detected and it never would be, and the response
+    was indistinguishable from having checked and found nothing. Invalid
+    patterns are now rejected at policy-write time, and a detector that somehow
+    receives one reports a failure rather than a clean verdict.
+    """
+    from app.detectors.base import DetectorStatus, FailureCode
+
     d = _make([r"(invalid", r"PROJ-\d+"])
     r = d.scan("PROJ-1 here")
-    assert r.detected is True
-    assert r.data["entities"][0]["value"] == "PROJ-1"
+
+    assert r.status is DetectorStatus.FAILED
+    assert r.failure_code is FailureCode.CONFIG_INVALID
+    assert r.detected is False
 
 
 def test_overlapping_patterns_dedupe_to_longest_at_same_start():

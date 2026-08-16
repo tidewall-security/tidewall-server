@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .base import BaseDetector, DetectorResult
+from .base import BaseDetector, DetectorResult, FailureCode
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +50,11 @@ class MaliciousEntityDetector(BaseDetector):
                 )
                 logger.info("Loaded malicious-URL classifier: %s", model_path)
             except ImportError:
-                logger.warning("transformers not installed — ML URL classification disabled")
+                logger.warning("transformers not installed — ML URL classification unavailable")
+                self.mark_unavailable(FailureCode.DEPENDENCY_MISSING)
             except Exception:
                 logger.warning("Failed to load malicious-URL classifier %s", model_path, exc_info=True)
+                self.mark_unavailable(FailureCode.MODEL_LOAD_FAILED)
 
         # Redactor for defanging
         from app.services.redactor import Redactor
@@ -65,6 +67,13 @@ class MaliciousEntityDetector(BaseDetector):
 
     def scan(self, text: str, **kwargs: Any) -> DetectorResult:
         from app.services.entity_extractor import extract_entities
+
+        # The configured URL classifier failed to load, so URL classification
+        # cannot run. Returning a confident clean verdict here — which is what
+        # happened before — reports "no malicious entities" from a detector
+        # with no way to find one.
+        if not self.available:
+            return self.unavailable_result()
 
         # Extract all entities from text
         extracted = extract_entities(text)
@@ -103,7 +112,10 @@ class MaliciousEntityDetector(BaseDetector):
                     if label not in {"benign", "label_0"} and score >= self._ml_threshold:
                         is_malicious = True
                 except Exception:
-                    logger.warning("ML URL classifier failed on %s", value, exc_info=True)
+                    # Do not log `value`: URLs carry credentials and query
+                    # tokens. The failure is attributable without the payload.
+                    logger.warning("ML URL classifier failed", exc_info=True)
+                    return DetectorResult.failed(FailureCode.SCAN_FAILED)
 
             if not is_malicious:
                 continue

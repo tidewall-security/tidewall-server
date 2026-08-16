@@ -7,6 +7,7 @@ validated Pydantic models.
 from __future__ import annotations
 
 import os
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,11 @@ class Settings(BaseModel):
     PREWARM: bool = True
     AUTH_ENABLED: bool = False
     USE_ONNX: bool = False
+    # Operator-supplied first admin credential. Consulted only when
+    # AUTH_ENABLED is set and no API keys exist yet; only its hash is stored.
+    # Tidewall never generates this, because a generated value would have to be
+    # emitted to logs or stdout to reach the operator, where it would persist.
+    BOOTSTRAP_KEY: str | None = None
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -58,11 +64,31 @@ class DetectorConfig(BaseModel):
     action: str = "report"  # "block" | "report" | "redact"
 
 
+class OnDetectorFailure(str, Enum):
+    """What to do when a blocking or redacting detector cannot run.
+
+    ``BLOCK`` is the correct setting for a security product: a detector that
+    failed did not inspect the request, so allowing it returns a clean verdict
+    for content nothing looked at.
+
+    ``REPORT`` remains the default only until the activation preflight exists.
+    Without a preflight that refuses to *serve* a policy whose required
+    detectors cannot construct, defaulting to BLOCK turns an absent spaCy model
+    or a gated Hugging Face model into a service that boots healthy and rejects
+    100% of traffic. Failing visibly at startup is the right answer; blocking
+    every request at runtime is not.
+    """
+
+    BLOCK = "block"
+    REPORT = "report"
+
+
 class PolicyConfig(BaseModel):
     """Top-level policy configuration parsed from policy.yaml."""
 
     name: str
     report_only: bool = False
+    on_detector_failure: OnDetectorFailure = OnDetectorFailure.REPORT
     detectors: dict[str, DetectorConfig] = {}
 
 

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app.auth.dependencies import require_role
+from app.services.policy_validation import PolicyValidationError, validate_cidr
 
 router = APIRouter(prefix="/v1/settings", tags=["settings"])
 
@@ -304,6 +305,14 @@ async def get_threat_intel_config(request: Request) -> dict:
 @router.put("/threat-intel", dependencies=[Depends(require_role("admin"))])
 async def update_threat_intel_config(body: ThreatIntelConfigRequest, request: Request) -> dict:
     """Update threat intel configuration in the default policy."""
+
+    # An invalid CIDR returns "not malicious" at runtime, so a typo silently
+    # removes the blocklist entry it expressed.
+    for i, entry in enumerate(body.local_blocklists.get("ips", []) or []):
+        try:
+            validate_cidr(entry if "/" in entry else f"{entry}/32", where=f"local_blocklists.ips[{i}]")
+        except PolicyValidationError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from None
     session = request.app.state.session_factory()
     try:
         from app.services.policy_service import PolicyService

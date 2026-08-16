@@ -25,7 +25,7 @@ async def unredact(body: UnredactRequest, request: Request) -> UnredactResponse:
     try:
         ctx_json = json.loads(base64.b64decode(body.fpe_context))
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid fpe_context")
+        raise HTTPException(status_code=400, detail="Invalid fpe_context") from None
 
     request_time = _now_iso()
     request_id = f"tw_{uuid.uuid4().hex[:16]}"

@@ -6,9 +6,16 @@ detectors:
     enabled: true
     action: block
     threshold: 0.9
-    model: vijil/vijil_dome_prompt_injection_detection
-    tokenizer: answerdotai/ModernBERT-base
-    injection_label: 1
+    # Ungated and Apache-2.0, so a clean build needs no HF credentials. The
+    # previous default was gated: manual and paired with a tokenizer from a
+    # different model. Pinned by revision so the artifact cannot move.
+    model: protectai/deberta-v3-base-prompt-injection-v2
+    revision: 90c9989b1a342275dd0d1a95aad283c04e075671
+    # This model labels its classes SAFE / INJECTION rather than LABEL_0 /
+    # LABEL_1. The value is resolved through the model's own id2label at
+    # construction, so 1 would work too — but naming the label the model
+    # actually owns is what makes the config readable.
+    injection_label: INJECTION
 
   confidential_and_pii_entity:
     enabled: true

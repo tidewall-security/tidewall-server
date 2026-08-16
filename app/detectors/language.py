@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .base import BaseDetector, DetectorResult
+from .base import BaseDetector, DetectorResult, FailureCode
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +39,11 @@ class LanguageDetector(BaseDetector):
             )
             logger.info("Loaded language classifier: %s", model_path)
         except ImportError:
-            logger.warning("transformers not installed — LanguageDetector disabled")
+            logger.warning("transformers not installed — LanguageDetector unavailable")
+            self.mark_unavailable(FailureCode.DEPENDENCY_MISSING)
         except Exception:
             logger.warning("Failed to load language classifier %s", model_path, exc_info=True)
+            self.mark_unavailable(FailureCode.MODEL_LOAD_FAILED)
 
     @property
     def name(self) -> str:
@@ -49,13 +51,13 @@ class LanguageDetector(BaseDetector):
 
     def scan(self, text: str, **kwargs: Any) -> DetectorResult:
         if self._pipeline is None:
-            return DetectorResult(detected=False)
+            return self.unavailable_result()
 
         try:
             results = self._pipeline(text)
         except Exception:
             logger.warning("Language classifier inference failed", exc_info=True)
-            return DetectorResult(detected=False)
+            return DetectorResult.failed(FailureCode.SCAN_FAILED)
 
         top = results[0] if isinstance(results, list) and results else {}
         predicted = top.get("label", "")

@@ -7,8 +7,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.config import OnDetectorFailure
 from app.db.models import Policy, RuleSet
 from app.scanner_engine import ScannerEngine
+from app.services.policy_validation import validate_detectors
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +98,14 @@ class PolicyService:
         report_only: bool = False,
         is_default: bool = False,
         detectors: dict[str, Any] | None = None,
+        on_detector_failure: str = OnDetectorFailure.REPORT.value,
     ) -> Policy:
+        # Validate before writing anything. A policy that cannot be enforced
+        # as written is rejected while the administrator is looking at it,
+        # rather than accepted and then quietly not applied — which is
+        # indistinguishable from applied-and-found-nothing.
+        validate_detectors(detectors or {})
+
         session, should_close = self._get_session()
         try:
             policy = Policy(
@@ -104,6 +113,7 @@ class PolicyService:
                 type=type,
                 description=description,
                 report_only=report_only,
+                on_detector_failure=OnDetectorFailure(on_detector_failure).value,
                 is_default=is_default,
             )
             session.add(policy)
@@ -133,7 +143,11 @@ class PolicyService:
         name: str | None = None,
         description: str | None = None,
         report_only: bool | None = None,
+        on_detector_failure: str | None = None,
     ) -> Policy:
+        if on_detector_failure is not None:
+            on_detector_failure = OnDetectorFailure(on_detector_failure).value
+
         session, should_close = self._get_session()
         try:
             policy = session.get(Policy, policy_id)
@@ -146,8 +160,18 @@ class PolicyService:
                 policy.description = description
             if report_only is not None:
                 policy.report_only = report_only
+            if on_detector_failure is not None:
+                policy.on_detector_failure = on_detector_failure
 
             session.commit()
+
+            # Engines are cached on (policy_id, event_type) and hold a snapshot
+            # of the policy, so report_only and on_detector_failure would keep
+            # their old values on every cached engine until restart. An
+            # administrator tightening enforcement would see the write succeed
+            # and nothing change — the same shape of defect as a policy write
+            # never reaching the live engine.
+            self.invalidate_engines(policy_id)
             return policy
         finally:
             if should_close:
@@ -159,6 +183,8 @@ class PolicyService:
         event_type: str,
         detectors: dict[str, Any],
     ) -> RuleSet:
+        validate_detectors(detectors or {})
+
         session, should_close = self._get_session()
         try:
             rs = session.query(RuleSet).filter_by(policy_id=policy_id, event_type=event_type).first()
@@ -203,6 +229,14 @@ class PolicyService:
 
     # ---- Engine cache ----
 
+    def invalidate_engines(self, policy_id: str) -> None:
+        """Drop cached engines for a policy so the next request rebuilds them."""
+        stale = [key for key in self._engine_cache if key[0] == policy_id]
+        for key in stale:
+            self._engine_cache.pop(key, None)
+        if stale:
+            logger.info("Invalidated %d cached engine(s) for policy=%s", len(stale), policy_id)
+
     def get_engine(self, policy_id: str, event_type: str) -> ScannerEngine:
         """Get or build a ScannerEngine for the given policy and event type."""
         cache_key = (policy_id, event_type)
@@ -217,12 +251,16 @@ class PolicyService:
 
             policy = session.get(Policy, policy_id)
             report_only = policy.report_only if policy else False
+            on_detector_failure = OnDetectorFailure(
+                (policy.on_detector_failure if policy else None) or OnDetectorFailure.REPORT.value
+            )
 
             engine = ScannerEngine.from_detectors(
                 rs.detectors,
                 report_only=report_only,
                 session_factory=self._session_factory,
                 use_onnx=self._use_onnx,
+                on_detector_failure=on_detector_failure,
             )
             self._engine_cache[cache_key] = engine
             logger.info(

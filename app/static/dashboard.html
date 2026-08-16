@@ -379,6 +379,10 @@
       let detTags = "";
       if (ev.detectors_json && typeof ev.detectors_json === "object") {
         for (const [dn, di] of Object.entries(ev.detectors_json)) {
+          // Keys beginning with "_" are reserved scan metadata (e.g. _degraded),
+          // not detectors. Rendering them as detector tags would show a
+          // detector that does not exist.
+          if (dn.startsWith("_")) continue;
           const active = di && di.detected ? " active" : "";
           detTags += `<span class="det-tag${active}">${escHtml(dn)}</span>`;
         }

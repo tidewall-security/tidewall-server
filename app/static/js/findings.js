@@ -190,6 +190,7 @@
       var chips = '';
       if (ev.detectors_json && typeof ev.detectors_json === 'object') {
         Object.keys(ev.detectors_json).forEach(function (dn) {
+          if (dn.charAt(0) === '_') return;  // reserved scan metadata, not a detector
           var di = ev.detectors_json[dn];
           if (di && di.detected) {
             chips += Utils.detectorChip(dn);
@@ -306,7 +307,12 @@
 
     // Detector results
     if (ev.detectors_json && typeof ev.detectors_json === 'object') {
-      var detNames = Object.keys(ev.detectors_json);
+      // Reserved metadata keys (e.g. _degraded) are not detectors; rendering
+      // them as detector cards showed a nonexistent detector with a "Clear"
+      // badge, which is exactly backwards for a degraded scan.
+      var detNames = Object.keys(ev.detectors_json).filter(function (n) {
+        return n.charAt(0) !== '_';
+      });
       if (detNames.length > 0) {
         html += '<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-secondary);margin-bottom:10px;">Detector Results</div>';
         html += '<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px;">';

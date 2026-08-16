@@ -18,7 +18,7 @@ from typing import Any
 
 from app.services.redactor import Redactor
 
-from .base import BaseDetector, DetectorResult
+from .base import BaseDetector, DetectorResult, FailureCode
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +68,8 @@ class SecretsDetector(BaseDetector):
             from detect_secrets.core.scan import scan_line
             from detect_secrets.settings import transient_settings
         except ImportError:
-            logger.warning("detect-secrets not installed — SecretsDetector disabled")
-            return DetectorResult(detected=False)
+            logger.warning("detect-secrets not installed — SecretsDetector unavailable")
+            return DetectorResult.failed(FailureCode.DEPENDENCY_MISSING)
 
         sanitized_lines: list[str] = []
         # Tracks position in sanitized output of each [REDACTED] token we

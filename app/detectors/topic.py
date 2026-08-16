@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .base import BaseDetector, DetectorResult
+from .base import BaseDetector, ComponentStatus, DetectorResult, DetectorStatus, FailureCode, SkipReason
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +38,18 @@ class TopicDetector(BaseDetector):
         self._topic_threshold = config.get("threshold", 0.75)
         self._toxicity_threshold = config.get("toxicity_threshold", 0.5)
         self._device = config.get("device", "cpu")
+        # Per-sub-detector load failures. Recorded individually rather than
+        # marking the whole detector unavailable, because one pipeline can load
+        # while the other does not — and a sub-detector the operator configured
+        # but which never loaded must still be reported on every scan, not
+        # silently absent.
+        self._load_failures: dict[str, FailureCode] = {}
 
         try:
             from transformers import pipeline
         except ImportError:
-            logger.warning("transformers not installed — TopicDetector disabled")
+            logger.warning("transformers not installed — TopicDetector unavailable")
+            self.mark_unavailable(FailureCode.DEPENDENCY_MISSING)
             return
 
         if self._topics:
@@ -56,6 +63,7 @@ class TopicDetector(BaseDetector):
                 logger.info("Loaded topics classifier: %s", topics_model)
             except Exception:
                 logger.warning("Failed to load topics model %s", topics_model, exc_info=True)
+                self._load_failures["topics"] = FailureCode.MODEL_LOAD_FAILED
 
         toxicity_model = config.get("toxicity_model") or _DEFAULT_TOXICITY_MODEL
         try:
@@ -70,6 +78,10 @@ class TopicDetector(BaseDetector):
             logger.info("Loaded toxicity classifier: %s", toxicity_model)
         except Exception:
             logger.warning("Failed to load toxicity model %s", toxicity_model, exc_info=True)
+            self._load_failures["toxicity"] = FailureCode.MODEL_LOAD_FAILED
+
+        if self._load_failures and self._topics_pipeline is None and self._toxicity_pipeline is None:
+            self.mark_unavailable(FailureCode.MODEL_LOAD_FAILED)
 
     @property
     def name(self) -> str:
@@ -77,10 +89,14 @@ class TopicDetector(BaseDetector):
 
     def scan(self, text: str, **kwargs: Any) -> DetectorResult:
         if self._topics_pipeline is None and self._toxicity_pipeline is None:
-            return DetectorResult(detected=False)
+            return self.unavailable_result()
 
         topics_found: list[dict[str, Any]] = []
         detected = False
+        # This detector is a composite (toxicity + banned topics), so one
+        # sub-detector failing does not automatically invalidate the verdict.
+        # See the aggregation rule below.
+        components: dict[str, ComponentStatus] = {}
 
         # Toxicity: take the max score across all toxicity sub-labels.
         if self._toxicity_pipeline is not None:
@@ -94,8 +110,18 @@ class TopicDetector(BaseDetector):
                 if tox_score >= self._toxicity_threshold:
                     detected = True
                     topics_found.append({"topic": "toxicity", "confidence": max(0.0, min(1.0, tox_score))})
+                components["toxicity"] = ComponentStatus()
             except Exception:
                 logger.warning("Toxicity classifier inference failed", exc_info=True)
+                components["toxicity"] = ComponentStatus(
+                    status=DetectorStatus.FAILED, failure_code=FailureCode.SCAN_FAILED
+                )
+        elif "toxicity" in self._load_failures:
+            components["toxicity"] = ComponentStatus(
+                status=DetectorStatus.FAILED, failure_code=self._load_failures["toxicity"]
+            )
+        else:
+            components["toxicity"] = ComponentStatus(status=DetectorStatus.SKIPPED, skip_reason=SkipReason.NOT_ENABLED)
 
         # Banned topics: zero-shot classification against the candidate list.
         if self._topics_pipeline is not None and self._topics:
@@ -107,17 +133,58 @@ class TopicDetector(BaseDetector):
                 if top_label and top_score >= self._topic_threshold:
                     detected = True
                     topics_found.append({"topic": top_label, "confidence": max(0.0, min(1.0, top_score))})
+                components["topics"] = ComponentStatus()
             except Exception:
                 logger.warning("Topics classifier inference failed", exc_info=True)
+                components["topics"] = ComponentStatus(
+                    status=DetectorStatus.FAILED, failure_code=FailureCode.SCAN_FAILED
+                )
+        elif "topics" in self._load_failures:
+            components["topics"] = ComponentStatus(
+                status=DetectorStatus.FAILED, failure_code=self._load_failures["topics"]
+            )
+        else:
+            components["topics"] = ComponentStatus(status=DetectorStatus.SKIPPED, skip_reason=SkipReason.NOT_ENABLED)
+
+        failed = [c for c in components.values() if c.status is DetectorStatus.FAILED]
+
+        # Composite aggregation. A failed sub-detector is absorbed only when the
+        # composite verdict is *provably* unchanged by it: another sub-detector
+        # has already produced detected=True, and detected cannot become more
+        # true. The payload may lose an entry, but the verdict — and so the
+        # enforcement decision — is invariant.
+        #
+        # When nothing was detected the opposite holds: the sub-detector that
+        # failed is precisely the one that might have found something, so
+        # reporting "clean" would be the fail-open this exists to close.
+        if failed and not detected:
+            return DetectorResult(
+                detected=False,
+                status=DetectorStatus.FAILED,
+                failure_code=failed[0].failure_code,
+                components=components,
+            )
 
         if not detected:
-            return DetectorResult(detected=False)
+            return DetectorResult(detected=False, components=components)
 
+        # Aggregation does not depend on the action. A detection is real
+        # regardless of what happens next, so it is kept and marked `degraded`
+        # when a sibling failed; the caller gets both the finding and the fact
+        # that the check was incomplete. Earlier revisions tried to decide this
+        # from can_block/can_redact and were wrong in both directions — once
+        # `degraded` exists there is nothing left for the action to decide.
+        # A detection stands on its own. If a sub-detector also failed the
+        # finding is *incomplete*, not *untrustworthy* — discarding it would
+        # throw away a real positive the system actually obtained and report
+        # "nothing found", which is the very defect this work exists to close.
         action = "blocked" if self.can_block else "reported"
         return DetectorResult(
             detected=True,
+            degraded=bool(failed),
             data={
                 "action": action,
                 "topics": topics_found,
             },
+            components=components,
         )

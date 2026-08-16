@@ -31,12 +31,19 @@ def _ner_result(entity_type, start, end):
     return r
 
 
-def test_no_competitors_configured_returns_undetected():
+def test_no_competitors_configured_is_an_ok_negative_not_a_failure():
+    from app.detectors.base import DetectorStatus
+
     d = CompetitorsDetector({"enabled": True, "action": "report", "competitors": []})
     assert d._analyzer is None
     r = d.scan("Acme is great")
     assert r.detected is False
     assert r.data is None
+    # The distinction this test previously failed to make: nothing configured
+    # to look for is a complete answer, not an inability to answer. Asserting
+    # only `detected is False` hid a regression where an intentionally inactive
+    # detector degraded every request.
+    assert r.status is DetectorStatus.OK
 
 
 def test_presidio_load_failure_returns_undetected(monkeypatch):

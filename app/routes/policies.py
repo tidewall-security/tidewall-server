@@ -10,6 +10,8 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from app.auth.dependencies import require_role
+from app.config import OnDetectorFailure
+from app.services.policy_validation import PolicyValidationError
 
 router = APIRouter(prefix="/v1/policies", tags=["policies"])
 
@@ -19,12 +21,14 @@ class CreatePolicyRequest(BaseModel):
     type: str = "application"
     description: str | None = None
     report_only: bool = False
+    on_detector_failure: OnDetectorFailure = OnDetectorFailure.REPORT
     detectors: dict[str, Any] = {}
 
 
 class UpdatePolicyRequest(BaseModel):
     name: str | None = None
     description: str | None = None
+    on_detector_failure: OnDetectorFailure | None = None
     report_only: bool | None = None
 
 
@@ -39,6 +43,7 @@ def _policy_to_dict(policy) -> dict:
         "type": policy.type,
         "description": policy.description,
         "report_only": policy.report_only,
+        "on_detector_failure": policy.on_detector_failure,
         "is_default": policy.is_default,
         "created_at": str(policy.created_at),
         "updated_at": str(policy.updated_at),
@@ -78,6 +83,7 @@ async def create_policy(body: CreatePolicyRequest, request: Request) -> dict:
             description=body.description,
             report_only=body.report_only,
             detectors=body.detectors,
+            on_detector_failure=body.on_detector_failure,
         )
         return _policy_to_dict(policy)
     except Exception as e:
@@ -113,7 +119,19 @@ async def update_policy(policy_id: str, body: UpdatePolicyRequest, request: Requ
             name=body.name,
             description=body.description,
             report_only=body.report_only,
+            on_detector_failure=body.on_detector_failure.value if body.on_detector_failure else None,
         )
+        # The write above ran on a throwaway PolicyService whose engine cache is
+        # not the live one, so its invalidation reached nothing. Invalidate on
+        # the application-scoped service too, or an administrator tightening
+        # enforcement gets a 200 and no behaviour change until restart.
+        #
+        # This is a targeted fix, not a general one: the throwaway-service
+        # pattern is P0-5's root cause and every other policy-mutating route has
+        # the same problem. The activation protocol replaces this wholesale.
+        live_svc = getattr(request.app.state, "policy_service", None)
+        if live_svc is not None:
+            live_svc.invalidate_engines(policy_id)
         return _policy_to_dict(policy)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -169,8 +187,13 @@ async def update_rule_set(policy_id: str, event_type: str, body: UpdateRuleSetRe
             "event_type": rs.event_type,
             "detectors": rs.detectors,
         }
+    except PolicyValidationError as e:
+        # A rejected policy is the administrator's mistake to fix, not a
+        # missing resource. Mapping it to 404 told them the rule set did not
+        # exist, which is both wrong and unactionable.
+        raise HTTPException(status_code=400, detail=str(e)) from None
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from None
     finally:
         session.close()
 
@@ -314,6 +337,7 @@ async def import_policy(body: dict, request: Request) -> dict:
             description=body.get("description"),
             report_only=report_only,
             detectors=detectors,
+            on_detector_failure=body.get("on_detector_failure", "report"),
         )
         return _policy_to_dict(policy)
     except Exception as e:

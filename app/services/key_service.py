@@ -71,12 +71,34 @@ class KeyService:
                 return None  # Expired
         return api_key
 
-    def bootstrap_admin_key(self) -> str | None:
-        """Generate a bootstrap admin key if no keys exist. Returns raw key or None."""
-        existing = self._session.query(APIKey).first()
-        if existing is not None:
-            return None  # Keys already exist
+    def has_any_key(self) -> bool:
+        """True if at least one API key exists."""
+        return self._session.query(APIKey).first() is not None
 
-        raw_key, _ = self.create_key(name="bootstrap-admin", role="admin")
-        logger.warning("Bootstrap admin key created: %s", raw_key)
-        return raw_key
+    def install_bootstrap_admin_key(self, raw_key: str) -> bool:
+        """Install an operator-supplied bootstrap admin key if no keys exist.
+
+        Returns True if installed, False if keys already existed.
+
+        The raw key is never logged or printed. It is supplied by the operator,
+        who therefore already holds it, and emitting it here would place a
+        permanent administrator bearer token into log storage — the defect this
+        replaces. Only the hash is persisted, preserving the same "raw key never
+        stored" boundary :meth:`create_key` honours.
+        """
+        if self.has_any_key():
+            return False
+
+        api_key = APIKey(
+            name="bootstrap-admin",
+            key_hash=hash_key(raw_key),
+            key_prefix=key_prefix(raw_key),
+            role="admin",
+        )
+        self._session.add(api_key)
+        self._session.commit()
+        logger.info(
+            "Installed operator-supplied bootstrap admin key (prefix=%s)",
+            api_key.key_prefix,
+        )
+        return True
