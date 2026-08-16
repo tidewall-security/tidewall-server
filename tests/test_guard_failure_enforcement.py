@@ -227,3 +227,41 @@ def test_policy_create_accepts_and_returns_on_detector_failure(guard_client):
         assert created.on_detector_failure == "block"
     finally:
         session.close()
+
+
+def test_updating_the_policy_invalidates_cached_engines(guard_client):
+    """Engines cache a policy snapshot, so a write must drop them.
+
+    Without this an administrator tightening enforcement gets a 200 and no
+    behaviour change until restart. The PATCH route performs exactly the two
+    calls below: the write on a request-scoped PolicyService, then invalidation
+    on the application-scoped one — because the throwaway service's cache is
+    not the live one. That split is P0-5's root cause and the activation
+    protocol replaces it wholesale; this only covers the field added here.
+    """
+    from app.config import OnDetectorFailure
+    from app.db.models import Policy
+    from app.services.policy_service import PolicyService
+
+    client, _key, session_factory = guard_client
+
+    session = session_factory()
+    policy_id = session.query(Policy).filter_by(is_default=True).first().id
+    session.close()
+
+    policy_svc = client.app.state.policy_service
+    # Warm the cache with the default.
+    assert policy_svc.get_engine(policy_id, "input").on_detector_failure is OnDetectorFailure.REPORT
+
+    session = session_factory()
+    try:
+        PolicyService(session).update_policy(policy_id, on_detector_failure="block")
+    finally:
+        session.close()
+
+    # The write alone does not reach the live cache — this is the defect.
+    assert policy_svc.get_engine(policy_id, "input").on_detector_failure is OnDetectorFailure.REPORT
+
+    policy_svc.invalidate_engines(policy_id)
+
+    assert policy_svc.get_engine(policy_id, "input").on_detector_failure is OnDetectorFailure.BLOCK

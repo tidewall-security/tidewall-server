@@ -143,7 +143,11 @@ class PolicyService:
         name: str | None = None,
         description: str | None = None,
         report_only: bool | None = None,
+        on_detector_failure: str | None = None,
     ) -> Policy:
+        if on_detector_failure is not None:
+            on_detector_failure = OnDetectorFailure(on_detector_failure).value
+
         session, should_close = self._get_session()
         try:
             policy = session.get(Policy, policy_id)
@@ -156,8 +160,18 @@ class PolicyService:
                 policy.description = description
             if report_only is not None:
                 policy.report_only = report_only
+            if on_detector_failure is not None:
+                policy.on_detector_failure = on_detector_failure
 
             session.commit()
+
+            # Engines are cached on (policy_id, event_type) and hold a snapshot
+            # of the policy, so report_only and on_detector_failure would keep
+            # their old values on every cached engine until restart. An
+            # administrator tightening enforcement would see the write succeed
+            # and nothing change — the same shape of defect as a policy write
+            # never reaching the live engine.
+            self.invalidate_engines(policy_id)
             return policy
         finally:
             if should_close:
@@ -214,6 +228,14 @@ class PolicyService:
                 session.close()
 
     # ---- Engine cache ----
+
+    def invalidate_engines(self, policy_id: str) -> None:
+        """Drop cached engines for a policy so the next request rebuilds them."""
+        stale = [key for key in self._engine_cache if key[0] == policy_id]
+        for key in stale:
+            self._engine_cache.pop(key, None)
+        if stale:
+            logger.info("Invalidated %d cached engine(s) for policy=%s", len(stale), policy_id)
 
     def get_engine(self, policy_id: str, event_type: str) -> ScannerEngine:
         """Get or build a ScannerEngine for the given policy and event type."""

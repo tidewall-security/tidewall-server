@@ -113,22 +113,46 @@ def validate_detectors(detectors: dict[str, Any]) -> None:
         for i, pattern in enumerate(cfg.get("patterns", []) or []):
             validate_regex(pattern, where=f"detectors.{name}.patterns[{i}]")
 
-        # Nested threat-intel CIDRs. An invalid one returns "not malicious" at
-        # runtime, so it silently removes the blocklist entry it expressed.
-        for key in ("blocked_cidrs", "cidrs", "ip_ranges"):
-            for i, cidr in enumerate(cfg.get(key, []) or []):
-                validate_cidr(cidr, where=f"detectors.{name}.{key}[{i}]")
+        # Nested threat-intel blocklists, validated against the shape
+        # ThreatIntelService actually reads: cfg["intel"]["local_blocklists"]["ips"].
+        # An earlier version checked keys ("blocked_cidrs", "cidrs", "ip_ranges")
+        # that nothing consumes, which is a dead validator wearing the costume
+        # of a live one. An invalid CIDR returns "not malicious" at runtime, so
+        # it silently removes the blocklist entry it expressed.
+        intel = cfg.get("intel") or {}
+        blocklists = (intel.get("local_blocklists") or {}) if isinstance(intel, dict) else {}
+        for i, entry in enumerate(blocklists.get("ips", []) or []):
+            if "/" in str(entry):
+                validate_cidr(entry, where=f"detectors.{name}.intel.local_blocklists.ips[{i}]")
 
-        # Access rules may be carried on the detector config in some shapes.
-        if "access_rules" in cfg:
-            validate_access_rules(cfg["access_rules"] or [])
+
+def _iter_conditions(conditions: Any) -> list[dict[str, Any]]:
+    """Yield condition mappings from either stored shape.
+
+    Access rules store ``conditions`` as a mapping with an ``all``/``any`` key
+    in some paths and as a bare list in others. Validating only one shape would
+    silently pass the other, which is how the previous version managed to be
+    wired and still inert.
+    """
+    if isinstance(conditions, dict):
+        out: list[dict[str, Any]] = []
+        for key in ("all", "any", "conditions"):
+            value = conditions.get(key)
+            if isinstance(value, list):
+                out.extend(c for c in value if isinstance(c, dict))
+        if not out and "field" in conditions:
+            out.append(conditions)
+        return out
+    if isinstance(conditions, list):
+        return [c for c in conditions if isinstance(c, dict)]
+    return []
 
 
 def validate_access_rules(rules: list[dict[str, Any]]) -> None:
     """Validate access rules, rejecting operators the evaluator cannot apply."""
     for i, rule in enumerate(rules or []):
         where_rule = f"access_rules[{i}]"
-        for j, condition in enumerate(rule.get("conditions", []) or []):
+        for j, condition in enumerate(_iter_conditions(rule.get("conditions"))):
             if not isinstance(condition, dict):
                 raise PolicyValidationError(f"{where_rule}.conditions[{j}]: must be a mapping")
             # The evaluator reads "op", not "operator". Its default is "==",

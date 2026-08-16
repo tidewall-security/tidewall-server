@@ -11,7 +11,7 @@ defaulting to block would turn an absent spaCy model or a gated Hugging Face
 model into a service that boots healthy and rejects all traffic.
 
 Revision ID: b4e2a17c9d31
-Revises: f1ab8c9e9974
+Revises: 82c6e81ffe29
 Create Date: 2026-08-16
 
 """
@@ -22,7 +22,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b4e2a17c9d31"
-down_revision: str | Sequence[str] | None = "f1ab8c9e9974"
+down_revision: str | Sequence[str] | None = "82c6e81ffe29"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
