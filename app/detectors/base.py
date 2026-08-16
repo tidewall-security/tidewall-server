@@ -108,6 +108,29 @@ def _validate_status(
     return status
 
 
+def _validate_degraded(status: DetectorStatus, detected: bool, degraded: bool) -> None:
+    """``degraded`` means "this verdict is real but incomplete".
+
+    Both halves of that sentence are load-bearing, so both are enforced:
+
+    - It must be a *verdict*. A FAILED result has none, and a SKIPPED one was
+      never asked for; neither can be incomplete.
+    - It must be *real*. A negative that is incomplete is not a negative — the
+      component that failed is precisely the one that might have found
+      something, which is why that case is FAILED instead.
+
+    Without this the type permits `degraded=True` on a FAILED or clean-negative
+    result, which reads as "we checked, found nothing, and the check was
+    partial" — the ambiguity this whole workstream exists to remove.
+    """
+    if not degraded:
+        return
+    if status is not DetectorStatus.OK:
+        raise ValueError(f"degraded requires status OK, got {status.value}")
+    if not detected:
+        raise ValueError("degraded requires a detection; an incomplete negative is FAILED")
+
+
 @dataclass
 class ComponentStatus:
     """Status of one sub-detector inside a composite."""
@@ -160,6 +183,7 @@ class DetectorResult:
         self.status = _validate_status(
             self.status, self.failure_code, self.skip_reason, self.detected, what="DetectorResult"
         )
+        _validate_degraded(self.status, self.detected, self.degraded)
 
     @property
     def trustworthy(self) -> bool:
