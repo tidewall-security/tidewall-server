@@ -19,6 +19,49 @@ from .base import BaseDetector, ComponentStatus, DetectorResult, DetectorStatus,
 logger = logging.getLogger(__name__)
 
 
+def _resolve_injection_label(configured: Any, model: Any) -> str | None:
+    """Resolve a configured injection label to the model's own label string.
+
+    ``policy.yaml`` shipped ``injection_label: 1`` — an int — against a
+    text-classification pipeline that returns ``{"label": "LABEL_1", ...}``.
+    The comparison was ``r["label"] == 1``, which is never true, so the
+    flagship blocking detector scored every prompt at 0.0 and detected nothing
+    on every clean install. That is P0-3.
+
+    Both sides are canonicalised to the model's own vocabulary here rather than
+    compared as written, so ``1``, ``"1"``, ``"LABEL_1"`` and ``"INJECTION"``
+    all resolve identically. Returns ``None`` if the configured label does not
+    exist in the model at all, which is a configuration error rather than a
+    detector that finds nothing.
+    """
+    config = getattr(model, "config", None)
+    id2label = dict(getattr(config, "id2label", None) or {})
+    label2id = dict(getattr(config, "label2id", None) or {})
+
+    if configured is None:
+        return None
+
+    # Already the model's exact label.
+    if configured in label2id:
+        return str(configured)
+
+    # An index, given as int or as a numeric string.
+    try:
+        idx = int(configured)
+    except (TypeError, ValueError):
+        idx = None
+    if idx is not None and idx in id2label:
+        return str(id2label[idx])
+
+    # Case-insensitive match against the model's labels.
+    wanted = str(configured).strip().lower()
+    for label in label2id:
+        if str(label).strip().lower() == wanted:
+            return str(label)
+
+    return None
+
+
 class MaliciousPromptDetector(BaseDetector):
     """Composite prompt injection detector with sub-toggles.
 
@@ -84,6 +127,26 @@ class MaliciousPromptDetector(BaseDetector):
                         max_length=512,
                         device="cpu",
                     )
+                    resolved = _resolve_injection_label(self._injection_label, model)
+                    if resolved is None:
+                        known = list(getattr(getattr(model, "config", None), "label2id", None) or {})
+                        logger.error(
+                            "injection_label %r does not exist in model %s (labels: %s); "
+                            "the detector cannot classify anything",
+                            self._injection_label,
+                            model_path,
+                            known,
+                        )
+                        self._load_failures["generic_injection"] = FailureCode.CONFIG_INVALID
+                        self._pipeline = None
+                    else:
+                        if str(resolved) != str(self._injection_label):
+                            logger.info(
+                                "Resolved injection_label %r to model label %r",
+                                self._injection_label,
+                                resolved,
+                            )
+                        self._injection_label = resolved
                     logger.info("Loaded direct HF pipeline: model=%s tokenizer=%s", model_path, tokenizer_path)
                 except Exception:
                     logger.warning("Failed to load direct HF pipeline for %s", model_path, exc_info=True)

@@ -470,3 +470,33 @@ def test_unavailable_intent_service_is_a_failure_not_a_pass():
 
     assert r.status is DetectorStatus.FAILED
     assert r.components["intent_conformance"].status is DetectorStatus.FAILED
+
+
+def test_self_disabled_detector_counts_as_unable_to_run():
+    """The second source of truth for "cannot run".
+
+    A detector that catches its own load error calls mark_unavailable() and
+    constructs *successfully*, so it sits in _detectors looking healthy. PII
+    without Presidio is exactly this. Counting only construction exceptions
+    would let the startup preflight declare an engine servable while one of its
+    redactors is dead.
+    """
+    engine = _engine({})
+    det = _RaisingDetector({"action": "redact"})
+    det.action = "redact"
+    det.mark_unavailable(FailureCode.DEPENDENCY_MISSING)
+    engine._detectors.append((det.name, det))
+
+    names = [f.name for f in engine.construction_failures]
+    assert "exploding" in names
+    assert engine.is_enforcement_complete is False
+
+
+def test_healthy_detector_does_not_count_as_unavailable():
+    engine = _engine({})
+    det = _RaisingDetector({"action": "redact"})
+    det.action = "redact"
+    engine._detectors.append((det.name, det))
+
+    assert engine.construction_failures == []
+    assert engine.is_enforcement_complete is True

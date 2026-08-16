@@ -255,18 +255,35 @@ class ScannerEngine:
 
     @property
     def construction_failures(self) -> list[FailedDetector]:
-        """Detectors the policy enabled that could not be built.
+        """Detectors the policy enabled that cannot produce a verdict.
 
         The activation protocol's startup preflight reads this to decide whether
         a candidate runtime is servable at all — an engine that silently omits a
         detector is not a successfully built runtime.
+
+        There are two ways a detector ends up unable to run, and only counting
+        the first would leave the preflight declaring an engine servable while
+        one of its redactors is dead:
+
+        1. Construction raised, so the detector is absent from ``_detectors``.
+        2. Construction *succeeded* but the detector caught its own load error
+           and called ``mark_unavailable()`` — PII without Presidio is a live
+           object in ``_detectors`` that fails every scan.
+
+        Both are reported here so there is a single source of truth for "this
+        detector cannot run".
         """
-        return list(self._construction_failures)
+        unavailable = [
+            FailedDetector(name=name, code=det._init_failure, action=det.action)
+            for name, det in self._detectors
+            if not det.available and det._init_failure is not None
+        ]
+        return [*self._construction_failures, *unavailable]
 
     @property
     def is_enforcement_complete(self) -> bool:
-        """True if every enabled blocking/redacting detector was constructed."""
-        return not any(f.enforcing for f in self._construction_failures)
+        """True if every enabled blocking/redacting detector can actually run."""
+        return not any(f.enforcing for f in self.construction_failures)
 
     @property
     def on_detector_failure(self) -> OnDetectorFailure:
