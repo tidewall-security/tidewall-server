@@ -253,3 +253,128 @@ def test_successful_redaction_still_returns_text():
     assert result.transformed is True
     assert result.guard_output_text == "[NAME] is here"
     assert result.degraded is False
+
+
+# ---------------------------------------------------------------------------
+# Composite truth table (malicious_prompt)
+# ---------------------------------------------------------------------------
+
+
+def _composite(**config):
+    from app.detectors.malicious_prompt import MaliciousPromptDetector
+
+    cfg = {"generic_injection_detection": False, "action": "block"}
+    cfg.update(config)
+    return MaliciousPromptDetector(cfg)
+
+
+class _FakeListSvc:
+    def __init__(self, malicious=False, benign=False, raises=False, raises_on=None):
+        self._malicious, self._benign, self._raises = malicious, benign, raises
+        self._raises_on = raises_on
+
+    def check_match(self, text, kind):
+        if self._raises or self._raises_on == kind:
+            raise RuntimeError("list service exploded")
+        return self._malicious if kind == "malicious" else self._benign
+
+
+def test_composite_enabled_but_unconfigured_model_is_a_failure():
+    """Asking for protection you have not configured is a misconfiguration.
+
+    This previously logged at INFO and carried on, so a policy that switched on
+    injection detection without a model silently had none.
+    """
+    d = _composite(generic_injection_detection=True)  # no model/tokenizer
+    r = d.scan("anything")
+
+    assert r.status is DetectorStatus.FAILED
+    assert r.failure_code is FailureCode.CONFIG_INVALID
+
+
+def test_composite_lists_enabled_without_session_factory_is_a_failure():
+    d = _composite(custom_malicious_detection=True)
+    r = d.scan("anything")
+
+    assert r.status is DetectorStatus.FAILED
+    assert r.failure_code is FailureCode.CONSTRUCT_FAILED
+
+
+def test_composite_failure_with_no_detection_is_failed():
+    d = _composite(custom_malicious_detection=True)
+    d._prompt_list_svc = _FakeListSvc(raises=True)
+    d._load_failures.clear()
+    r = d.scan("anything")
+
+    assert r.status is DetectorStatus.FAILED
+    assert r.components["custom_malicious"].status is DetectorStatus.FAILED
+
+
+def test_composite_failure_is_absorbed_when_a_detection_already_fired():
+    """Block invariance: detected cannot become more true."""
+    d = _composite(custom_malicious_detection=True, custom_benign_detection=True)
+    d._prompt_list_svc = _FakeListSvc(malicious=True)
+    d._load_failures.clear()
+    # Force a later component to have failed at construction.
+    d._load_failures["intent_conformance"] = FailureCode.CONSTRUCT_FAILED
+
+    r = d.scan("bad prompt")
+
+    assert r.detected is True
+    assert r.status is DetectorStatus.OK
+    assert r.data["action"] == "blocked"
+
+
+def test_benign_match_short_circuits_as_ok_not_degraded():
+    """A benign override is a policy decision, not a degradation."""
+    d = _composite(custom_benign_detection=True)
+    d._prompt_list_svc = _FakeListSvc(benign=True)
+    d._load_failures.clear()
+
+    r = d.scan("known good")
+
+    assert r.detected is False
+    assert r.status is DetectorStatus.OK
+    assert r.components["generic_injection"].skip_reason is SkipReason.SHORT_CIRCUITED
+    assert r.components["intent_conformance"].skip_reason is SkipReason.SHORT_CIRCUITED
+
+
+def test_malformed_model_output_is_attributed_to_the_sub_detector():
+    """r["label"] indexing on an unexpected shape must not bubble anonymously."""
+    d = _composite(generic_injection_detection=True, model="m", tokenizer="t")
+    d._pipeline = lambda text: [{"unexpected": "shape"}]
+    d._load_failures.clear()
+
+    r = d.scan("anything")
+
+    assert r.status is DetectorStatus.FAILED
+    assert r.failure_code is FailureCode.OUTPUT_INVALID
+    assert r.components["generic_injection"].failure_code is FailureCode.OUTPUT_INVALID
+
+
+def test_composite_all_ok_is_clean():
+    d = _composite(custom_malicious_detection=True, custom_benign_detection=True)
+    d._prompt_list_svc = _FakeListSvc()
+    d._load_failures.clear()
+
+    r = d.scan("ordinary text")
+
+    assert r.detected is False
+    assert r.status is DetectorStatus.OK
+
+
+def test_benign_match_does_not_excuse_an_earlier_failure():
+    """A benign override only excuses stages that run after it.
+
+    The malicious list runs first and short-circuits to a block. If it failed,
+    a benign match cannot stand in for the answer we never got.
+    """
+    d = _composite(custom_malicious_detection=True, custom_benign_detection=True)
+    # The malicious check explodes; the benign check then matches.
+    d._prompt_list_svc = _FakeListSvc(benign=True, raises_on="malicious")
+    d._load_failures.clear()
+
+    r = d.scan("known good")
+
+    assert r.status is DetectorStatus.FAILED
+    assert r.failure_code is FailureCode.SCAN_FAILED
