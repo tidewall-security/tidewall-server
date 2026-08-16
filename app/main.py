@@ -32,6 +32,25 @@ from app.vault_manager import VaultManager
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+
+def _is_loopback(host: str) -> bool:
+    """True if *host* can only be reached from this machine.
+
+    Parsed structurally rather than by string prefix: "127.0.0.1.evil.com"
+    starts with "127.0.0.1" and is not loopback, and "0.0.0.0" binds every
+    interface despite looking local.
+    """
+    import ipaddress
+
+    candidate = (host or "").strip().strip("[]")
+    if candidate in ("localhost", ""):
+        return candidate == "localhost"
+    try:
+        return ipaddress.ip_address(candidate).is_loopback
+    except ValueError:
+        return False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan: startup and shutdown logic."""
@@ -70,6 +89,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.services.policy_service import PolicyService
 
     app.state.policy_service = PolicyService(session_factory=SessionLocal, use_onnx=settings.USE_ONNX)
+
+    if not settings.AUTH_ENABLED:
+        # Running without authentication means every caller is an
+        # administrator: log reads, policy mutation, key minting, export
+        # targets that can be pointed at internal addresses. It is a local
+        # development convenience and must not be reachable off-host, so it
+        # requires an unmistakable opt-in AND a loopback bind.
+        if not settings.TIDEWALL_INSECURE_NO_AUTH:
+            raise RuntimeError(
+                "AUTH_ENABLED is false. Running without authentication makes every "
+                "caller an administrator. If that is genuinely what you want for local "
+                "development, set TIDEWALL_INSECURE_NO_AUTH=1 as well — and note it is "
+                "refused on any non-loopback bind address."
+            )
+        if not _is_loopback(settings.HOST):
+            raise RuntimeError(
+                f"AUTH_ENABLED is false and HOST is {settings.HOST!r}, which is not "
+                "loopback. Unauthenticated mode would expose an administrative control "
+                "plane to the network. Bind to 127.0.0.1 or enable authentication."
+            )
+        logging.getLogger(__name__).warning(
+            "Running WITHOUT AUTHENTICATION on %s — every caller has the admin role",
+            settings.HOST,
+        )
 
     app.state.auth_enabled = settings.AUTH_ENABLED
 

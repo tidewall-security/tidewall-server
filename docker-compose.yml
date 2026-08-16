@@ -10,7 +10,9 @@ services:
       - POLICY_FILE=/app/policy.yaml
       - DB_URL=sqlite:///data/tidewall.db
       - LOG_LEVEL=info
-      - AUTH_ENABLED=false
+      # Auth is on by default. Set BOOTSTRAP_KEY to a secret you generate;
+      # the server refuses to start without one when no API keys exist.
+      - BOOTSTRAP_KEY=${BOOTSTRAP_KEY:?set BOOTSTRAP_KEY to a generated secret}
     deploy:
       resources:
         limits:
