@@ -63,6 +63,14 @@ class CompetitorsDetector(BaseDetector):
         return "competitors"
 
     def scan(self, text: str, **kwargs: Any) -> DetectorResult:
+        # An empty competitor list is a deliberately inactive detector, not a
+        # broken one: there is nothing to look for, so "found nothing" is the
+        # honest and complete answer. Conflating it with a failed analyzer made
+        # an intentionally empty config degrade every request — and block every
+        # request under on_detector_failure=block.
+        if not self._competitors:
+            return DetectorResult(detected=False)
+
         if self._analyzer is None:
             return self.unavailable_result()
 

@@ -149,3 +149,33 @@ def test_interaction_row_carries_the_degraded_marker():
         assert "No threats detected" not in row.summary
     finally:
         session.close()
+
+
+def test_reserved_keys_are_distinguishable_from_detectors():
+    """The `_degraded` marker shares a namespace with detector names.
+
+    Two shipped UI consumers iterated `detectors_json` assuming every key named
+    a detector, and rendered the marker as a detector with a "Clear" badge —
+    exactly backwards for a degraded scan. The convention is that keys
+    beginning with "_" are reserved scan metadata; this pins it so a future
+    reserved key does not have to rediscover the rule.
+    """
+    from app.scanner_engine import _DETECTOR_REGISTRY
+
+    detector_names = [k for k in _DEGRADED_DETECTORS if not k.startswith("_")]
+    reserved = [k for k in _DEGRADED_DETECTORS if k.startswith("_")]
+
+    assert reserved == ["_degraded"]
+    assert all(name in _DETECTOR_REGISTRY for name in detector_names)
+
+
+def test_ui_consumers_exclude_reserved_keys():
+    """Guards the two consumers codex found rendering `_degraded` as a detector."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    dashboard = (root / "app/static/dashboard.html").read_text()
+    findings = (root / "app/static/js/findings.js").read_text()
+
+    assert 'dn.startsWith("_")' in dashboard
+    assert findings.count("charAt(0)") >= 2
