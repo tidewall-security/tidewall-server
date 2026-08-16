@@ -176,17 +176,14 @@ class TopicDetector(BaseDetector):
         # are removed — a failed sub-detector might have found an entity the
         # successful one did not, so the boolean is invariant but the redaction
         # is not.
-        if failed and not self.can_block:
-            return DetectorResult(
-                detected=False,
-                status=DetectorStatus.FAILED,
-                failure_code=failed[0].failure_code,
-                components=components,
-            )
-
+        # A detection stands on its own. If a sub-detector also failed the
+        # finding is *incomplete*, not *untrustworthy* — discarding it would
+        # throw away a real positive the system actually obtained and report
+        # "nothing found", which is the very defect this work exists to close.
         action = "blocked" if self.can_block else "reported"
         return DetectorResult(
             detected=True,
+            degraded=bool(failed),
             data={
                 "action": action,
                 "topics": topics_found,

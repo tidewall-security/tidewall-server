@@ -67,11 +67,18 @@ class ScanResult:
     detectors: dict[str, dict] = field(default_factory=dict)
     summary_parts: list[str] = field(default_factory=list)
     failures: list[FailedDetector] = field(default_factory=list)
+    partial: list[str] = field(default_factory=list)
 
     @property
     def degraded(self) -> bool:
-        """True if any detector failed, so the clean verdict is not trustworthy."""
-        return bool(self.failures)
+        """True if any detector failed outright or returned an incomplete verdict.
+
+        ``partial`` carries the second case: a composite that found something
+        with one sub-detector down produced a real finding from an incomplete
+        check. That is not a failure — the detection stands — but it must not
+        be reported as a complete result.
+        """
+        return bool(self.failures) or bool(self.partial)
 
     @property
     def enforcement_degraded(self) -> bool:
@@ -365,10 +372,23 @@ class ScannerEngine:
                 result.record_failure(det_name, det_result.failure_code, detector.action)
                 continue
 
+            if det_result.degraded:
+                result.partial.append(det_name)
+
             result.detectors[det_name] = {
                 "detected": det_result.detected,
                 "data": det_result.data,
                 "status": det_result.status.value,
+                # Surfaced on the wire rather than dying at scan(): the
+                # per-component detail is the answer to "what did you actually
+                # check", which is exactly what an audit needs after a
+                # degraded verdict.
+                **({"degraded": True} if det_result.degraded else {}),
+                **(
+                    {"components": {k: v.status.value for k, v in det_result.components.items()}}
+                    if det_result.components
+                    else {}
+                ),
             }
 
             if not det_result.detected:

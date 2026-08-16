@@ -265,3 +265,35 @@ def test_updating_the_policy_invalidates_cached_engines(guard_client):
     policy_svc.invalidate_engines(policy_id)
 
     assert policy_svc.get_engine(policy_id, "input").on_detector_failure is OnDetectorFailure.BLOCK
+
+
+def test_degraded_report_does_not_claim_a_clean_scan(guard_client):
+    """The interim configuration must not lie.
+
+    With on_detector_failure=report (the shipped default until the preflight
+    exists) a failed detector does not block. The response must still say so:
+    "No threats detected." is false when part of the scan did not run, and it
+    was the exact string the original P0-2 finding quoted.
+    """
+    client, key, session_factory = guard_client
+    det = _FailingBlocker({"action": "block"})
+    det.action = "block"
+    _install(client, session_factory, [det], on_detector_failure="report")
+
+    body = _post(client, key).json()
+
+    assert body["result"]["blocked"] is False  # report mode
+    assert body["result"]["degraded"] is True
+    assert body["result"]["failed_detectors"] == ["malicious_prompt"]
+    assert "No threats detected" not in body["summary"]
+
+
+def test_clean_scan_is_not_marked_degraded(guard_client):
+    client, key, session_factory = guard_client
+    _install(client, session_factory, [])
+
+    body = _post(client, key, content="hello there").json()
+
+    assert body["result"]["degraded"] is False
+    assert body["result"]["failed_detectors"] == []
+    assert body["summary"] == "No threats detected."

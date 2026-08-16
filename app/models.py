@@ -187,6 +187,8 @@ class GuardResult(BaseModel):
     ``detectors``: Per-detector results keyed by detector name.
     ``access_rules``: Per-rule match results.
     ``fpe_context``: Opaque token for reversing redaction via /v1/unredact.
+    ``degraded``: True if part of the scan could not run.
+    ``failed_detectors``: Names of detectors that failed or ran incompletely.
     """
 
     model_config = ConfigDict(extra="allow")
@@ -198,6 +200,12 @@ class GuardResult(BaseModel):
     detectors: dict = Field(default_factory=dict)
     access_rules: dict = Field(default_factory=dict)
     fpe_context: str | None = None
+    # True when some part of the scan could not run. A caller must be able to
+    # tell "checked, found nothing" from "could not check" without digging into
+    # per-detector status — under on_detector_failure=report this flag and the
+    # summary are the only signals it gets.
+    degraded: bool = False
+    failed_detectors: list[str] = Field(default_factory=list)
 
 
 class GuardResponse(BaseModel):

@@ -47,6 +47,7 @@ def seed_from_yaml(session: Session, yaml_path: str | Path) -> None:
         type="application",
         description="Default policy seeded from policy.yaml",
         report_only=report_only,
+        on_detector_failure=raw.get("on_detector_failure", "report"),
         is_default=True,
     )
     session.add(policy)

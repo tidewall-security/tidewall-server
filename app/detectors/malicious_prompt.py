@@ -178,16 +178,10 @@ class MaliciousPromptDetector(BaseDetector):
             rejected rather than silently absorbing failures under it.
             """
             failed = [c for c in reason_components.values() if c.status is DetectorStatus.FAILED]
-            if failed and not self.can_block:
-                return DetectorResult(
-                    detected=False,
-                    status=DetectorStatus.FAILED,
-                    failure_code=failed[0].failure_code,
-                    components=reason_components,
-                )
             action = "blocked" if self.can_block else "reported"
             return DetectorResult(
                 detected=True,
+                degraded=bool(failed),
                 data={"action": action, "analyzer_responses": analyzer_responses},
                 components=reason_components,
             )

@@ -97,7 +97,7 @@ def test_both_signals_detected_combine_in_topics_list():
     assert len(r.data["topics"]) == 2
 
 
-def test_inference_exception_in_toxicity_is_reported_not_absorbed():
+def test_detection_survives_a_failed_sibling_and_is_marked_degraded():
     d = _make(topics=["violence"], threshold=0.5, toxicity_threshold=0.5)
 
     def _explode(text):
@@ -108,18 +108,19 @@ def test_inference_exception_in_toxicity_is_reported_not_absorbed():
         "labels": ["violence"],
         "scores": [0.9],
     }
-    r = d.scan("text")
-    # Toxicity blew up. Under a report action the detection is not terminal —
-    # the payload is what the operator sees, and it is now missing whatever
-    # toxicity would have contributed — so the composite reports the failure
-    # rather than presenting a partial result as complete.
     from app.detectors.base import DetectorStatus
 
-    assert r.status is DetectorStatus.FAILED
+    r = d.scan("text")
+    # Toxicity blew up but topics found something. The detection is real and is
+    # kept; it is also incomplete, and says so. Discarding it would delete a
+    # true positive and report "nothing found" — the exact defect P0-2 is.
+    assert r.detected is True
+    assert r.degraded is True
+    assert r.data["topics"] == [{"topic": "violence", "confidence": 0.9}]
     assert r.components["toxicity"].status is DetectorStatus.FAILED
 
 
-def test_inference_exception_in_topics_is_reported_not_absorbed():
+def test_detection_survives_a_failed_topics_pipeline_and_is_marked_degraded():
     d = _make(topics=["violence"], threshold=0.5, toxicity_threshold=0.5)
     d._toxicity_pipeline = lambda text: [[{"label": "toxic", "score": 0.9}]]
 
@@ -127,10 +128,12 @@ def test_inference_exception_in_topics_is_reported_not_absorbed():
         raise RuntimeError("simulated topics failure")
 
     d._topics_pipeline = _explode
-    r = d.scan("text")
     from app.detectors.base import DetectorStatus
 
-    assert r.status is DetectorStatus.FAILED
+    r = d.scan("text")
+    assert r.detected is True
+    assert r.degraded is True
+    assert r.data["topics"] == [{"topic": "toxicity", "confidence": 0.9}]
     assert r.components["topics"].status is DetectorStatus.FAILED
 
 
@@ -149,26 +152,23 @@ def test_no_topics_configured_skips_topics_pipeline():
     # Toxicity still loads (it has no per-item config requirement).
 
 
-def test_blocking_action_absorbs_a_failure_because_the_outcome_is_terminal():
-    """Absorption is only sound when the request is already blocked.
+def test_no_detection_plus_a_failure_is_still_failed():
+    """Without a detection there is nothing to stand on.
 
-    With action=block a positive detection ends the matter: whatever the failed
-    sub-detector would have added cannot change what happens to the request.
-    Under report the payload is the product, so a missing contribution matters.
+    The sub-detector that failed is precisely the one that might have found
+    something, and there is no positive result to make its absence immaterial.
     """
     from app.detectors.base import DetectorStatus
 
-    d = _make(toxicity_threshold=0.5, action="block")
-    d._toxicity_pipeline = lambda text: [[{"label": "toxic", "score": 0.9}]]
+    d = _make(topics=["violence"], threshold=0.5, toxicity_threshold=0.5)
+    d._toxicity_pipeline = lambda text: [[{"label": "toxic", "score": 0.1}]]
 
     def _explode(text, candidate_labels, multi_label):
         raise RuntimeError("simulated topics failure")
 
     d._topics_pipeline = _explode
-    d._topics = ["violence"]
 
-    r = d.scan("offensive")
+    r = d.scan("ordinary text")
 
-    assert r.detected is True
-    assert r.status is DetectorStatus.OK
-    assert r.components["topics"].status is DetectorStatus.FAILED
+    assert r.detected is False
+    assert r.status is DetectorStatus.FAILED

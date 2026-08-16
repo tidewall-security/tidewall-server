@@ -135,6 +135,12 @@ class DetectorResult:
         status: Whether this verdict can be trusted at all.
         failure_code: Set when ``status`` is FAILED.
         skip_reason: Set when ``status`` is SKIPPED.
+        degraded: The verdict is real but incomplete — part of the detector
+            could not run. Orthogonal to ``status``, deliberately: a composite
+            that found something with one sub-detector down has a *true*
+            finding and an *incomplete* one, and collapsing that into FAILED
+            throws away a real detection. Reality here is three-valued and the
+            type has to be too.
         components: Per-sub-detector status, for composite detectors.
     """
 
@@ -144,6 +150,7 @@ class DetectorResult:
     status: DetectorStatus = DetectorStatus.OK
     failure_code: FailureCode | None = None
     skip_reason: SkipReason | None = None
+    degraded: bool = False
     components: dict[str, ComponentStatus] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
