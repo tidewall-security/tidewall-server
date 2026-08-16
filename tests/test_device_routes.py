@@ -26,7 +26,6 @@ def _make_app_and_client():
     app = FastAPI()
     app.add_middleware(AuthMiddleware)
     app.state.session_factory = SessionLocal
-    app.state.auth_enabled = True
 
     @app.get("/health")
     async def health():

@@ -1,8 +1,8 @@
 .PHONY: demo demo-stop demo-clean demo-activate
 
 demo: demo-stop
-	@echo "==> Starting Tidewall (AUTH_ENABLED=true) on port 8080..."
-	@AUTH_ENABLED=true uv run uvicorn app.main:app --port 8080 > .demo.log 2>&1 & echo $$! > .demo.pid
+	@echo "==> Starting Tidewall () on port 8080..."
+	@uv run uvicorn app.main:app --port 8080 > .demo.log 2>&1 & echo $$! > .demo.pid
 	@echo "==> Waiting for server to be ready (timeout 60s)..."
 	@for i in $$(seq 1 60); do \
 		if curl -sf http://localhost:8080/health > /dev/null 2>&1; then \

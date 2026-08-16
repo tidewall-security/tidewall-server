@@ -22,11 +22,20 @@ class AuthMiddleware(BaseHTTPMiddleware):
     """Validates Bearer tokens against the api_keys, registration_tokens,
     or access_tokens table depending on the token prefix.
 
-    Unauthenticated requests are never given a role. Three branches here used
-    to assign ``admin`` — auth-disabled, public paths, and static/UI paths —
-    which meant "skip authentication" and "become an administrator" were the
-    same code path. ``require_role`` rejects a missing role, so anything
-    protected stays protected even if this bypass list is wrong.
+    Authentication is unconditional. There is no configuration value that
+    turns it off.
+
+    Three branches here used to assign ``admin`` — an auth-disabled mode, the
+    public path list, and the static/UI prefixes — so "skip authentication" and
+    "become an administrator" were the same code path. The disabled mode is
+    gone entirely: its loopback guard was bypassable because a directly
+    launched ASGI server binds whatever address it is given, and uvicorn binds
+    *after* lifespan runs, so the application cannot inspect its own listener
+    in time to refuse. Rather than defend that, the mode was removed.
+
+    What remains anonymous is health, favicon, and the data-free dashboard
+    shells, all with ``role=None``. ``require_role`` rejects a missing role, so
+    anything protected stays protected even if this list is wrong.
     """
 
     @staticmethod
@@ -38,18 +47,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
         request.state.device_id = None
 
     async def dispatch(self, request: Request, call_next):
-        # Check if auth is enabled
-        auth_enabled = getattr(request.app.state, "auth_enabled", False)
-        if not auth_enabled:
-            # Auth disabled: an explicitly opted-in local development mode.
-            # Startup refuses this unless TIDEWALL_INSECURE_NO_AUTH=1 and the
-            # bind address is loopback, so it cannot be reached off-host.
-            request.state.role = "admin"
-            request.state.policy_id = None
-            request.state.api_key_id = None
-            request.state.device_id = None
-            return await call_next(request)
-
         # Public paths carry no identity.
         if request.url.path in _PUBLIC_PATHS:
             self._anonymous(request)

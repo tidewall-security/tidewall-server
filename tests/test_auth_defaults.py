@@ -15,35 +15,6 @@ from __future__ import annotations
 import pytest
 
 from app.auth.middleware import _PUBLIC_PATHS
-from app.config import Settings
-from app.main import _is_loopback
-
-
-def test_authentication_is_on_by_default():
-    assert Settings().AUTH_ENABLED is True
-
-
-def test_insecure_mode_is_not_implied_by_disabling_auth():
-    """Disabling auth alone is not enough; the opt-in is separate."""
-    assert Settings().TIDEWALL_INSECURE_NO_AUTH is False
-
-
-@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1"])
-def test_loopback_addresses_are_recognised(host):
-    assert _is_loopback(host) is True
-
-
-@pytest.mark.parametrize(
-    "host",
-    [
-        "0.0.0.0",  # binds every interface despite looking local
-        "127.0.0.1.evil.com",  # string-prefix bypass
-        "10.0.0.5",
-        "",
-    ],
-)
-def test_non_loopback_addresses_are_rejected(host):
-    assert _is_loopback(host) is False
 
 
 def test_api_docs_are_no_longer_public():
@@ -93,25 +64,7 @@ def test_require_role_rejects_an_anonymous_request():
 # ---------------------------------------------------------------------------
 
 
-def test_entry_point_binds_the_validated_host():
-    """The guard checked HOST while the Dockerfile bound 0.0.0.0.
 
-    Startup logged "Running WITHOUT AUTHENTICATION on 127.0.0.1" while the
-    socket listened on every interface, so the insecure-mode restriction was
-    theatre. `python -m app` now launches uvicorn from validated settings, so
-    HOST governs the socket that is actually opened.
-    """
-    import os
-    from unittest.mock import patch
-
-    from app.__main__ import serve
-
-    with patch.dict(os.environ, {"HOST": "127.0.0.1", "PORT": "9331"}, clear=False):
-        with patch("uvicorn.run") as run:
-            serve()
-
-    assert run.call_args.kwargs["host"] == "127.0.0.1"
-    assert run.call_args.kwargs["port"] == 9331
 
 
 def test_dockerfile_does_not_bind_independently_of_settings():
@@ -158,22 +111,7 @@ def test_dashboard_shells_cannot_be_framed():
     assert resp.headers["x-content-type-options"] == "nosniff"
 
 
-def test_docs_routes_are_disabled_when_auth_is_on():
-    """Swagger UI cannot authenticate its own /openapi.json fetch.
 
-    A visibly configured route that can never work is worse than no route.
-    """
-    import os
-    from unittest.mock import patch
-
-    from app.main import create_app
-
-    with patch.dict(os.environ, {"AUTH_ENABLED": "true"}, clear=False):
-        app = create_app()
-    paths = {r.path for r in app.routes}
-
-    assert "/docs" not in paths
-    assert "/openapi.json" not in paths
 
 
 def test_rejected_bootstrap_config_leaves_no_database_state(tmp_path):
@@ -199,3 +137,55 @@ def test_rejected_bootstrap_config_leaves_no_database_state(tmp_path):
             asyncio.run(lifespan(app).__aenter__())
 
     assert not db.exists(), "a refused configuration created a database"
+
+
+# ---------------------------------------------------------------------------
+# The invariant that replaced the mode
+# ---------------------------------------------------------------------------
+
+
+def test_no_setting_can_disable_authentication():
+    """The strongest form of the fix: the mode does not exist.
+
+    AUTH_ENABLED and TIDEWALL_INSECURE_NO_AUTH are gone. The loopback guard
+    that was supposed to confine unauthenticated mode could not work: a
+    directly launched ASGI server binds whatever address it is given, and
+    uvicorn awaits lifespan startup *before* creating its socket, so the
+    application cannot inspect its own listener in time to refuse. Rather than
+    defend that, the mode was removed.
+    """
+    from app.config import Settings
+
+    fields = set(Settings.model_fields)
+    assert "AUTH_ENABLED" not in fields
+    assert "TIDEWALL_INSECURE_NO_AUTH" not in fields
+
+
+def test_middleware_has_no_bypass_branch():
+    """No code path assigns a role without validating a credential."""
+    import inspect
+
+    from app.auth import middleware
+
+    source = inspect.getsource(middleware)
+    assert "auth_enabled" not in source
+    # The only role assignments left are from a validated credential.
+    assert source.count('request.state.role = "admin"') == 0
+
+
+def test_protected_route_rejects_every_construction_path():
+    """401 without a credential, whichever way the app was built."""
+    import asyncio
+
+    from fastapi import HTTPException
+    from starlette.requests import Request
+
+    from app.auth.dependencies import require_role
+    from app.auth.middleware import AuthMiddleware
+
+    for role_name in ("viewer", "api", "admin"):
+        request = Request({"type": "http", "path": "/v1/logs", "headers": []})
+        AuthMiddleware._anonymous(request)
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(require_role(role_name)(request))
+        assert exc.value.status_code == 401

@@ -22,8 +22,9 @@ def server_url():
         return
 
     env = os.environ.copy()
-    env["AUTH_ENABLED"] = "true"
     env["DB_URL"] = _DB_URL
+    env["HOST"] = "127.0.0.1"
+    env["PORT"] = "8090"
     # Startup now refuses a clean authenticated database with no API keys
     # rather than generating a credential it would have to log to deliver, so
     # the key must exist before the server starts — the fixture previously
@@ -36,7 +37,9 @@ def server_url():
 
     log_file = open(_LOG_PATH, "w")
     proc = subprocess.Popen(
-        [".venv/bin/uvicorn", "app.main:app", "--port", "8090"],
+        # The package entry point, so the fixture exercises the launcher the
+        # product documents rather than a path of its own.
+        [".venv/bin/python", "-m", "app"],
         stdout=log_file,
         stderr=log_file,
         env=env,

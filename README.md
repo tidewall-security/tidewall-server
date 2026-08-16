@@ -96,11 +96,19 @@ flowchart TB
 
 ## Quick Start
 
+Tidewall always requires authentication. On a database with no API keys you
+supply the first one via `BOOTSTRAP_KEY`; only its hash is stored, and it is
+never logged or printed. There is no unauthenticated mode.
+
 ### Docker (recommended)
 
 ```bash
 git clone https://github.com/tidewall-security/tidewall-server.git
-cd tidewall
+cd tidewall-server
+
+export BOOTSTRAP_KEY="ak_$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+echo "Save this — it is your first admin key: $BOOTSTRAP_KEY"
+
 docker compose up --build
 ```
 
@@ -109,19 +117,38 @@ docker compose up --build
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e .
-uvicorn app.main:app --port 8080
+
+export BOOTSTRAP_KEY="ak_$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+echo "Save this — it is your first admin key: $BOOTSTRAP_KEY"
+
+python -m app
+```
+
+`python -m app` reads `HOST` and `PORT` from the environment. Later starts
+against the same database do not need `BOOTSTRAP_KEY` — a key already exists.
+
+### First request
+
+```bash
+curl -H "Authorization: Bearer $BOOTSTRAP_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"guard_input":{"messages":[{"role":"user","content":"hello"}]},"event_type":"input"}' \
+     http://localhost:8080/v1/guard_chat_completions
 ```
 
 | Endpoint | URL |
 |----------|-----|
 | Web Dashboard | http://localhost:8080/ui/visibility |
-| Swagger UI | http://localhost:8080/docs |
 | Health Check | http://localhost:8080/health |
 | Guard API | http://localhost:8080/v1/guard_chat_completions |
 
-Authentication is enabled by default. On first start with no API keys present,
-set `BOOTSTRAP_KEY` to a secret you generate — the server installs it as the
-first admin key and stores only its hash.
+Open the dashboard and paste the same key into the prompt it shows. The page
+itself is public — it holds no data — and every call it makes is authenticated.
+
+The interactive API docs (`/docs`, `/redoc`) are not served: Swagger UI fetches
+the schema from the browser without an `Authorization` header, so a protected
+schema leaves the page permanently broken. The OpenAPI document is available to
+an authenticated API client.
 
 ---
 
@@ -144,7 +171,7 @@ first admin key and stores only its hash.
 - **Custom prompt lists** — global benign/malicious override lists (substring, regex, exact match)
 
 ### Infrastructure
-- **API key auth with RBAC** — 3 roles (admin/viewer/api), per-collector keys bound to policies, disabled by default
+- **API key auth with RBAC** — 3 roles (admin/viewer/api), per-collector keys bound to policies, always enforced
 - **OCSF event export** — Data Security Finding (class 2006) with MITRE ATLAS mapping, AIDR-style export format option
 - **Webhook + syslog dispatch** — fire-and-forget export to configured targets, status-based event filtering
 - **AES-FF1-256 FPE** — real format-preserving encryption with deterministic/non-deterministic modes, stateless unredact
@@ -158,10 +185,6 @@ first admin key and stores only its hash.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AUTH_ENABLED` | `true` | Enable API key authentication |  
-  Authentication is on by default. Disabling it makes every caller an
-  administrator, so it additionally requires `TIDEWALL_INSECURE_NO_AUTH=1`
-  and a loopback `HOST`.
 | `DB_URL` | `sqlite:///data/tidewall.db` | SQLAlchemy database URL |
 | `POLICY_FILE` | `policy.yaml` | YAML policy file for first-boot seeding |
 | `LOG_LEVEL` | `info` | Logging verbosity |
@@ -244,7 +267,6 @@ credential you cannot see.
 | `PUT` | `/v1/settings/model-intent/{id}` | admin | Update intent |
 | `DELETE` | `/v1/settings/model-intent/{id}` | admin | Delete intent |
 | `GET` | `/health` | public | Health check |
-| `GET` | `/docs` | public | Swagger UI |
 | `GET` | `/ui/{page}` | viewer+ | Web dashboard |
 
 ---

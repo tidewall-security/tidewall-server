@@ -54,7 +54,6 @@ def _make_app_and_client():
     app = FastAPI()
     app.add_middleware(AuthMiddleware)
     app.state.session_factory = SessionLocal
-    app.state.auth_enabled = True
     app.state.policy_service = PolicyService(session_factory=SessionLocal)
     app.state.vault_manager = VaultManager(session_factory=SessionLocal)
     app.state.interaction_log = InteractionLog(session_factory=SessionLocal)

@@ -26,21 +26,14 @@ class Settings(BaseModel):
     DB_URL: str = "sqlite:///data/tidewall.db"
     LOG_LEVEL: str = "info"
     PREWARM: bool = True
-    # Authentication defaults ON. It previously defaulted off, and the
-    # middleware handled that by assigning every unauthenticated caller the
-    # admin role — so the shipped container exposed the whole control plane:
-    # log reads, policy mutation, key minting, export targets. Disabling it now
-    # requires TIDEWALL_INSECURE_NO_AUTH=1 and a loopback bind.
-    AUTH_ENABLED: bool = True
-    TIDEWALL_INSECURE_NO_AUTH: bool = False
-    # Bind address. Authoritative: the server is launched via ``python -m app``
-    # which binds exactly this, so the insecure-mode guard constrains the real
-    # socket rather than a setting nothing reads.
+    # Bind address and port. Launch configuration, not an authorization
+    # control: authentication is unconditional, so where the server listens no
+    # longer decides who may administer it.
     HOST: str = "0.0.0.0"
     PORT: int = 8080
     USE_ONNX: bool = False
-    # Operator-supplied first admin credential. Consulted only when
-    # AUTH_ENABLED is set and no API keys exist yet; only its hash is stored.
+    # Operator-supplied first admin credential. Consulted only when no API
+    # keys exist yet; only its hash is stored.
     # Tidewall never generates this, because a generated value would have to be
     # emitted to logs or stdout to reach the operator, where it would persist.
     BOOTSTRAP_KEY: str | None = None

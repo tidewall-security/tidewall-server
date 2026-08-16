@@ -11,7 +11,7 @@ Startup sequence (in ``lifespan``):
 
 Imports inside ``lifespan`` are intentionally deferred to avoid circular
 imports and to keep startup fast when modules aren't needed (e.g. auth
-services when ``AUTH_ENABLED=false``).
+services are unused).
 """
 
 from __future__ import annotations
@@ -72,23 +72,6 @@ def _has_existing_api_keys(db_url: str) -> bool:
         probe.dispose()
 
 
-def _is_loopback(host: str) -> bool:
-    """True if *host* can only be reached from this machine.
-
-    Parsed structurally rather than by string prefix: "127.0.0.1.evil.com"
-    starts with "127.0.0.1" and is not loopback, and "0.0.0.0" binds every
-    interface despite looking local.
-    """
-    import ipaddress
-
-    candidate = (host or "").strip().strip("[]")
-    if candidate in ("localhost", ""):
-        return candidate == "localhost"
-    try:
-        return ipaddress.ip_address(candidate).is_loopback
-    except ValueError:
-        return False
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -102,32 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # service construction, so an invalid configuration created and migrated a
     # database and only then refused to serve — a rejected config should not
     # leave persistent state behind.
-    if not settings.AUTH_ENABLED:
-        # Running without authentication means every caller is an
-        # administrator: log reads, policy mutation, key minting, export
-        # targets that can be pointed at internal addresses. It is a local
-        # development convenience and must not be reachable off-host, so it
-        # requires an unmistakable opt-in AND a loopback bind.
-        if not settings.TIDEWALL_INSECURE_NO_AUTH:
-            raise RuntimeError(
-                "AUTH_ENABLED is false. Running without authentication makes every "
-                "caller an administrator. If that is genuinely what you want for local "
-                "development, set TIDEWALL_INSECURE_NO_AUTH=1 as well — and note it is "
-                "refused on any non-loopback bind address."
-            )
-        if not _is_loopback(settings.HOST):
-            raise RuntimeError(
-                f"AUTH_ENABLED is false and HOST is {settings.HOST!r}, which is not "
-                "loopback. Unauthenticated mode would expose an administrative control "
-                "plane to the network. Bind to 127.0.0.1 or enable authentication."
-            )
-        logging.getLogger(__name__).warning(
-            "Running WITHOUT AUTHENTICATION on %s — every caller has the admin role",
-            settings.HOST,
-        )
-
-
-    if settings.AUTH_ENABLED and not settings.BOOTSTRAP_KEY and not _has_existing_api_keys(settings.DB_URL):
+    if not settings.BOOTSTRAP_KEY and not _has_existing_api_keys(settings.DB_URL):
         # Checked before any database work: a configuration that will be
         # refused must not leave a migrated, seeded database behind.
         raise RuntimeError(
@@ -169,32 +127,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.state.policy_service = PolicyService(session_factory=SessionLocal, use_onnx=settings.USE_ONNX)
 
-    app.state.auth_enabled = settings.AUTH_ENABLED
+    # Install the operator-supplied first admin key if the database has none.
+    # The refusal for a missing key happened earlier, before any database
+    # write; this is the install, which only runs when a key was supplied.
+    from app.services.key_service import KeyService
 
-    if settings.AUTH_ENABLED:
-        from app.services.key_service import KeyService
-
-        key_session = SessionLocal()
-        try:
-            key_svc = KeyService(key_session)
-            if not key_svc.has_any_key():
-                # No keys exist and auth is on, so the deployment is
-                # unreachable unless the operator supplies the first
-                # credential. We refuse to start rather than generating one:
-                # a generated key has to be communicated somehow, and every
-                # available channel (logs, stdout) is collected and retained.
-                if not settings.BOOTSTRAP_KEY:
-                    raise RuntimeError(
-                        "AUTH_ENABLED is set but no API keys exist. Set "
-                        "BOOTSTRAP_KEY to a secret you generate to install the "
-                        "first admin key. Tidewall does not generate it for you "
-                        "because it would have to be emitted to logs or stdout "
-                        "to reach you, where it would persist as an "
-                        "administrator credential."
-                    )
-                key_svc.install_bootstrap_admin_key(settings.BOOTSTRAP_KEY)
-        finally:
-            key_session.close()
+    key_session = SessionLocal()
+    try:
+        key_svc = KeyService(key_session)
+        if not key_svc.has_any_key() and settings.BOOTSTRAP_KEY:
+            key_svc.install_bootstrap_admin_key(settings.BOOTSTRAP_KEY)
+    finally:
+        key_session.close()
 
     # --- EXISTING: VaultManager and InteractionLog still needed ---
     app.state.vault_manager = VaultManager(SessionLocal)
@@ -213,21 +157,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     """Build and configure the Tidewall FastAPI application."""
 
-    settings = Settings.from_env()
-
-    # Swagger UI fetches /openapi.json from the browser without an
-    # Authorization header, so a protected schema makes the stock docs page
-    # permanently broken. Shipping a visibly configured route that cannot work
-    # is worse than not having it: the routes are disabled when auth is on, and
-    # the schema stays available to an API client via the OpenAPI object.
-    _docs_enabled = not settings.AUTH_ENABLED
+    # Swagger UI fetches /openapi.json from the browser with no Authorization
+    # header, so a protected schema leaves the stock docs page permanently
+    # broken. Authentication is now unconditional, so the routes are simply not
+    # registered; the schema remains available to an API client through the
+    # OpenAPI object.
     app = FastAPI(
         title="Tidewall",
         description="Open-source AI security guard API server",
         version="0.3.0",
-        docs_url="/docs" if _docs_enabled else None,
-        redoc_url="/redoc" if _docs_enabled else None,
-        openapi_url="/openapi.json" if _docs_enabled else None,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
         lifespan=lifespan,
     )
 
