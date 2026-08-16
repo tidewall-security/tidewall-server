@@ -35,8 +35,28 @@ def _resolve_injection_label(configured: Any, model: Any) -> str | None:
     detector that finds nothing.
     """
     config = getattr(model, "config", None)
-    id2label = dict(getattr(config, "id2label", None) or {})
-    label2id = dict(getattr(config, "label2id", None) or {})
+    raw_id2label = dict(getattr(config, "id2label", None) or {})
+    raw_label2id = dict(getattr(config, "label2id", None) or {})
+
+    # Normalise: config.json stores id2label keys as strings ("0", "1") and
+    # transformers converts them to ints on load, so both shapes occur
+    # depending on whether this sees a loaded config or a raw one. Derive
+    # either map from the other so a model publishing only one still resolves.
+    id2label: dict[int, str] = {}
+    for key, value in raw_id2label.items():
+        try:
+            id2label[int(key)] = str(value)
+        except (TypeError, ValueError):
+            continue
+    label2id: dict[str, int] = {str(k): v for k, v in raw_label2id.items()}
+    if not label2id:
+        label2id = {v: k for k, v in id2label.items()}
+    if not id2label:
+        for label, idx in label2id.items():
+            try:
+                id2label[int(idx)] = str(label)
+            except (TypeError, ValueError):
+                continue
 
     if configured is None:
         return None
@@ -107,9 +127,12 @@ class MaliciousPromptDetector(BaseDetector):
         self._injection_label = config.get("injection_label")  # label to treat as "injection" (e.g. 1, "LABEL_1")
         self._threshold = config.get("threshold", 0.9)  # score above this = injection
         if self._generic_injection_enabled:
-            tokenizer_path = config.get("tokenizer")
             model_path = config.get("model")
-            if tokenizer_path and model_path:
+            # The selected model ships its own tokenizer, so `tokenizer` is
+            # optional and defaults to the model. Requiring both was what let a
+            # ModernBERT tokenizer be paired with a different model.
+            tokenizer_path = config.get("tokenizer") or model_path
+            if model_path:
                 try:
                     from transformers import (
                         AutoModelForSequenceClassification,
@@ -117,8 +140,13 @@ class MaliciousPromptDetector(BaseDetector):
                         pipeline,
                     )
 
-                    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-                    model = AutoModelForSequenceClassification.from_pretrained(model_path)
+                    # Pin by revision when the policy supplies one, so the
+                    # artifact behind a model name cannot change under us. An
+                    # unread pin would be decorative.
+                    revision = config.get("revision")
+                    load_kwargs = {"revision": revision} if revision else {}
+                    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, **load_kwargs)
+                    model = AutoModelForSequenceClassification.from_pretrained(model_path, **load_kwargs)
                     self._pipeline = pipeline(
                         "text-classification",
                         model=model,
@@ -228,17 +256,11 @@ class MaliciousPromptDetector(BaseDetector):
         def _detected(reason_components: dict[str, ComponentStatus]) -> DetectorResult:
             """Build a positive result.
 
-            A sub-detector failure alongside a positive detection is absorbed
-            only when the outcome is *terminal*: the composite blocks, so
-            whatever the failed component would have added cannot change what
-            happens to the request.
-
-            That does not hold for a redactor, where the payload decides which
-            spans are removed — a failed component might have found an entity
-            the successful one did not, so the boolean is invariant but the
-            redaction is not. This composite never produces ``sanitized_text``,
-            so a ``redact`` action here would neither transform nor block; it is
-            rejected rather than silently absorbing failures under it.
+            A detection stands on its own: it is real regardless of what
+            happens to the request next. When a component also failed the
+            finding is *incomplete* rather than untrustworthy, so it is kept
+            and marked ``degraded``. Discarding it would delete a true positive
+            and report "nothing found", which is the defect this work closes.
             """
             failed = [c for c in reason_components.values() if c.status is DetectorStatus.FAILED]
             action = "blocked" if self.can_block else "reported"
@@ -250,12 +272,23 @@ class MaliciousPromptDetector(BaseDetector):
             )
 
         def _mark_remaining_skipped(after: str) -> None:
-            """Record deliberate short-circuits so they are not read as failures."""
+            """Record deliberate short-circuits so they are not read as failures.
+
+            Later components are *overwritten*, not defaulted. A construction
+            failure preloaded for a stage the override then prevented from
+            running is not a degradation — that stage was never going to
+            contribute. Using setdefault left it FAILED, which made a benign
+            override return status=OK and degraded=False while its own
+            component payload said a component had failed: a response
+            contradicting itself.
+
+            Failures from stages that actually ran before the override are
+            untouched, because those did matter.
+            """
             order = ["custom_malicious", "custom_benign", "generic_injection", "intent_conformance"]
             for later in order[order.index(after) + 1 :]:
-                components.setdefault(
-                    later,
-                    ComponentStatus(status=DetectorStatus.SKIPPED, skip_reason=SkipReason.SHORT_CIRCUITED),
+                components[later] = ComponentStatus(
+                    status=DetectorStatus.SKIPPED, skip_reason=SkipReason.SHORT_CIRCUITED
                 )
 
         # 1. Custom malicious list — override to detected

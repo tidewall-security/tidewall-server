@@ -216,6 +216,24 @@ class BaseDetector(ABC):
         return DetectorResult.failed(self._init_failure or FailureCode.CONSTRUCT_FAILED)
 
     @property
+    def load_failures(self) -> dict[str, FailureCode]:
+        """Sub-components enabled by policy that could not be loaded.
+
+        Composite detectors record per-component load failures and remain
+        ``available`` themselves, because the other components still work. That
+        left a third place where "cannot run" was recorded and the startup
+        preflight read neither — so it could certify an engine whose generic
+        injection model or intent service never loaded. Exposed publicly so
+        there is one interface to ask.
+        """
+        return dict(getattr(self, "_load_failures", {}) or {})
+
+    @property
+    def unavailability(self) -> FailureCode | None:
+        """Why this detector as a whole cannot run, if it cannot."""
+        return self._init_failure
+
+    @property
     @abstractmethod
     def name(self) -> str:
         """Detector name — must match the key in policy YAML."""

@@ -338,6 +338,19 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
         else:
             status = "allowed"
 
+    # Degradation is recorded as a reserved entry in the detectors payload,
+    # which the interaction row and every export format already carry verbatim.
+    # Without this, OCSF/AIDR/raw consumers would have to infer degradation by
+    # walking nested per-detector status or parsing the summary string — the
+    # value would reach them, but only indirectly, which is the same
+    # produced-but-not-consumed shape this work keeps tripping over.
+    failed_detector_names = sorted({f.name for f in scan_result.failures} | set(scan_result.partial))
+    if scan_result.degraded:
+        scan_result.detectors["_degraded"] = {
+            "degraded": True,
+            "failed_detectors": failed_detector_names,
+        }
+
     # Build response
     response_time = _now_iso()
     request_id = f"tw_{uuid.uuid4().hex[:16]}"
@@ -369,7 +382,7 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             },
             fpe_context=fpe_context,
             degraded=scan_result.degraded,
-            failed_detectors=sorted({f.name for f in scan_result.failures} | set(scan_result.partial)),
+            failed_detectors=failed_detector_names,
         ),
     )
 

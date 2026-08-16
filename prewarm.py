@@ -18,10 +18,14 @@ logger = logging.getLogger("prewarm")
 
 logger.info("Pre-warming Tidewall ML models...")
 
-# Vijil DOME (prompt injection) — needs ModernBERT tokenizer separately.
-logger.info("Vijil DOME prompt-injection model + ModernBERT tokenizer...")
-_ = AutoTokenizer.from_pretrained("answerdotai/ModernBERT-base")
-_ = AutoModelForSequenceClassification.from_pretrained("vijil/vijil_dome_prompt_injection_detection")
+# Prompt injection — ungated and Apache-2.0, pinned by revision, tokenizer
+# ships with the model. The previous default was gated: manual, so a clean
+# no-cache build required Hugging Face credentials nobody had configured.
+_INJECTION_MODEL = "protectai/deberta-v3-base-prompt-injection-v2"
+_INJECTION_REVISION = "90c9989b1a342275dd0d1a95aad283c04e075671"
+logger.info("Prompt-injection model (%s)...", _INJECTION_MODEL)
+_ = AutoTokenizer.from_pretrained(_INJECTION_MODEL, revision=_INJECTION_REVISION)
+_ = AutoModelForSequenceClassification.from_pretrained(_INJECTION_MODEL, revision=_INJECTION_REVISION)
 
 # Toxicity classifier
 logger.info("Toxicity model (unitary/unbiased-toxic-roberta)...")

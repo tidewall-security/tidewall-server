@@ -500,3 +500,56 @@ def test_healthy_detector_does_not_count_as_unavailable():
 
     assert engine.construction_failures == []
     assert engine.is_enforcement_complete is True
+
+
+def test_benign_override_does_not_leave_a_contradictory_failed_component():
+    """A response must not say "complete" while its own payload says otherwise.
+
+    A component that failed to construct, for a stage the benign override then
+    prevented from running, is not a degradation — that stage was never going
+    to contribute. setdefault left it FAILED, so the composite returned
+    status=OK/degraded=False alongside components.generic_injection=failed.
+    """
+    d = _composite(custom_benign_detection=True, generic_injection_detection=True)
+    d._prompt_list_svc = _FakeListSvc(benign=True)
+    d._load_failures.clear()
+    d._load_failures["generic_injection"] = FailureCode.MODEL_LOAD_FAILED
+    d._intent_enabled = False
+
+    r = d.scan("known good")
+
+    assert r.status is DetectorStatus.OK
+    assert r.degraded is False
+    assert r.components["generic_injection"].status is DetectorStatus.SKIPPED
+    assert r.components["generic_injection"].skip_reason is SkipReason.SHORT_CIRCUITED
+
+
+def test_malicious_override_does_not_report_a_prevented_stage_as_degraded():
+    d = _composite(custom_malicious_detection=True, generic_injection_detection=True)
+    d._prompt_list_svc = _FakeListSvc(malicious=True)
+    d._load_failures.clear()
+    d._load_failures["generic_injection"] = FailureCode.MODEL_LOAD_FAILED
+    d._intent_enabled = False
+
+    r = d.scan("bad prompt")
+
+    assert r.detected is True
+    assert r.degraded is False
+    assert r.components["generic_injection"].status is DetectorStatus.SKIPPED
+
+
+def test_composite_component_failure_reaches_the_preflight():
+    """A composite that constructed fine with a dead sub-component.
+
+    The detector reports available, so only the component view surfaces this.
+    The activation preflight reads construction_failures, and would otherwise
+    certify an engine whose injection model never loaded.
+    """
+    engine = _engine({})
+    d = _composite(generic_injection_detection=True)  # no model configured
+    d.action = "block"
+    engine._detectors.append((d.name, d))
+
+    names = [f.name for f in engine.construction_failures]
+    assert "malicious_prompt.generic_injection" in names
+    assert engine.is_enforcement_complete is False

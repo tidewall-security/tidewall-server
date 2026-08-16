@@ -168,14 +168,12 @@ class TopicDetector(BaseDetector):
         if not detected:
             return DetectorResult(detected=False, components=components)
 
-        # Absorption is sound when the failed sub-detector cannot change what
-        # happens to the request: for `block` the outcome is terminal, and for
-        # `report` there is no enforcement consequence at all.
-        #
-        # It is NOT sound for `redact`, where the payload decides which spans
-        # are removed — a failed sub-detector might have found an entity the
-        # successful one did not, so the boolean is invariant but the redaction
-        # is not.
+        # Aggregation does not depend on the action. A detection is real
+        # regardless of what happens next, so it is kept and marked `degraded`
+        # when a sibling failed; the caller gets both the finding and the fact
+        # that the check was incomplete. Earlier revisions tried to decide this
+        # from can_block/can_redact and were wrong in both directions — once
+        # `degraded` exists there is nothing left for the action to decide.
         # A detection stands on its own. If a sub-detector also failed the
         # finding is *incomplete*, not *untrustworthy* — discarding it would
         # throw away a real positive the system actually obtained and report

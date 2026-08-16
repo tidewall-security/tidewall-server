@@ -269,15 +269,24 @@ class ScannerEngine:
         2. Construction *succeeded* but the detector caught its own load error
            and called ``mark_unavailable()`` — PII without Presidio is a live
            object in ``_detectors`` that fails every scan.
+        3. A composite constructed fine but one of its sub-components did not,
+           so the detector reports ``available`` while part of it is dead.
 
-        Both are reported here so there is a single source of truth for "this
-        detector cannot run".
+        All three are reported here so there is one source of truth for "this
+        cannot run", reported as ``detector`` or ``detector.component``.
         """
-        unavailable = [
-            FailedDetector(name=name, code=det._init_failure, action=det.action)
-            for name, det in self._detectors
-            if not det.available and det._init_failure is not None
-        ]
+        unavailable: list[FailedDetector] = []
+        for name, det in self._detectors:
+            if det.unavailability is not None:
+                unavailable.append(FailedDetector(name=name, code=det.unavailability, action=det.action))
+                continue
+            # 3. A composite whose own construction succeeded but which has a
+            #    dead sub-component. The detector is `available`, so only this
+            #    reaches the preflight.
+            for component, code in det.load_failures.items():
+                unavailable.append(
+                    FailedDetector(name=f"{name}.{component}", code=code, action=det.action)
+                )
         return [*self._construction_failures, *unavailable]
 
     @property
@@ -402,7 +411,21 @@ class ScannerEngine:
                 # degraded verdict.
                 **({"degraded": True} if det_result.degraded else {}),
                 **(
-                    {"components": {k: v.status.value for k, v in det_result.components.items()}}
+                    {
+                        "components": {
+                            k: {
+                                "status": v.status.value,
+                                # Without the reason, a dependency that was
+                                # never installed is indistinguishable from a
+                                # model that crashed mid-inference — which is
+                                # most of the diagnostic value of having typed
+                                # components at all.
+                                **({"failure_code": v.failure_code.value} if v.failure_code else {}),
+                                **({"skip_reason": v.skip_reason.value} if v.skip_reason else {}),
+                            }
+                            for k, v in det_result.components.items()
+                        }
+                    }
                     if det_result.components
                     else {}
                 ),
