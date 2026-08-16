@@ -1,7 +1,11 @@
 """Redaction service — applies per-entity-type redaction methods.
 
 Supports: replacement, mask, partial_mask, hash, defang, report.
-FPE (format-preserving encryption) is deferred to Phase 7a.
+Format-preserving encryption was removed in favour of the vault: see
+internal review 2026-08-15-fpe-options-spike.md. FF3-1 was withdrawn from
+NIST SP 800-38G Rev 1, the `ff3` package self-describes as educational, FF1
+is patent-encumbered until 2029, and no design-around clears both the patents
+and the cryptanalysis. Reversible redaction is provided by the vault.
 """
 
 from __future__ import annotations
@@ -13,8 +17,8 @@ from typing import Any
 class Redactor:
     """Applies redaction to a detected entity value based on its rule config."""
 
-    def __init__(self, fpe_service: Any = None) -> None:
-        self._fpe_service = fpe_service
+    def __init__(self) -> None:
+        pass
 
     def redact(
         self,
@@ -50,19 +54,6 @@ class Redactor:
             salt = rule.get("salt", "")
             hashed = hashlib.sha256(f"{value}{salt}".encode()).hexdigest()[:12]
             return {"redacted": hashed, "action_label": "redacted:hashed", "original": value}
-
-        elif action == "fpe":
-            if self._fpe_service is None:
-                replacement_value = rule.get("replacement_value", f"<{entity_type}>")
-                return {"redacted": replacement_value, "action_label": "redacted:replaced", "original": value}
-            radix = 10 if value.replace("-", "").replace(" ", "").replace("(", "").replace(")", "").isdigit() else 36
-            encrypted, fpe_ctx = self._fpe_service.encrypt(value, radix=radix)
-            return {
-                "redacted": encrypted,
-                "action_label": "redacted:encrypted",
-                "original": value,
-                "fpe_context": fpe_ctx,
-            }
 
         elif action == "defang":
             return self._defang(value, entity_type)

@@ -40,7 +40,18 @@ VALID_OPERATORS: frozenset[str] = frozenset(
     }
 )
 
-VALID_ACTIONS: frozenset[str] = frozenset({"block", "redact", "report"})
+VALID_ACTIONS: frozenset[str] = frozenset({"block", "redact", "report", "defang"})
+
+# Actions that existed and no longer do. Named separately so the error can say
+# what happened rather than just "unknown action", which would leave an
+# operator guessing whether they had typed it wrong.
+REMOVED_ACTIONS: dict[str, str] = {
+    "fpe": (
+        "format-preserving encryption was removed: FF3-1 was withdrawn from NIST "
+        "SP 800-38G Rev 1 and FF1 is patent-encumbered. Use 'redact' — reversible "
+        "redaction is provided by the vault via /v1/unredact."
+    ),
+}
 
 # An upper bound on pattern length. Not a safety analysis — that is RE2's job —
 # but a cheap guard against pathological input reaching the engine at all.
@@ -81,6 +92,8 @@ def validate_cidr(cidr: str, *, where: str) -> None:
 
 
 def validate_action(action: str, *, where: str) -> None:
+    if action in REMOVED_ACTIONS:
+        raise PolicyValidationError(f"{where}: {REMOVED_ACTIONS[action]}")
     if action not in VALID_ACTIONS:
         known = ", ".join(sorted(VALID_ACTIONS))
         raise PolicyValidationError(f"{where}: unknown action {action!r}. Valid actions: {known}")

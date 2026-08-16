@@ -21,7 +21,6 @@ The schema mirrors industry AI security platforms data model with these table gr
     ActivityLog — admin actions (policy changes, key creation, etc.)
 
 **Settings**:
-    FPESettings — format-preserving encryption key (singleton row)
     GlobalPromptList — admin-curated benign/malicious prompt patterns
     ModelIntent — intent statements for conformance checking
     ExportTarget — webhook/syslog export destinations
@@ -230,15 +229,6 @@ class GlobalPromptList(Base):
     )  # "substring" | "regex" | "exact"
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
-
-
-class FPESettings(Base):
-    __tablename__ = "fpe_settings"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default="singleton")
-    key: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    default_tweak: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
