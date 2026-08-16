@@ -176,7 +176,7 @@ class TopicDetector(BaseDetector):
         # are removed — a failed sub-detector might have found an entity the
         # successful one did not, so the boolean is invariant but the redaction
         # is not.
-        if failed and self.can_redact:
+        if failed and not self.can_block:
             return DetectorResult(
                 detected=False,
                 status=DetectorStatus.FAILED,

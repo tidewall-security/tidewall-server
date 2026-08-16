@@ -10,6 +10,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from app.auth.dependencies import require_role
+from app.config import OnDetectorFailure
 from app.services.policy_validation import PolicyValidationError
 
 router = APIRouter(prefix="/v1/policies", tags=["policies"])
@@ -20,6 +21,7 @@ class CreatePolicyRequest(BaseModel):
     type: str = "application"
     description: str | None = None
     report_only: bool = False
+    on_detector_failure: OnDetectorFailure = OnDetectorFailure.REPORT
     detectors: dict[str, Any] = {}
 
 
@@ -40,6 +42,7 @@ def _policy_to_dict(policy) -> dict:
         "type": policy.type,
         "description": policy.description,
         "report_only": policy.report_only,
+        "on_detector_failure": policy.on_detector_failure,
         "is_default": policy.is_default,
         "created_at": str(policy.created_at),
         "updated_at": str(policy.updated_at),
@@ -79,6 +82,7 @@ async def create_policy(body: CreatePolicyRequest, request: Request) -> dict:
             description=body.description,
             report_only=body.report_only,
             detectors=body.detectors,
+            on_detector_failure=body.on_detector_failure,
         )
         return _policy_to_dict(policy)
     except Exception as e:
@@ -320,6 +324,7 @@ async def import_policy(body: dict, request: Request) -> dict:
             description=body.get("description"),
             report_only=report_only,
             detectors=detectors,
+            on_detector_failure=body.get("on_detector_failure", "report"),
         )
         return _policy_to_dict(policy)
     except Exception as e:

@@ -119,7 +119,20 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             "llm_provider": body.llm_provider or "",
             "source_ip": body.source_ip or "",
         }
-        access_rules_result = evaluate_access_rules(access_rules_data, request_metadata)
+        try:
+            access_rules_result = evaluate_access_rules(access_rules_data, request_metadata)
+        except ValueError:
+            # A stored rule the evaluator cannot apply. Validation rejects these
+            # at write time, so reaching here means an unvalidated write path.
+            # Blocking is the honest response: the rule might have blocked this
+            # request and we cannot tell. Raising would 500 and produce no audit
+            # record at all.
+            logger.error("Access rule could not be evaluated; blocking", exc_info=True)
+            access_rules_result = {
+                "action": "block",
+                "matched_rules": [{"name": "invalid-rule", "matched": True, "action": "block"}],
+                "blocked": True,
+            }
 
     # If access rules blocked, return immediately without running detectors
     if access_rules_result["blocked"]:
@@ -207,6 +220,7 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     guard_output: dict | None = None
     fpe_context: str | None = None
 
+    redaction_failed = False
     if scan_result.transformed:
         transformed_msgs: list[dict] = []
         reconstruction_failed = False
@@ -229,7 +243,12 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
                 # deliberately None; falling back to `content` here would emit
                 # the original unredacted text, which is precisely what the
                 # failed redactor existed to prevent.
+                # Merge both the failure objects (which enforcement reads) and
+                # the detector payload (which the response, audit row and export
+                # read). Copying only the former left the per-message failure
+                # invisible everywhere a human would look for it.
                 scan_result.failures.extend(msg_result.failures)
+                scan_result.detectors.update(msg_result.detectors)
                 reconstruction_failed = True
                 break
 
@@ -242,12 +261,15 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             scan_result.transformed = False
             guard_output = None
             fpe_context = None
+            redaction_failed = True
         else:
             guard_output = {"messages": transformed_msgs}
             fpe_context = vault_mgr.encode_fpe_context(vault_id)
 
-    # Handle MCP tool filtering (tool_listing events)
-    if event_type == "tool_listing" and tools:
+    # Handle MCP tool filtering (tool_listing events). Skipped after a failed
+    # redaction: rebuilding a guard_output there would re-populate the field the
+    # discard just cleared.
+    if event_type == "tool_listing" and tools and not redaction_failed:
         mcp_det = scan_result.detectors.get("mcp_validation", {})
         if mcp_det.get("detected") and mcp_det.get("data", {}).get("action") == "blocked":
             filtered_names = set(mcp_det["data"].get("filtered_tools", []))

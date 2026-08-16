@@ -154,3 +154,76 @@ def test_failed_reporter_does_not_block(guard_client):
     body = _post(client, key).json()
 
     assert body["result"]["blocked"] is False
+
+
+# ---------------------------------------------------------------------------
+# Production configuration path
+# ---------------------------------------------------------------------------
+
+
+def test_on_detector_failure_reaches_the_engine_from_the_database(guard_client):
+    """The defect the earlier route tests concealed.
+
+    They set `engine._policy.on_detector_failure` directly, so they passed
+    while every production engine still took the REPORT default —
+    PolicyService.get_engine() never passed the setting to from_detectors(),
+    and the field was not persisted at all. This asserts the real path:
+    stored on the policy row, read back through get_engine().
+    """
+    from app.config import OnDetectorFailure
+    from app.db.models import Policy
+
+    client, key, session_factory = guard_client
+
+    session = session_factory()
+    policy = session.query(Policy).filter_by(is_default=True).first()
+    policy.on_detector_failure = "block"
+    session.commit()
+    policy_id = policy.id
+    session.close()
+
+    policy_svc = client.app.state.policy_service
+    policy_svc._engine_cache.clear()
+    engine = policy_svc.get_engine(policy_id, "input")
+
+    assert engine.on_detector_failure is OnDetectorFailure.BLOCK
+
+
+def test_failure_blocks_when_configured_through_the_database(guard_client):
+    """End to end: persisted setting, real engine build, blocked response."""
+    from app.db.models import Policy
+
+    client, key, session_factory = guard_client
+
+    session = session_factory()
+    policy = session.query(Policy).filter_by(is_default=True).first()
+    policy.on_detector_failure = "block"
+    session.commit()
+    policy_id = policy.id
+    session.close()
+
+    policy_svc = client.app.state.policy_service
+    policy_svc._engine_cache.clear()
+    engine = policy_svc.get_engine(policy_id, "input")
+    det = _FailingBlocker({"action": "block"})
+    det.action = "block"
+    engine._detectors = [(det.name, det)]
+
+    body = _post(client, key).json()
+
+    assert body["result"]["blocked"] is True
+    assert "No threats detected" not in body["summary"]
+
+
+def test_policy_create_accepts_and_returns_on_detector_failure(guard_client):
+    """The setting is reachable through the API, not just the ORM."""
+    from app.services.policy_service import PolicyService
+
+    _client, _key, session_factory = guard_client
+    session = session_factory()
+    try:
+        svc = PolicyService(session)
+        created = svc.create_policy(name="strict", on_detector_failure="block")
+        assert created.on_detector_failure == "block"
+    finally:
+        session.close()

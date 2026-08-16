@@ -113,6 +113,16 @@ def validate_detectors(detectors: dict[str, Any]) -> None:
         for i, pattern in enumerate(cfg.get("patterns", []) or []):
             validate_regex(pattern, where=f"detectors.{name}.patterns[{i}]")
 
+        # Nested threat-intel CIDRs. An invalid one returns "not malicious" at
+        # runtime, so it silently removes the blocklist entry it expressed.
+        for key in ("blocked_cidrs", "cidrs", "ip_ranges"):
+            for i, cidr in enumerate(cfg.get(key, []) or []):
+                validate_cidr(cidr, where=f"detectors.{name}.{key}[{i}]")
+
+        # Access rules may be carried on the detector config in some shapes.
+        if "access_rules" in cfg:
+            validate_access_rules(cfg["access_rules"] or [])
+
 
 def validate_access_rules(rules: list[dict[str, Any]]) -> None:
     """Validate access rules, rejecting operators the evaluator cannot apply."""

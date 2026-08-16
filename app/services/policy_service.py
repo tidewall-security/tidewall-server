@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.config import OnDetectorFailure
 from app.db.models import Policy, RuleSet
 from app.scanner_engine import ScannerEngine
 from app.services.policy_validation import validate_detectors
@@ -97,6 +98,7 @@ class PolicyService:
         report_only: bool = False,
         is_default: bool = False,
         detectors: dict[str, Any] | None = None,
+        on_detector_failure: str = OnDetectorFailure.REPORT.value,
     ) -> Policy:
         # Validate before writing anything. A policy that cannot be enforced
         # as written is rejected while the administrator is looking at it,
@@ -111,6 +113,7 @@ class PolicyService:
                 type=type,
                 description=description,
                 report_only=report_only,
+                on_detector_failure=OnDetectorFailure(on_detector_failure).value,
                 is_default=is_default,
             )
             session.add(policy)
@@ -226,12 +229,16 @@ class PolicyService:
 
             policy = session.get(Policy, policy_id)
             report_only = policy.report_only if policy else False
+            on_detector_failure = OnDetectorFailure(
+                (policy.on_detector_failure if policy else None) or OnDetectorFailure.REPORT.value
+            )
 
             engine = ScannerEngine.from_detectors(
                 rs.detectors,
                 report_only=report_only,
                 session_factory=self._session_factory,
                 use_onnx=self._use_onnx,
+                on_detector_failure=on_detector_failure,
             )
             self._engine_cache[cache_key] = engine
             logger.info(

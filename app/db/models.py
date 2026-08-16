@@ -77,6 +77,11 @@ class Policy(Base):
     type: Mapped[str] = mapped_column(String, nullable=False, default="application")
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     report_only: Mapped[bool] = mapped_column(Boolean, default=False)
+    # What to do when a blocking/redacting detector cannot run. Persisted
+    # because the enforcement decision must survive a restart and be settable
+    # through the API — a value that lives only on the transient PolicyConfig
+    # is unreachable from a normally constructed engine.
+    on_detector_failure: Mapped[str] = mapped_column(String, nullable=False, default="report")
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)

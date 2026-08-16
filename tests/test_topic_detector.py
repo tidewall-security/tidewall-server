@@ -97,7 +97,7 @@ def test_both_signals_detected_combine_in_topics_list():
     assert len(r.data["topics"]) == 2
 
 
-def test_inference_exception_in_toxicity_does_not_crash():
+def test_inference_exception_in_toxicity_is_reported_not_absorbed():
     d = _make(topics=["violence"], threshold=0.5, toxicity_threshold=0.5)
 
     def _explode(text):
@@ -109,12 +109,17 @@ def test_inference_exception_in_toxicity_does_not_crash():
         "scores": [0.9],
     }
     r = d.scan("text")
-    # Toxicity blew up but topics still detected.
-    assert r.detected is True
-    assert r.data["topics"] == [{"topic": "violence", "confidence": 0.9}]
+    # Toxicity blew up. Under a report action the detection is not terminal —
+    # the payload is what the operator sees, and it is now missing whatever
+    # toxicity would have contributed — so the composite reports the failure
+    # rather than presenting a partial result as complete.
+    from app.detectors.base import DetectorStatus
+
+    assert r.status is DetectorStatus.FAILED
+    assert r.components["toxicity"].status is DetectorStatus.FAILED
 
 
-def test_inference_exception_in_topics_does_not_crash():
+def test_inference_exception_in_topics_is_reported_not_absorbed():
     d = _make(topics=["violence"], threshold=0.5, toxicity_threshold=0.5)
     d._toxicity_pipeline = lambda text: [[{"label": "toxic", "score": 0.9}]]
 
@@ -123,9 +128,10 @@ def test_inference_exception_in_topics_does_not_crash():
 
     d._topics_pipeline = _explode
     r = d.scan("text")
-    # Topics blew up but toxicity still detected.
-    assert r.detected is True
-    assert r.data["topics"] == [{"topic": "toxicity", "confidence": 0.9}]
+    from app.detectors.base import DetectorStatus
+
+    assert r.status is DetectorStatus.FAILED
+    assert r.components["topics"].status is DetectorStatus.FAILED
 
 
 def test_blocking_action_when_can_block():
@@ -141,3 +147,28 @@ def test_no_topics_configured_skips_topics_pipeline():
     d = _make(topics=[])
     assert d._topics_pipeline is None
     # Toxicity still loads (it has no per-item config requirement).
+
+
+def test_blocking_action_absorbs_a_failure_because_the_outcome_is_terminal():
+    """Absorption is only sound when the request is already blocked.
+
+    With action=block a positive detection ends the matter: whatever the failed
+    sub-detector would have added cannot change what happens to the request.
+    Under report the payload is the product, so a missing contribution matters.
+    """
+    from app.detectors.base import DetectorStatus
+
+    d = _make(toxicity_threshold=0.5, action="block")
+    d._toxicity_pipeline = lambda text: [[{"label": "toxic", "score": 0.9}]]
+
+    def _explode(text, candidate_labels, multi_label):
+        raise RuntimeError("simulated topics failure")
+
+    d._topics_pipeline = _explode
+    d._topics = ["violence"]
+
+    r = d.scan("offensive")
+
+    assert r.detected is True
+    assert r.status is DetectorStatus.OK
+    assert r.components["topics"].status is DetectorStatus.FAILED

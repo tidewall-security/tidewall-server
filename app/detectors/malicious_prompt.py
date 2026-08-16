@@ -178,7 +178,7 @@ class MaliciousPromptDetector(BaseDetector):
             rejected rather than silently absorbing failures under it.
             """
             failed = [c for c in reason_components.values() if c.status is DetectorStatus.FAILED]
-            if failed and self.can_redact:
+            if failed and not self.can_block:
                 return DetectorResult(
                     detected=False,
                     status=DetectorStatus.FAILED,

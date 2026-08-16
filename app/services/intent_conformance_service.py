@@ -85,6 +85,11 @@ class IntentConformanceService:
             self._intent_embeddings = []
             return
 
+        # A successful load clears an earlier failure, so reload_intents() can
+        # actually recover the service rather than leaving it permanently
+        # unavailable.
+        if self._failure_code == "construct_failed":
+            self._failure_code = None
         self._intent_embeddings = embeddings
         if self._intent_embeddings:
             logger.info("Embedded %d model intent statements", len(self._intent_embeddings))
