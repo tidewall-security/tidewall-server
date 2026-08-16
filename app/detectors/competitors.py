@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .base import BaseDetector, DetectorResult
+from .base import BaseDetector, DetectorResult, FailureCode
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,8 @@ class CompetitorsDetector(BaseDetector):
         try:
             from presidio_analyzer import AnalyzerEngine, PatternRecognizer
         except ImportError:
-            logger.warning("presidio-analyzer not installed — CompetitorsDetector disabled")
+            logger.warning("presidio-analyzer not installed — CompetitorsDetector unavailable")
+            self.mark_unavailable(FailureCode.DEPENDENCY_MISSING)
             return
 
         try:
@@ -54,6 +55,7 @@ class CompetitorsDetector(BaseDetector):
             logger.info("Loaded Presidio competitor recognizer with %d names", len(self._competitors))
         except Exception:
             logger.warning("Failed to initialize Presidio for competitors", exc_info=True)
+            self.mark_unavailable(FailureCode.CONSTRUCT_FAILED)
             self._analyzer = None
 
     @property
@@ -62,7 +64,7 @@ class CompetitorsDetector(BaseDetector):
 
     def scan(self, text: str, **kwargs: Any) -> DetectorResult:
         if self._analyzer is None:
-            return DetectorResult(detected=False)
+            return self.unavailable_result()
 
         try:
             results = self._analyzer.analyze(
@@ -72,7 +74,7 @@ class CompetitorsDetector(BaseDetector):
             )
         except Exception:
             logger.warning("Competitors analyzer inference failed", exc_info=True)
-            return DetectorResult(detected=False)
+            return DetectorResult.failed(FailureCode.SCAN_FAILED)
 
         found: list[str] = []
         lowered_competitors = {c.lower() for c in self._competitors}

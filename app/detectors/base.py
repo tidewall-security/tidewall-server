@@ -151,6 +151,32 @@ class BaseDetector(ABC):
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
         self.action = config.get("action", "report")
+        self._init_failure: FailureCode | None = None
+
+    def mark_unavailable(self, code: FailureCode) -> None:
+        """Record that this detector cannot run.
+
+        Detectors commonly discover at construction that a dependency is
+        missing or a model will not load. The established habit was to swallow
+        that, leave the pipeline as ``None``, and have ``scan`` return
+        ``DetectorResult(detected=False)`` — reporting "nothing found" from a
+        detector that never ran. Recording the reason here instead lets
+        ``scan`` report the failure and the engine enforce on it.
+
+        Construction deliberately still succeeds: a detector that cannot run is
+        more useful as a live object that reports FAILED on every scan than as
+        an exception that removes it from the engine entirely.
+        """
+        self._init_failure = code
+
+    @property
+    def available(self) -> bool:
+        """False if construction failed and this detector cannot produce a verdict."""
+        return self._init_failure is None
+
+    def unavailable_result(self) -> DetectorResult:
+        """The FAILED result to return from ``scan`` when unavailable."""
+        return DetectorResult.failed(self._init_failure or FailureCode.CONSTRUCT_FAILED)
 
     @property
     @abstractmethod

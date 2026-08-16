@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .base import BaseDetector, DetectorResult
+from .base import BaseDetector, DetectorResult, FailureCode
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +50,11 @@ class MaliciousEntityDetector(BaseDetector):
                 )
                 logger.info("Loaded malicious-URL classifier: %s", model_path)
             except ImportError:
-                logger.warning("transformers not installed — ML URL classification disabled")
+                logger.warning("transformers not installed — ML URL classification unavailable")
+                self.mark_unavailable(FailureCode.DEPENDENCY_MISSING)
             except Exception:
                 logger.warning("Failed to load malicious-URL classifier %s", model_path, exc_info=True)
+                self.mark_unavailable(FailureCode.MODEL_LOAD_FAILED)
 
         # Redactor for defanging
         from app.services.redactor import Redactor

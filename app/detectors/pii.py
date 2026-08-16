@@ -18,7 +18,7 @@ from typing import Any
 from app.services.redactor import Redactor
 from app.vault import TidewallVault
 
-from .base import BaseDetector, DetectorResult
+from .base import BaseDetector, DetectorResult, FailureCode
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,8 @@ class PIIDetector(BaseDetector):
         try:
             from presidio_analyzer import AnalyzerEngine
         except ImportError:
-            logger.warning("presidio-analyzer not installed — PIIDetector disabled")
+            logger.warning("presidio-analyzer not installed — PIIDetector unavailable")
+            self.mark_unavailable(FailureCode.DEPENDENCY_MISSING)
             return
 
         try:
@@ -56,6 +57,7 @@ class PIIDetector(BaseDetector):
             logger.info("Loaded Presidio AnalyzerEngine for PIIDetector")
         except Exception:
             logger.warning("Failed to initialize Presidio AnalyzerEngine", exc_info=True)
+            self.mark_unavailable(FailureCode.CONSTRUCT_FAILED)
             self._analyzer = None
 
     @property
@@ -70,7 +72,7 @@ class PIIDetector(BaseDetector):
         ``value`` (mask, hash, etc.) for display and audit logging.
         """
         if self._analyzer is None:
-            return DetectorResult(detected=False)
+            return self.unavailable_result()
 
         vault: TidewallVault | None = kwargs.get("vault")
 
@@ -78,7 +80,7 @@ class PIIDetector(BaseDetector):
             results = self._analyzer.analyze(text=text, language="en")
         except Exception:
             logger.warning("Presidio PII analysis failed", exc_info=True)
-            return DetectorResult(detected=False)
+            return DetectorResult.failed(FailureCode.SCAN_FAILED)
 
         if not results:
             return DetectorResult(detected=False)
