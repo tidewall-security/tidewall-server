@@ -448,3 +448,25 @@ def test_scan_single_only_reports_redactor_failures():
     result = engine.scan_single("text", vault_id="v", vault=None)
 
     assert [f.name for f in result.failures] == ["secret_and_key_entity"]
+
+
+def test_unavailable_intent_service_is_a_failure_not_a_pass():
+    """_load_intents used to raise into the constructor and vanish.
+
+    The composite caught it, left the service absent, and intent conformance
+    silently never ran while the detector reported a confident clean verdict.
+    """
+
+    class _BrokenIntentSvc:
+        available = False
+        failure_code = "construct_failed"
+
+    d = _composite()
+    d._intent_enabled = True
+    d._intent_svc = _BrokenIntentSvc()
+    d._load_failures.clear()
+
+    r = d.scan("anything")
+
+    assert r.status is DetectorStatus.FAILED
+    assert r.components["intent_conformance"].status is DetectorStatus.FAILED

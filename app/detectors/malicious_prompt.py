@@ -287,28 +287,38 @@ class MaliciousPromptDetector(BaseDetector):
 
         # 4. Intent conformance
         if self._intent_enabled and self._intent_svc:
-            try:
-                if self._check_model_intent:
-                    violation = self._intent_svc.check_model_intent(text)
-                    if violation:
-                        analyzer_responses.append(violation)
-                if self._check_app_intent:
-                    messages = kwargs.get("messages", [])
-                    app_intent = None
-                    for msg in messages:
-                        if isinstance(msg, dict) and msg.get("role") == "system":
-                            app_intent = msg.get("content", "")
-                            break
-                    if app_intent:
-                        violation = self._intent_svc.check_app_intent(text, app_intent)
+            # The service records why it cannot run rather than raising into
+            # this detector's constructor and vanishing. An unavailable service
+            # means the configured check never happened, which is a failure,
+            # not a pass.
+            if not self._intent_svc.available:
+                components["intent_conformance"] = ComponentStatus(
+                    status=DetectorStatus.FAILED,
+                    failure_code=FailureCode(self._intent_svc.failure_code or "construct_failed"),
+                )
+            else:
+                try:
+                    if self._check_model_intent:
+                        violation = self._intent_svc.check_model_intent(text)
                         if violation:
                             analyzer_responses.append(violation)
-                components["intent_conformance"] = ComponentStatus()
-            except Exception:
-                logger.warning("Intent conformance check failed", exc_info=True)
-                components["intent_conformance"] = ComponentStatus(
-                    status=DetectorStatus.FAILED, failure_code=FailureCode.SCAN_FAILED
-                )
+                    if self._check_app_intent:
+                        messages = kwargs.get("messages", [])
+                        app_intent = None
+                        for msg in messages:
+                            if isinstance(msg, dict) and msg.get("role") == "system":
+                                app_intent = msg.get("content", "")
+                                break
+                        if app_intent:
+                            violation = self._intent_svc.check_app_intent(text, app_intent)
+                            if violation:
+                                analyzer_responses.append(violation)
+                    components["intent_conformance"] = ComponentStatus()
+                except Exception:
+                    logger.warning("Intent conformance check failed", exc_info=True)
+                    components["intent_conformance"] = ComponentStatus(
+                        status=DetectorStatus.FAILED, failure_code=FailureCode.SCAN_FAILED
+                    )
 
         # Check if intent conformance found violations (steps 1-3 didn't trigger)
         if analyzer_responses and any("IntentConformance" in r.get("analyzer", "") for r in analyzer_responses):
