@@ -174,3 +174,28 @@ def test_docs_routes_are_disabled_when_auth_is_on():
 
     assert "/docs" not in paths
     assert "/openapi.json" not in paths
+
+
+def test_rejected_bootstrap_config_leaves_no_database_state(tmp_path):
+    """A configuration that will be refused must not migrate or seed first.
+
+    The check previously ran after directory creation, every migration, policy
+    seeding and service construction, so refusing still left a fully migrated
+    159KB database behind. It is answered read-only now, before any write.
+    """
+    import asyncio
+    import os
+    from unittest.mock import patch
+
+    from app.main import create_app, lifespan
+
+    db = tmp_path / "refused.db"
+    env = {"AUTH_ENABLED": "true", "DB_URL": f"sqlite:///{db}"}
+
+    with patch.dict(os.environ, env, clear=False):
+        os.environ.pop("BOOTSTRAP_KEY", None)
+        app = create_app()
+        with pytest.raises(RuntimeError, match="BOOTSTRAP_KEY is not set"):
+            asyncio.run(lifespan(app).__aenter__())
+
+    assert not db.exists(), "a refused configuration created a database"

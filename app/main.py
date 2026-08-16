@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+import pathlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -31,6 +32,44 @@ from app.vault_manager import VaultManager
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+
+
+
+def _has_existing_api_keys(db_url: str) -> bool:
+    """Read-only probe for existing API keys, without migrating anything.
+
+    The bootstrap refusal used to run after migrations, seeding and service
+    construction, so rejecting a clean configuration still left a fully
+    migrated and seeded database behind — 159KB of state written for a startup
+    that then refused to serve. Answering the question read-only lets the
+    refusal happen before any write.
+
+    Returns False when the database, or the table, does not exist yet: both
+    mean there is no key, which is the condition that requires a bootstrap
+    secret.
+    """
+    from sqlalchemy import create_engine, inspect, text
+
+    # Connecting to a SQLite URL creates the file, so a refusal would still
+    # leave a zero-byte artefact behind. Absent file means absent keys.
+    if db_url.startswith("sqlite"):
+        path = db_url.split("///")[-1]
+        if path not in (":memory:", "") and not pathlib.Path(path).exists():
+            return False
+
+    probe = create_engine(db_url)
+    try:
+        if "api_keys" not in inspect(probe).get_table_names():
+            return False
+        with probe.connect() as conn:
+            return conn.execute(text("SELECT 1 FROM api_keys LIMIT 1")).first() is not None
+    except Exception:
+        # An unreadable database is not evidence that a key exists, and
+        # refusing here would be wrong for a genuine connectivity problem, so
+        # defer to the later check rather than guessing.
+        return True
+    finally:
+        probe.dispose()
 
 
 def _is_loopback(host: str) -> bool:
@@ -87,6 +126,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             settings.HOST,
         )
 
+
+    if settings.AUTH_ENABLED and not settings.BOOTSTRAP_KEY and not _has_existing_api_keys(settings.DB_URL):
+        # Checked before any database work: a configuration that will be
+        # refused must not leave a migrated, seeded database behind.
+        raise RuntimeError(
+            "No API keys exist and BOOTSTRAP_KEY is not set. Set it to a secret you "
+            "generate to install the first admin key. Tidewall does not generate one "
+            "because it would have to be emitted to logs or stdout to reach you, where "
+            "it would persist as an administrator credential."
+        )
 
     # --- Database setup ---
     from app.db.engine import get_engine, get_session_factory
