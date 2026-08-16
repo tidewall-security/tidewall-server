@@ -93,8 +93,11 @@ class PromptListService:
                 try:
                     if re.search(entry.pattern, text, re.IGNORECASE):
                         return True
-                except re.error:
-                    logger.warning("Invalid regex pattern: %s", entry.pattern)
-                    continue
+                except re.error as exc:
+                    # Skipping meant a malicious-list entry simply never
+                    # matched. Raise so the calling detector records a failure
+                    # instead of reporting a confident "no match".
+                    logger.error("Invalid regex in stored prompt list entry")
+                    raise ValueError("invalid regex in prompt list") from exc
 
         return False

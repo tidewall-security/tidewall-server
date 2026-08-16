@@ -16,7 +16,7 @@ import logging
 import re
 from typing import Any
 
-from .base import BaseDetector, DetectorResult
+from .base import BaseDetector, DetectorResult, FailureCode
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +31,13 @@ class CustomEntityDetector(BaseDetector):
             try:
                 self._patterns.append(re.compile(raw))
             except re.error:
-                # A bad pattern in policy config is operator error; log it
-                # and skip so the rest of the patterns still work.
-                logger.warning("Invalid regex pattern: %s", raw)
+                # A bad pattern is operator error, but skipping it silently
+                # removes the rule it expressed — the policy says an entity is
+                # detected and it never will be. Validation rejects these at
+                # write time; if one reaches here the detector cannot enforce
+                # what it was configured to enforce.
+                logger.error("Invalid regex pattern in custom_entity policy")
+                self.mark_unavailable(FailureCode.CONFIG_INVALID)
         if not self._patterns:
             logger.info("No patterns configured — CustomEntityDetector will be inactive")
 
@@ -42,6 +46,12 @@ class CustomEntityDetector(BaseDetector):
         return "custom_entity"
 
     def scan(self, text: str, **kwargs: Any) -> DetectorResult:
+        # A pattern failed to compile, so at least one configured rule cannot
+        # be applied. Reporting "nothing found" would claim a clean result from
+        # a check that is not running.
+        if not self.available:
+            return self.unavailable_result()
+
         if not self._patterns:
             return DetectorResult(detected=False)
 

@@ -127,7 +127,7 @@ def test_create_policy(setup):
             "type": "application",
             "description": "A test policy",
             "report_only": True,
-            "detectors": {"toxicity": {"enabled": True}},
+            "detectors": {"topic": {"enabled": True}},
         },
         headers={"Authorization": f"Bearer {admin_key}"},
     )
@@ -256,7 +256,7 @@ def test_import_policy(setup):
             "type": "application",
             "report_only": True,
             "description": "Imported via API",
-            "detectors": {"pii": {"enabled": True, "entity_types": ["EMAIL"]}},
+            "detectors": {"confidential_and_pii_entity": {"enabled": True, "entity_types": ["EMAIL"]}},
         },
         headers={"Authorization": f"Bearer {admin_key}"},
     )
@@ -327,8 +327,8 @@ def test_get_rule_set_not_found(setup):
 def test_update_rule_set_detectors(setup):
     client, admin_key, _, default_policy_id = setup
     new_detectors = {
-        "prompt_injection": {"enabled": True, "threshold": 0.9},
-        "toxicity": {"enabled": True, "threshold": 0.7},
+        "malicious_prompt": {"enabled": True, "threshold": 0.9},
+        "topic": {"enabled": True, "threshold": 0.7},
     }
     resp = client.patch(
         f"/v1/policies/{default_policy_id}/rule-sets/input",
@@ -337,25 +337,54 @@ def test_update_rule_set_detectors(setup):
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["detectors"]["toxicity"]["enabled"] is True
-    assert data["detectors"]["prompt_injection"]["threshold"] == 0.9
+    assert data["detectors"]["topic"]["enabled"] is True
+    assert data["detectors"]["malicious_prompt"]["threshold"] == 0.9
 
     # Verify persistence
     get_resp = client.get(
         f"/v1/policies/{default_policy_id}/rule-sets/input",
         headers={"Authorization": f"Bearer {admin_key}"},
     )
-    assert get_resp.json()["detectors"]["toxicity"]["threshold"] == 0.7
+    assert get_resp.json()["detectors"]["topic"]["threshold"] == 0.7
 
 
 def test_update_rule_set_not_found(setup):
     client, admin_key, _, default_policy_id = setup
+    # A valid body, so this exercises the missing-rule-set path rather than
+    # being rejected by validation first.
     resp = client.patch(
         f"/v1/policies/{default_policy_id}/rule-sets/nonexistent",
-        json={"detectors": {"foo": {}}},
+        json={"detectors": {"topic": {"enabled": True}}},
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     assert resp.status_code == 404
+
+
+def test_update_rule_set_rejects_unknown_detector(setup):
+    """An unknown detector name is the administrator's error, not a 404.
+
+    It previously succeeded and stored a name nothing would ever load, so the
+    policy claimed a control it did not have.
+    """
+    client, admin_key, _, default_policy_id = setup
+    resp = client.patch(
+        f"/v1/policies/{default_policy_id}/rule-sets/input",
+        json={"detectors": {"no_such_detector": {"enabled": True}}},
+        headers={"Authorization": f"Bearer {admin_key}"},
+    )
+    assert resp.status_code == 400
+    assert "no such detector" in resp.json()["detail"].lower()
+
+
+def test_update_rule_set_rejects_invalid_regex(setup):
+    client, admin_key, _, default_policy_id = setup
+    resp = client.patch(
+        f"/v1/policies/{default_policy_id}/rule-sets/input",
+        json={"detectors": {"custom_entity": {"enabled": True, "patterns": ["(unclosed"]}}},
+        headers={"Authorization": f"Bearer {admin_key}"},
+    )
+    assert resp.status_code == 400
+    assert "invalid regex" in resp.json()["detail"].lower()
 
 
 # ------------------------------------------------------------------

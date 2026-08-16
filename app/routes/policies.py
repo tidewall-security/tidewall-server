@@ -10,6 +10,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from app.auth.dependencies import require_role
+from app.services.policy_validation import PolicyValidationError
 
 router = APIRouter(prefix="/v1/policies", tags=["policies"])
 
@@ -169,8 +170,13 @@ async def update_rule_set(policy_id: str, event_type: str, body: UpdateRuleSetRe
             "event_type": rs.event_type,
             "detectors": rs.detectors,
         }
+    except PolicyValidationError as e:
+        # A rejected policy is the administrator's mistake to fix, not a
+        # missing resource. Mapping it to 404 told them the rule set did not
+        # exist, which is both wrong and unactionable.
+        raise HTTPException(status_code=400, detail=str(e)) from None
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from None
     finally:
         session.close()
 

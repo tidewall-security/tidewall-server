@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Policy, RuleSet
 from app.scanner_engine import ScannerEngine
+from app.services.policy_validation import validate_detectors
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,12 @@ class PolicyService:
         is_default: bool = False,
         detectors: dict[str, Any] | None = None,
     ) -> Policy:
+        # Validate before writing anything. A policy that cannot be enforced
+        # as written is rejected while the administrator is looking at it,
+        # rather than accepted and then quietly not applied — which is
+        # indistinguishable from applied-and-found-nothing.
+        validate_detectors(detectors or {})
+
         session, should_close = self._get_session()
         try:
             policy = Policy(
@@ -159,6 +166,8 @@ class PolicyService:
         event_type: str,
         detectors: dict[str, Any],
     ) -> RuleSet:
+        validate_detectors(detectors or {})
+
         session, should_close = self._get_session()
         try:
             rs = session.query(RuleSet).filter_by(policy_id=policy_id, event_type=event_type).first()

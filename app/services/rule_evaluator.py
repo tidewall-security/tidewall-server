@@ -45,7 +45,11 @@ def _evaluate_condition(condition: dict[str, Any], metadata: dict[str, Any]) -> 
     elif op == "not in":
         return isinstance(expected, list) and actual not in expected
     else:
-        return False
+        # Returning False here meant a block rule with a typo'd operator never
+        # fired, silently removing the control. Validation rejects unknown
+        # operators at write time; reaching this point is a bug or an
+        # unvalidated write path, and must not be reported as "no match".
+        raise ValueError(f"unknown access-rule operator: {op!r}")
 
 
 def evaluate_access_rules(
