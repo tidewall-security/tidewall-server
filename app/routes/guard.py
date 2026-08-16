@@ -23,6 +23,7 @@ protection flows through this single endpoint.  The processing pipeline is:
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 from typing import Any
@@ -30,8 +31,17 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.auth.dependencies import require_role
+from app.detectors.base import FailureCode
 from app.models import GuardRequest, GuardResponse, GuardResult
 from app.utils import now_iso as _now_iso
+
+logger = logging.getLogger(__name__)
+
+# What to do when a blocking/redacting detector cannot run. Defaults to
+# "report" until the activation preflight exists: with "block" as the default,
+# a gated model or an absent spaCy model would reject 100% of traffic at
+# startup rather than failing visibly at boot.
+_DEFAULT_ON_DETECTOR_FAILURE = "report"
 
 router = APIRouter()
 
@@ -91,6 +101,8 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
         effective_report_only = rule_set.report_only
     elif policy and policy.report_only:
         effective_report_only = policy.report_only
+
+    on_detector_failure = getattr(policy, "on_detector_failure", None) or _DEFAULT_ON_DETECTOR_FAILURE
 
     access_rules_data: list[dict[str, Any]] = []
     access_rules_result: dict[str, Any] = {"action": "continue", "matched_rules": [], "blocked": False}
@@ -203,21 +215,42 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
 
     if scan_result.transformed:
         transformed_msgs: list[dict] = []
+        reconstruction_failed = False
         for msg in messages:
             content = msg.get("content", "")
-            if content.strip():
-                msg_result = await asyncio.to_thread(engine.scan_single, content, vault_id, vault)
-                transformed_msgs.append(
-                    {
-                        "role": msg.get("role", "user"),
-                        "content": msg_result.guard_output_text or content,
-                    }
-                )
-            else:
+            if not content.strip():
                 transformed_msgs.append({"role": msg.get("role", "user"), "content": content})
+                continue
 
-        guard_output = {"messages": transformed_msgs}
-        fpe_context = vault_mgr.encode_fpe_context(vault_id)
+            try:
+                msg_result = await asyncio.to_thread(engine.scan_single, content, vault_id, vault)
+            except Exception:
+                logger.error("Message reconstruction raised", exc_info=True)
+                scan_result.record_failure("_reconstruction", FailureCode.RECONSTRUCTION_FAILED, action="redact")
+                reconstruction_failed = True
+                break
+
+            if msg_result.enforcement_degraded or msg_result.guard_output_text is None:
+                # A redactor failed on this message. `guard_output_text` is
+                # deliberately None; falling back to `content` here would emit
+                # the original unredacted text, which is precisely what the
+                # failed redactor existed to prevent.
+                scan_result.failures.extend(msg_result.failures)
+                reconstruction_failed = True
+                break
+
+            transformed_msgs.append({"role": msg.get("role", "user"), "content": msg_result.guard_output_text})
+
+        if reconstruction_failed:
+            # Discard every message assembled so far, not just the failing one:
+            # the caller must not receive a partially sanitised conversation.
+            transformed_msgs = []
+            scan_result.transformed = False
+            guard_output = None
+            fpe_context = None
+        else:
+            guard_output = {"messages": transformed_msgs}
+            fpe_context = vault_mgr.encode_fpe_context(vault_id)
 
     # Handle MCP tool filtering (tool_listing events)
     if event_type == "tool_listing" and tools:
@@ -231,10 +264,38 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
                 guard_output["tools"] = safe_tools
                 scan_result.transformed = True
 
+    # Detector failure enforcement (P0-2).
+    #
+    # A blocking or redacting detector that could not run means the request was
+    # never actually protected. Allowing it here — which is what happened before
+    # this existed — returns HTTP 200 with "No threats detected" for content
+    # nothing inspected.
+    #
+    # This is evaluated *before* the report_only downgrade below, deliberately:
+    # report_only exists so an operator can trial a policy without affecting
+    # traffic, but a detector failure is not a policy verdict to shadow, it is
+    # the absence of one. Documented as a change to what report_only guarantees.
+    failure_blocked = False
+    if scan_result.enforcement_degraded and on_detector_failure == "block":
+        failed_names = sorted({f.name for f in scan_result.failures if f.enforcing})
+        logger.error("Blocking request: enforcing detectors failed: %s", ", ".join(failed_names))
+        scan_result.blocked = True
+        failure_blocked = True
+        # Never return content the failed detectors did not get to inspect.
+        scan_result.transformed = False
+        guard_output = None
+        fpe_context = None
+        scan_result.summary_parts.append(
+            f"Blocked: required detectors could not run ({', '.join(failed_names)})."
+        )
+
     # Compute 5-value status.  In report_only mode, destructive actions
     # (block/transform) are downgraded so the request is never actually
     # modified — useful for shadow-mode evaluation of new policies.
-    if effective_report_only:
+    if failure_blocked:
+        # Not downgraded by report_only: see above.
+        status = "blocked"
+    elif effective_report_only:
         if scan_result.blocked:
             status = "alerted"
             scan_result.blocked = False

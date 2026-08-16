@@ -168,6 +168,22 @@ class TopicDetector(BaseDetector):
         if not detected:
             return DetectorResult(detected=False, components=components)
 
+        # Absorption is sound when the failed sub-detector cannot change what
+        # happens to the request: for `block` the outcome is terminal, and for
+        # `report` there is no enforcement consequence at all.
+        #
+        # It is NOT sound for `redact`, where the payload decides which spans
+        # are removed — a failed sub-detector might have found an entity the
+        # successful one did not, so the boolean is invariant but the redaction
+        # is not.
+        if failed and self.can_redact:
+            return DetectorResult(
+                detected=False,
+                status=DetectorStatus.FAILED,
+                failure_code=failed[0].failure_code,
+                components=components,
+            )
+
         action = "blocked" if self.can_block else "reported"
         return DetectorResult(
             detected=True,
@@ -175,4 +191,5 @@ class TopicDetector(BaseDetector):
                 "action": action,
                 "topics": topics_found,
             },
+            components=components,
         )

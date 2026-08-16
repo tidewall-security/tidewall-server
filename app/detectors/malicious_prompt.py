@@ -165,10 +165,26 @@ class MaliciousPromptDetector(BaseDetector):
         def _detected(reason_components: dict[str, ComponentStatus]) -> DetectorResult:
             """Build a positive result.
 
-            A sub-detector failure recorded alongside a positive detection is
-            absorbed: the composite already blocks (or reports) and ``detected``
-            cannot become more true, so the external verdict is invariant.
+            A sub-detector failure alongside a positive detection is absorbed
+            only when the outcome is *terminal*: the composite blocks, so
+            whatever the failed component would have added cannot change what
+            happens to the request.
+
+            That does not hold for a redactor, where the payload decides which
+            spans are removed — a failed component might have found an entity
+            the successful one did not, so the boolean is invariant but the
+            redaction is not. This composite never produces ``sanitized_text``,
+            so a ``redact`` action here would neither transform nor block; it is
+            rejected rather than silently absorbing failures under it.
             """
+            failed = [c for c in reason_components.values() if c.status is DetectorStatus.FAILED]
+            if failed and self.can_redact:
+                return DetectorResult(
+                    detected=False,
+                    status=DetectorStatus.FAILED,
+                    failure_code=failed[0].failure_code,
+                    components=reason_components,
+                )
             action = "blocked" if self.can_block else "reported"
             return DetectorResult(
                 detected=True,
