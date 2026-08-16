@@ -31,17 +31,12 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.auth.dependencies import require_role
+from app.config import OnDetectorFailure
 from app.detectors.base import FailureCode
 from app.models import GuardRequest, GuardResponse, GuardResult
 from app.utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
-
-# What to do when a blocking/redacting detector cannot run. Defaults to
-# "report" until the activation preflight exists: with "block" as the default,
-# a gated model or an absent spaCy model would reject 100% of traffic at
-# startup rather than failing visibly at boot.
-_DEFAULT_ON_DETECTOR_FAILURE = "report"
 
 router = APIRouter()
 
@@ -102,7 +97,6 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     elif policy and policy.report_only:
         effective_report_only = policy.report_only
 
-    on_detector_failure = getattr(policy, "on_detector_failure", None) or _DEFAULT_ON_DETECTOR_FAILURE
 
     access_rules_data: list[dict[str, Any]] = []
     access_rules_result: dict[str, Any] = {"action": "continue", "matched_rules": [], "blocked": False}
@@ -276,7 +270,7 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     # traffic, but a detector failure is not a policy verdict to shadow, it is
     # the absence of one. Documented as a change to what report_only guarantees.
     failure_blocked = False
-    if scan_result.enforcement_degraded and on_detector_failure == "block":
+    if scan_result.enforcement_degraded and engine.on_detector_failure is OnDetectorFailure.BLOCK:
         failed_names = sorted({f.name for f in scan_result.failures if f.enforcing})
         logger.error("Blocking request: enforcing detectors failed: %s", ", ".join(failed_names))
         scan_result.blocked = True

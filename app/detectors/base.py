@@ -79,6 +79,35 @@ class SkipReason(str, Enum):
     NO_INPUT = "no_input"
 
 
+def _validate_status(
+    status: Any,
+    failure_code: FailureCode | None,
+    skip_reason: SkipReason | None,
+    detected: bool,
+    what: str,
+) -> DetectorStatus:
+    """Coerce and validate a status triple, or raise.
+
+    Coercion matters: the identity checks below are written against enum
+    members, so a raw string like ``status="failed"`` would slip past every
+    one of them and be reported as trustworthy. Anything that is not a valid
+    status is rejected outright rather than silently treated as OK.
+    """
+    try:
+        status = DetectorStatus(status)
+    except ValueError:
+        raise ValueError(f"{what}: {status!r} is not a valid DetectorStatus") from None
+
+    if status is DetectorStatus.FAILED:
+        if detected:
+            raise ValueError(f"{what} cannot be both FAILED and detected")
+        if failure_code is None:
+            raise ValueError(f"FAILED {what} requires a failure_code")
+    if status is DetectorStatus.SKIPPED and skip_reason is None:
+        raise ValueError(f"SKIPPED {what} requires a skip_reason")
+    return status
+
+
 @dataclass
 class ComponentStatus:
     """Status of one sub-detector inside a composite."""
@@ -86,6 +115,11 @@ class ComponentStatus:
     status: DetectorStatus = DetectorStatus.OK
     failure_code: FailureCode | None = None
     skip_reason: SkipReason | None = None
+
+    def __post_init__(self) -> None:
+        self.status = _validate_status(
+            self.status, self.failure_code, self.skip_reason, detected=False, what="ComponentStatus"
+        )
 
 
 @dataclass
@@ -116,13 +150,9 @@ class DetectorResult:
         # A failed detector has no verdict. Allowing detected=True alongside
         # FAILED would let a degraded result masquerade as a detection, which
         # is the mirror image of the bug this type exists to close.
-        if self.status is DetectorStatus.FAILED:
-            if self.detected:
-                raise ValueError("DetectorResult cannot be both FAILED and detected")
-            if self.failure_code is None:
-                raise ValueError("FAILED DetectorResult requires a failure_code")
-        if self.status is DetectorStatus.SKIPPED and self.skip_reason is None:
-            raise ValueError("SKIPPED DetectorResult requires a skip_reason")
+        self.status = _validate_status(
+            self.status, self.failure_code, self.skip_reason, self.detected, what="DetectorResult"
+        )
 
     @property
     def trustworthy(self) -> bool:

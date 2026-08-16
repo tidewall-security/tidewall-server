@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.config import OnDetectorFailure
 from app.detectors.base import BaseDetector, DetectorResult, FailureCode
 
 from .test_guard_routes import _make_app_and_client
@@ -60,12 +61,10 @@ def _install(client, session_factory, detectors, on_detector_failure="block"):
     engine._detectors = [(d.name, d) for d in detectors]
     engine._construction_failures = []
 
-    # The failure policy is not yet a first-class policy field — it defaults in
-    # the route until the activation preflight lands, at which point the default
-    # flips to "block". Patch the default so these tests exercise both branches.
-    import app.routes.guard as guard_mod
-
-    guard_mod._DEFAULT_ON_DETECTOR_FAILURE = on_detector_failure
+    # on_detector_failure is a real policy field; set it on the live engine's
+    # policy so both branches are exercised through the same path production
+    # uses. It defaults to "report" until the activation preflight lands.
+    engine._policy.on_detector_failure = OnDetectorFailure(on_detector_failure)
     return engine
 
 

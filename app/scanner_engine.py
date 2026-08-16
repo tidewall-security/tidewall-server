@@ -23,7 +23,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.config import PolicyConfig
+from app.config import OnDetectorFailure, PolicyConfig
 from app.detectors.base import BaseDetector, DetectorStatus, FailureCode
 
 logger = logging.getLogger(__name__)
@@ -128,6 +128,21 @@ _DETECTOR_REGISTRY: dict[str, tuple[str, str]] = {
     "competitors": ("app.detectors.competitors", "CompetitorsDetector"),
     "emoji": ("app.detectors.emoji_detector", "EmojiDetector"),
 }
+
+
+def _detector_applies(name: str, event_type: str) -> bool:
+    """True if *name* would run for *event_type*.
+
+    Two detectors are event-scoped. Keeping the rule in one place means the
+    construction-failure seeding and the live scan loop cannot disagree about
+    whether a detector was expected to run — if they did, a detector could be
+    skipped as inapplicable while simultaneously being reported as a failure.
+    """
+    if name == "malicious_entity":
+        return event_type == "output"
+    if name == "mcp_validation":
+        return event_type == "tool_listing"
+    return True
 
 
 def _make_detector(
@@ -246,14 +261,40 @@ class ScannerEngine:
         """True if every enabled blocking/redacting detector was constructed."""
         return not any(f.enforcing for f in self._construction_failures)
 
-    def _seed_construction_failures(self, result: ScanResult) -> None:
+    @property
+    def on_detector_failure(self) -> OnDetectorFailure:
+        """What the policy says to do when an enforcing detector fails."""
+        return self._policy.on_detector_failure
+
+    def _seed_construction_failures(
+        self,
+        result: ScanResult,
+        event_type: str | None = None,
+        redactors_only: bool = False,
+    ) -> None:
         """Report construction failures on every scan, not just at startup.
 
         A detector that failed to build is missing for the lifetime of the
         engine, so every request it should have covered is degraded — not only
         the first one after boot.
+
+        Two filters keep that from over-reporting:
+
+        ``event_type`` — a detector that would not have run for this event was
+        not going to contribute a verdict anyway, so its absence is a skip
+        rather than a degradation. Without this a failed ``malicious_entity``
+        (output-only) would degrade every input scan.
+
+        ``redactors_only`` — :meth:`scan_single` is a redactor-only pass, so a
+        failed blocker or reporter is immaterial to it. Without this, an
+        unrelated failed reporter would mark every message reconstruction
+        degraded and discard perfectly good redacted output.
         """
         for failure in self._construction_failures:
+            if redactors_only and failure.action != "redact":
+                continue
+            if event_type is not None and not _detector_applies(failure.name, event_type):
+                continue
             result.record_failure(failure.name, failure.code, failure.action)
 
     @classmethod
@@ -263,6 +304,7 @@ class ScannerEngine:
         report_only: bool = False,
         session_factory: Any = None,
         use_onnx: bool = False,
+        on_detector_failure: OnDetectorFailure = OnDetectorFailure.REPORT,
     ) -> ScannerEngine:
         """Build a ScannerEngine from a raw detectors dict (from DB RuleSet.detectors)."""
         from app.config import DetectorConfig, PolicyConfig
@@ -270,6 +312,7 @@ class ScannerEngine:
         policy = PolicyConfig(
             name="_from_detectors",
             report_only=report_only,
+            on_detector_failure=on_detector_failure,
             detectors={name: DetectorConfig(**cfg) for name, cfg in detectors.items() if isinstance(cfg, dict)},
         )
         return cls(policy, session_factory=session_factory, use_onnx=use_onnx)
@@ -289,15 +332,11 @@ class ScannerEngine:
     ) -> ScanResult:
         """Run all enabled detectors on *text* and return aggregated result."""
         result = ScanResult()
-        self._seed_construction_failures(result)
+        self._seed_construction_failures(result, event_type=event_type)
         current_text = text
 
         for det_name, detector in self._detectors:
-            # malicious_entity only runs on output
-            if det_name == "malicious_entity" and event_type != "output":
-                continue
-
-            if det_name == "mcp_validation" and event_type != "tool_listing":
+            if not _detector_applies(det_name, event_type):
                 continue
 
             try:
@@ -372,7 +411,7 @@ class ScannerEngine:
         reusing the same vault (so unredact works across all messages).
         """
         result = ScanResult()
-        self._seed_construction_failures(result)
+        self._seed_construction_failures(result, redactors_only=True)
         current_text = text
 
         for det_name, detector in self._detectors:

@@ -378,3 +378,73 @@ def test_benign_match_does_not_excuse_an_earlier_failure():
 
     assert r.status is DetectorStatus.FAILED
     assert r.failure_code is FailureCode.SCAN_FAILED
+
+
+# ---------------------------------------------------------------------------
+# Invariant hardening (review findings)
+# ---------------------------------------------------------------------------
+
+
+def test_raw_string_status_does_not_bypass_invariants():
+    """`status="failed"` used to slip past every identity check."""
+    with pytest.raises(ValueError, match="FAILED and detected"):
+        DetectorResult(detected=True, status="failed", failure_code=FailureCode.SCAN_FAILED)
+
+
+def test_invalid_status_is_rejected_not_treated_as_ok():
+    from app.detectors.base import ComponentStatus
+
+    with pytest.raises(ValueError, match="not a valid DetectorStatus"):
+        DetectorResult(status="nonsense")
+    with pytest.raises(ValueError, match="not a valid DetectorStatus"):
+        ComponentStatus(status="nonsense")
+
+
+def test_component_status_enforces_the_same_invariants():
+    from app.detectors.base import ComponentStatus
+
+    with pytest.raises(ValueError, match="requires a failure_code"):
+        ComponentStatus(status=DetectorStatus.FAILED)
+    with pytest.raises(ValueError, match="requires a skip_reason"):
+        ComponentStatus(status=DetectorStatus.SKIPPED)
+
+
+def test_valid_string_status_is_coerced_to_the_enum():
+    r = DetectorResult(status="ok")
+    assert r.status is DetectorStatus.OK
+
+
+# ---------------------------------------------------------------------------
+# Construction-failure filtering (review findings)
+# ---------------------------------------------------------------------------
+
+
+def test_inapplicable_detector_failure_does_not_degrade_the_scan():
+    """A failed output-only detector must not degrade an input scan."""
+    engine = _engine({"malicious_entity": {"enabled": True, "action": "block"}})
+    engine._construction_failures = [
+        FailedDetector("malicious_entity", FailureCode.MODEL_LOAD_FAILED, action="block")
+    ]
+
+    on_input = engine.scan("hi", event_type="input", vault_id="v", vault=None)
+    on_output = engine.scan("hi", event_type="output", vault_id="v", vault=None)
+
+    assert on_input.enforcement_degraded is False
+    assert on_output.enforcement_degraded is True
+
+
+def test_scan_single_only_reports_redactor_failures():
+    """scan_single is a redactor-only pass.
+
+    A failed reporter must not mark every message reconstruction degraded and
+    discard perfectly good redacted output.
+    """
+    engine = _engine({})
+    engine._construction_failures = [
+        FailedDetector("topic", FailureCode.MODEL_LOAD_FAILED, action="report"),
+        FailedDetector("secret_and_key_entity", FailureCode.DEPENDENCY_MISSING, action="redact"),
+    ]
+
+    result = engine.scan_single("text", vault_id="v", vault=None)
+
+    assert [f.name for f in result.failures] == ["secret_and_key_entity"]
