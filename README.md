@@ -158,7 +158,7 @@ all — the routes are simply not registered.
 - **11 detectors** — prompt injection, PII, secrets, topics/toxicity, language, code, competitors, malicious entities (IP/URL/domain), custom regex, emoji, MCP tool validation
 - **Composite malicious prompt detector** — 4 sub-detectors: generic ML injection, custom malicious list, custom benign list, intent conformance
 - **6 redaction methods** — replacement, mask, partial mask, hash, format-preserving encryption (AES-FF1-256), defang
-- **Per-entity-type rules** — different redaction actions per entity type (e.g., mask SSNs, hash emails, FPE phone numbers)
+- **Per-entity-type rules** — different redaction actions per entity type (e.g., mask SSNs, hash emails, defang URLs)
 - **Threat intelligence** — local IP/domain/URL blocklists with wildcard and CIDR support, ML URL classification
 - **Intent conformance** — embedding similarity checks against global model intent and per-request app intent (system prompt)
 - **MCP validation** — tool name similarity checking for agentic/MCP tool_listing events
@@ -174,7 +174,6 @@ all — the routes are simply not registered.
 - **API key auth with RBAC** — 3 roles (admin/viewer/api), per-collector keys bound to policies, always enforced
 - **OCSF event export** — Data Security Finding (class 2006) with MITRE ATLAS mapping, AIDR-style export format option
 - **Webhook + syslog dispatch** — fire-and-forget export to configured targets, status-based event filtering
-- **AES-FF1-256 FPE** — real format-preserving encryption with deterministic/non-deterministic modes, stateless unredact
 - **Activity audit log** — records all config changes with old/new JSON snapshots
 - **SQLAlchemy + Alembic** — 10-table schema with automatic migrations on startup
 - **Web dashboard** — Visibility (Sankey), Findings (table), Policies (editor), Sandbox (prompt tester)
@@ -228,7 +227,7 @@ credential you cannot see.
 | Method | Path | Role | Description |
 |--------|------|------|-------------|
 | `POST` | `/v1/guard_chat_completions` | api+ | Guard AI interactions |
-| `POST` | `/v1/unredact` | api+ | Reverse redactions (vault or FPE) |
+| `POST` | `/v1/unredact` | api+ | Reverse redactions via the vault |
 | `GET` | `/v1/policies` | viewer+ | List policies |
 | `POST` | `/v1/policies` | admin | Create policy |
 | `GET` | `/v1/policies/{id}` | viewer+ | Get policy |
@@ -253,9 +252,6 @@ credential you cannot see.
 | `POST` | `/v1/settings/prompt-lists` | admin | Create prompt list entry |
 | `PUT` | `/v1/settings/prompt-lists/{id}` | admin | Update entry |
 | `DELETE` | `/v1/settings/prompt-lists/{id}` | admin | Delete entry |
-| `GET` | `/v1/settings/fpe` | admin | FPE encryption settings |
-| `PUT` | `/v1/settings/fpe` | admin | Set custom tweak (deterministic mode) |
-| `DELETE` | `/v1/settings/fpe/tweak` | admin | Remove tweak (non-deterministic) |
 | `GET` | `/v1/settings/export-targets` | admin | List export targets |
 | `POST` | `/v1/settings/export-targets` | admin | Create export target |
 | `PATCH` | `/v1/settings/export-targets/{id}` | admin | Update target |
@@ -281,7 +277,6 @@ Per-entity-type rules — each entity type within a detector can have its own ac
 | Mask | `redacted:masked` | `234-56-7890` → `***********` | No |
 | Partial Mask | `redacted:masked` | `234-56-7890` → `***-**-7890` | No |
 | Hash | `redacted:hashed` | `234-56-7890` → `a1b2c3d4e5f6` | No |
-| FPE | `redacted:encrypted` | `(555) 123-4567` → `(842) 967-3201` | Yes (via `/v1/unredact`) |
 | Defang | `defanged` | `http://evil.com` → `http://evil[.]com` | No |
 
 ```yaml
@@ -300,7 +295,7 @@ confidential_and_pii_entity:
       action: hash
       salt: "my-salt"
     - type: IP_ADDRESS
-      action: fpe
+      action: redact
 ```
 
 ---
@@ -356,7 +351,7 @@ Export guard events to external systems in OCSF Data Security Finding (class 200
 |---|---|---|
 | API contract | `guard_chat_completions` | Same |
 | Detectors | 10 (proprietary models) | 11 (open-source models + MCP validation) |
-| Redaction methods | 6 (replace, mask, partial, hash, FPE, defang) | 6 (same methods, AES-FF1-256 FPE) |
+| Redaction methods | 5 (replace, mask, partial, hash, defang) | 6 (same, plus format-preserving encryption) |
 | Policy model | Per-event-type rule sets | Same |
 | Access rules | Metadata conditions, sequential evaluation | Same (6 operators) |
 | Status values | 5 (allowed/reported/blocked/alerted/transformed) | Same |

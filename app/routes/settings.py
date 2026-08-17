@@ -1,8 +1,7 @@
-"""Settings endpoints — global prompt lists, threat intel, FPE, etc."""
+"""Settings endpoints — global prompt lists, threat intel, export targets."""
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -96,68 +95,6 @@ async def delete_prompt_list(entry_id: str, request: Request) -> None:
         svc.delete(entry_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    finally:
-        session.close()
-
-
-@router.get("/fpe", dependencies=[Depends(require_role("admin"))])
-async def get_fpe_settings(request: Request) -> dict:
-    session = request.app.state.session_factory()
-    try:
-        from app.db.models import FPESettings
-
-        settings = session.query(FPESettings).first()
-        if settings is None:
-            return {"deterministic": False, "has_custom_tweak": False, "key_exists": False}
-        return {
-            "deterministic": settings.default_tweak is not None,
-            "has_custom_tweak": settings.default_tweak is not None,
-            "key_exists": True,
-            "created_at": str(settings.created_at),
-        }
-    finally:
-        session.close()
-
-
-class SetTweakRequest(BaseModel):
-    tweak: str  # hex string, 14 chars (7 bytes)
-
-
-@router.put("/fpe", dependencies=[Depends(require_role("admin"))])
-async def set_fpe_tweak(body: SetTweakRequest, request: Request) -> dict:
-    if len(body.tweak) != 14:
-        raise HTTPException(status_code=400, detail="Tweak must be 14 hex characters (7 bytes)")
-    try:
-        bytes.fromhex(body.tweak)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Tweak must be valid hex")
-
-    session = request.app.state.session_factory()
-    try:
-        from app.db.models import FPESettings
-
-        settings = session.query(FPESettings).first()
-        if settings is None:
-            settings = FPESettings(id="singleton", key=os.urandom(32), default_tweak=body.tweak)
-            session.add(settings)
-        else:
-            settings.default_tweak = body.tweak
-        session.commit()
-        return {"deterministic": True, "has_custom_tweak": True}
-    finally:
-        session.close()
-
-
-@router.delete("/fpe/tweak", status_code=204, dependencies=[Depends(require_role("admin"))])
-async def delete_fpe_tweak(request: Request) -> None:
-    session = request.app.state.session_factory()
-    try:
-        from app.db.models import FPESettings
-
-        settings = session.query(FPESettings).first()
-        if settings:
-            settings.default_tweak = None
-            session.commit()
     finally:
         session.close()
 

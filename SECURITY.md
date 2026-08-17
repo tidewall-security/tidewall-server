@@ -35,7 +35,7 @@ Please include:
 
 - Authentication / authorization bypasses (API key, device token, RBAC).
 - Detector evasion — prompts that bypass blockers when they shouldn't.
-- Vault / unredact issues (PII leakage, FPE key handling).
+- Vault / unredact issues (PII leakage, key handling).
 - SQL injection or path traversal.
 - Open redirects, SSRF, or insecure deserialization.
 

@@ -1,4 +1,9 @@
-"""POST /v1/unredact — reverse a previous redaction using the vault or FPE."""
+"""POST /v1/unredact — reverse a previous redaction using the vault.
+
+``fpe_context`` keeps its name for now despite FPE having been removed: it is
+the caller-visible token that identifies a vault, and renaming it belongs with
+the vault workstream rather than a deletion.
+"""
 
 from __future__ import annotations
 
@@ -30,28 +35,11 @@ async def unredact(body: UnredactRequest, request: Request) -> UnredactResponse:
     request_time = _now_iso()
     request_id = f"tw_{uuid.uuid4().hex[:16]}"
 
-    # FPE-based unredaction
-    if "algorithm" in ctx_json:
-        session = request.app.state.session_factory()
-        try:
-            from app.services.fpe_service import FPEService
+    # The FPE branch accepted a caller-supplied algorithm, tweak and radix and
+    # decrypted under a single global key — an unauthenticated decryption
+    # oracle for a construction that was withdrawn from NIST SP 800-38G.
+    # Removed with the rest of FPE.
 
-            fpe = FPEService(session)
-            restored = fpe.decrypt(str(body.redacted_data), body.fpe_context)
-            return UnredactResponse(
-                request_id=request_id,
-                request_time=request_time,
-                response_time=_now_iso(),
-                status="Success",
-                summary="Unredacted via FPE",
-                result=UnredactResult(data=restored),
-            )
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"FPE decryption failed: {e}")
-        finally:
-            session.close()
-
-    # Vault-based unredaction (TidewallVault dict lookup)
     vault_mgr = request.app.state.vault_manager
     vault_id = ctx_json.get("vault_id")
     if not vault_id:

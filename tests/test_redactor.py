@@ -1,5 +1,4 @@
 """Tests for the Redactor service — 5 redaction methods."""
-import pytest
 
 
 def test_replacement():
@@ -120,24 +119,27 @@ def test_report_action():
     assert result["action_label"] == "reported"
 
 
-@pytest.fixture
-def db_session_for_fpe():
-    from app.db.engine import get_engine, get_session_factory
-    from app.db.models import Base
-    engine = get_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
-    Session = get_session_factory(engine)
-    session = Session()
-    yield session
-    session.close()
+def test_fpe_action_is_rejected_at_policy_write_time():
+    """FPE was removed; a policy asking for it must not silently do something else.
+
+    The action previously fell through to replacement whenever no FPE service
+    was injected — which was always, since no production caller ever supplied
+    one. An operator selecting encryption received replacement and was told
+    nothing. Now the policy is rejected with an explanation.
+    """
+    import pytest as _pytest
+
+    from app.services.policy_validation import PolicyValidationError, validate_action
+
+    with _pytest.raises(PolicyValidationError, match="format-preserving encryption was removed"):
+        validate_action("fpe", where="detectors.confidential_and_pii_entity.action")
 
 
-def test_fpe_encrypts_digits(db_session_for_fpe):
+def test_redactor_has_no_fpe_action():
     from app.services.redactor import Redactor
-    from app.services.fpe_service import FPEService
-    fpe = FPEService(db_session_for_fpe)
-    r = Redactor(fpe_service=fpe)
-    result = r.redact("2345678901", "US_SSN", {"action": "fpe"})
-    assert result["action_label"] == "redacted:encrypted"
-    assert result["redacted"] != "2345678901"
-    assert "fpe_context" in result
+
+    result = Redactor().redact("2345678901", "US_SSN", {"action": "fpe"})
+    # Unknown actions fall through to the default; the point is that nothing
+    # claims to have encrypted anything.
+    assert result["action_label"] != "redacted:encrypted"
+    assert "fpe_context" not in result

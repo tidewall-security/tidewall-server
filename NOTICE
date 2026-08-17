@@ -19,7 +19,6 @@ This product includes software developed by:
 - SQLAlchemy (https://www.sqlalchemy.org/) — MIT License
 - Alembic (https://alembic.sqlalchemy.org/) — MIT License
 - Pydantic (https://docs.pydantic.dev/) — MIT License
-- ff3 (https://github.com/mysto/python-fpe) — Apache License 2.0
 - sentence-transformers (https://www.sbert.net/) — Apache License 2.0
 - HuggingFace Transformers (https://github.com/huggingface/transformers) — Apache License 2.0
 - PyTorch (https://pytorch.org/) — BSD-3-Clause License

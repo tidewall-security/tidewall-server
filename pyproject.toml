@@ -32,7 +32,6 @@ dependencies = [
     "pydantic>=2.0",
     "sqlalchemy>=2.0",
     "alembic>=1.13",
-    "ff3>=1.0",
     "sentence-transformers>=2.0",
     "transformers>=4.40.0",
     "torch>=2.0",
