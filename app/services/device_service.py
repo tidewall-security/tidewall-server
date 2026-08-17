@@ -23,6 +23,7 @@ def _as_utc(value: datetime) -> datetime:
     """SQLite returns naive datetimes; compare them as UTC."""
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value
 
+
 # 37 sites with mode "block"
 # Site modes keyed by alias (must match extension's SITE_REGISTRY aliases)
 _SITES = {
