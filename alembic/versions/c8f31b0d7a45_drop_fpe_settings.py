@@ -35,12 +35,19 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Recreates the shape only. The key is not restored — it was destroyed on
-    # upgrade, deliberately, and re-adding an empty table is the honest inverse.
+    # Recreates the original shape exactly, as declared by 67c1c76a6714: the
+    # column is `default_tweak`, not `tweak`, and `created_at` is NOT NULL. An
+    # earlier version of this downgrade got both wrong, which would have left a
+    # reversed database whose schema quietly differed from the one the code
+    # that reads it expects.
+    #
+    # The key itself is not restored — it was destroyed on upgrade,
+    # deliberately. An empty table is the honest inverse.
     op.create_table(
         "fpe_settings",
-        sa.Column("id", sa.String(), primary_key=True),
+        sa.Column("id", sa.String(), nullable=False),
         sa.Column("key", sa.LargeBinary(), nullable=False),
-        sa.Column("tweak", sa.String(), nullable=True),
-        sa.Column("created_at", sa.DateTime(), nullable=True),
+        sa.Column("default_tweak", sa.String(), nullable=True),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.PrimaryKeyConstraint("id"),
     )
