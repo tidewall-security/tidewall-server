@@ -252,6 +252,44 @@ def test_a_rotated_token_cannot_be_used_to_refresh_again(db_session):
         svc.refresh_device(device_id=device_id, access_token_hash=hash_key(first_raw))
 
 
+def test_the_guard_is_the_conditional_write_not_the_read(db_session, monkeypatch):
+    """Prove the check that actually holds under concurrency.
+
+    The early `replaced_by_id is not None` check is only a fast path: two
+    concurrent refreshes can both read the token as unrotated and pass it. What
+    makes double-minting impossible is that the rotation is written as an
+    UPDATE conditional on the token still being unrotated. This drives that
+    branch by rotating the row in the window between the read and the write —
+    without it the rollback path is never executed by any test.
+    """
+    raw_rt, _ = _reg_token(db_session)
+    enrolled = _enrol(db_session, raw_rt, "inst-race")
+    device_id = enrolled["result"]["device_id"]
+    raw = enrolled["result"]["access_token"]["token"]
+    tokens_before = db_session.query(AccessToken).count()
+
+    svc = DeviceService(db_session)
+    real_issue = svc._issue_access_token
+
+    def rotate_behind_our_back(arg):
+        result = real_issue(arg)
+        db_session.query(AccessToken).filter_by(token_hash=hash_key(raw)).update(
+            {"replaced_by_id": "a-successor-from-the-other-request"}, synchronize_session=False
+        )
+        return result
+
+    monkeypatch.setattr(svc, "_issue_access_token", rotate_behind_our_back)
+
+    with pytest.raises(PermissionError, match="already been rotated"):
+        svc.refresh_device(device_id=device_id, access_token_hash=hash_key(raw))
+
+    db_session.expire_all()
+    assert db_session.query(AccessToken).count() == tokens_before, (
+        "the successor issued before the losing write must be rolled back, "
+        "not left behind as a second live credential"
+    )
+
+
 def test_replaying_a_rotated_token_mints_nothing_and_extends_nothing(db_session):
     """The replay must be inert, not merely refused.
 
