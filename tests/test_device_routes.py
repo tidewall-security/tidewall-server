@@ -153,10 +153,11 @@ def _create_rt_token(client, admin_key):
     return resp.json()["token"]
 
 
-def _check_device(client, rt_token, fingerprint="fp-abc-123"):
+def _enrol_device(client, rt_token, installation_id="inst-abc-123", fingerprint="fp-abc-123"):
     return client.post(
-        "/v1/devices/check",
+        "/v1/devices/enrol",
         json={
+            "installation_id": installation_id,
             "fingerprint": fingerprint,
             "device_name": "Test Laptop",
             "user_name": "alice",
@@ -169,11 +170,11 @@ def _check_device(client, rt_token, fingerprint="fp-abc-123"):
     )
 
 
-def test_device_check_registers_new_device(setup):
+def test_enrol_registers_new_device(setup):
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
-    resp = _check_device(client, rt_token)
-    assert resp.status_code == 200
+    resp = _enrol_device(client, rt_token)
+    assert resp.status_code == 201
     data = resp.json()
     assert data["status"] == "Success"
     assert "access_token" in data["result"]
@@ -182,23 +183,57 @@ def test_device_check_registers_new_device(setup):
     assert at["expires_in"] == 3600
 
 
-def test_device_check_refresh_returns_new_at(setup):
+def test_refresh_with_the_devices_own_token_returns_a_new_one(setup):
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
-    resp1 = _check_device(client, rt_token, fingerprint="fp-refresh-1")
-    at1 = resp1.json()["result"]["access_token"]["token"]
+    enrolled = _enrol_device(client, rt_token, installation_id="inst-refresh-1").json()["result"]
+    at1 = enrolled["access_token"]["token"]
 
-    resp2 = _check_device(client, rt_token, fingerprint="fp-refresh-1")
-    at2 = resp2.json()["result"]["access_token"]["token"]
+    resp = client.post(
+        f"/v1/devices/{enrolled['device_id']}/refresh",
+        json={"device_name": "Renamed"},
+        headers={"Authorization": f"Bearer {at1}"},
+    )
 
-    assert at1 != at2  # Each check issues a new token
+    assert resp.status_code == 200
+    assert resp.json()["result"]["access_token"]["token"] != at1
+
+
+def test_a_registration_token_cannot_refresh(setup):
+    """rt_ is constrained to enrolment; it must not reach a refresh."""
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+    enrolled = _enrol_device(client, rt_token, installation_id="inst-victim").json()["result"]
+
+    resp = client.post(
+        f"/v1/devices/{enrolled['device_id']}/refresh",
+        json={},
+        headers={"Authorization": f"Bearer {rt_token}"},
+    )
+
+    assert resp.status_code == 403
+
+
+def test_another_devices_token_cannot_refresh(setup):
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+    victim = _enrol_device(client, rt_token, installation_id="inst-victim2").json()["result"]
+    attacker = _enrol_device(client, rt_token, installation_id="inst-attacker").json()["result"]
+
+    resp = client.post(
+        f"/v1/devices/{victim['device_id']}/refresh",
+        json={},
+        headers={"Authorization": f"Bearer {attacker['access_token']['token']}"},
+    )
+
+    assert resp.status_code == 403
 
 
 def test_at_token_works_for_guard_like_call(setup):
     """An at_ token should resolve to role=api and allow viewer-level access."""
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
-    resp = _check_device(client, rt_token)
+    resp = _enrol_device(client, rt_token)
     at_token = resp.json()["result"]["access_token"]["token"]
 
     # Use the at_ token to list devices (requires viewer role; at_ gives api role)
@@ -213,7 +248,7 @@ def test_at_token_works_for_guard_like_call(setup):
 def test_list_devices_with_admin(setup):
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
-    _check_device(client, rt_token)
+    _enrol_device(client, rt_token)
 
     resp = client.get(
         "/v1/devices",
@@ -228,7 +263,7 @@ def test_list_devices_with_admin(setup):
 def test_patch_device_status(setup):
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
-    _check_device(client, rt_token)
+    _enrol_device(client, rt_token)
 
     devices = client.get(
         "/v1/devices",
@@ -248,7 +283,7 @@ def test_patch_device_status(setup):
 def test_delete_device(setup):
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
-    _check_device(client, rt_token)
+    _enrol_device(client, rt_token)
 
     devices = client.get(
         "/v1/devices",
@@ -295,7 +330,7 @@ def test_at_token_rejected_for_admin_only_paths(setup):
     """at_ tokens resolve to role=api which should not access admin endpoints."""
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
-    resp = _check_device(client, rt_token)
+    resp = _enrol_device(client, rt_token)
     at_token = resp.json()["result"]["access_token"]["token"]
 
     # Try to create a registration token (admin only)
@@ -311,7 +346,7 @@ def test_revoked_device_at_token_rejected(setup):
     """After revoking a device, its at_ token should be rejected."""
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
-    resp = _check_device(client, rt_token)
+    resp = _enrol_device(client, rt_token)
     at_token = resp.json()["result"]["access_token"]["token"]
 
     # Revoke the device

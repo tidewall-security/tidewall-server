@@ -120,8 +120,8 @@ def test_middleware_rejects_an_uncredentialed_request():
     assert resp.status_code == 401
 
 
-def test_middleware_rt_prefix_routes_to_check_only():
-    """rt_ tokens should only be allowed on /v1/devices/check paths."""
+def test_middleware_rt_prefix_routes_to_enrol_only():
+    """rt_ tokens are constrained to enrolment; they must not reach anything else."""
     app, SessionLocal = _make_test_app()
     session = SessionLocal()
     raw_rt = generate_key(prefix="rt")
@@ -139,10 +139,11 @@ def test_middleware_rt_prefix_routes_to_check_only():
     resp = client.get("/v1/test", headers={"Authorization": f"Bearer {raw_rt}"})
     assert resp.status_code == 403
 
-    # /v1/devices/check should pass middleware (even if route logic fails for other reasons)
+    # /v1/devices/enrol passes middleware (route logic may still fail)
     resp2 = client.post(
-        "/v1/devices/check",
+        "/v1/devices/enrol",
         json={
+            "installation_id": "inst-mw-test",
             "fingerprint": "fp-mw-test",
             "device_name": "MWTest",
             "user_name": "bob",
@@ -154,4 +155,4 @@ def test_middleware_rt_prefix_routes_to_check_only():
         headers={"Authorization": f"Bearer {raw_rt}"},
     )
     # Should reach the route handler (200) not be blocked by middleware
-    assert resp2.status_code == 200
+    assert resp2.status_code == 201  # enrolment creates

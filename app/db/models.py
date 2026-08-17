@@ -265,13 +265,25 @@ class RegistrationToken(Base):
     created_by: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Scope an enrolling device inherits. Without this a registration token
+    # conferred no policy at all — the middleware set policy_id = None — so
+    # enrolled devices had no binding to constrain them.
+    policy_id: Mapped[str | None] = mapped_column(String, ForeignKey("policies.id", ondelete="SET NULL"), nullable=True)
 
 
 class Device(Base):
     __tablename__ = "devices"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    fingerprint: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    # High-entropy value the client generates once and stores. This is the
+    # device's identity.
+    installation_id: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    # Advisory metadata only, deliberately NOT unique. It was previously the
+    # unique key AND the lookup used to authorise a refresh, which is what made
+    # P0-11 possible: a client-supplied, guessable value is neither identity
+    # nor proof. Being unique also let one client deny enrolment to another
+    # simply by claiming its fingerprint.
+    fingerprint: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     device_name: Mapped[str] = mapped_column(String, nullable=False)
     user_name: Mapped[str] = mapped_column(String, nullable=False)
     user_email: Mapped[str] = mapped_column(String, nullable=False)
@@ -295,3 +307,8 @@ class AccessToken(Base):
     device_id: Mapped[str] = mapped_column(String, ForeignKey("devices.id", ondelete="CASCADE"), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # Set when this token is superseded by a rotation, so the replacement can
+    # be traced and the old one expired with a short overlap rather than
+    # deleted outright — an in-flight request must not fail because a refresh
+    # happened to land first.
+    replaced_by_id: Mapped[str | None] = mapped_column(String, nullable=True)
