@@ -25,3 +25,34 @@ This product includes software developed by:
 - Microsoft Presidio (https://github.com/microsoft/presidio) — MIT License
 - detect-secrets (https://github.com/Yelp/detect-secrets) — Apache License 2.0
 - spaCy (https://spacy.io/) — MIT License
+
+This product distributes pre-trained model artifacts:
+
+The Docker image bakes the following models into /opt/models. They are
+redistributed under their own licences, which are separate from this product's
+Apache-2.0 licence and from the licences of the libraries above. Each is pinned
+to an immutable commit in app/model_registry.py.
+
+- protectai/deberta-v3-base-prompt-injection-v2 — Apache License 2.0
+  https://huggingface.co/protectai/deberta-v3-base-prompt-injection-v2
+- unitary/unbiased-toxic-roberta — Apache License 2.0
+  https://huggingface.co/unitary/unbiased-toxic-roberta
+- MoritzLaurer/roberta-base-zeroshot-v2.0-c — MIT License
+  https://huggingface.co/MoritzLaurer/roberta-base-zeroshot-v2.0-c
+- papluca/xlm-roberta-base-language-detection — MIT License
+  https://huggingface.co/papluca/xlm-roberta-base-language-detection
+- philomath-1209/programming-language-identification — WTFPL
+  https://huggingface.co/philomath-1209/programming-language-identification
+  NOTE: the WTFPL is extremely permissive — it grants essentially unrestricted
+  use — but it is not OSI-approved and some organisations' policies reject it
+  outright. This model is used by the `code` detector, which is ENABLED by
+  default (policy.yaml). An organisation whose policy excludes the WTFPL can
+  set `code.enabled: false`, which disables programming-language
+  identification and affects nothing else.
+- kmack/malicious-url-detection — Apache License 2.0
+  https://huggingface.co/kmack/malicious-url-detection
+- sentence-transformers/all-MiniLM-L6-v2 — Apache License 2.0
+  https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
+- explosion/spacy-models en_core_web_lg 3.8.0 — MIT License
+  https://github.com/explosion/spacy-models
+

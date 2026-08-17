@@ -31,7 +31,6 @@ class Settings(BaseModel):
     # longer decides who may administer it.
     HOST: str = "0.0.0.0"
     PORT: int = 8080
-    USE_ONNX: bool = False
     # Operator-supplied first admin credential. Consulted only when no API
     # keys exist yet; only its hash is stored.
     # Tidewall never generates this, because a generated value would have to be

@@ -6,9 +6,13 @@
   ``threshold``, we flag the topic.
 
 - **Toxicity** — ``unitary/unbiased-toxic-roberta`` as a multi-label
-  ``text-classification`` pipeline. The model emits scores per toxicity
-  axis (toxic, severe_toxic, obscene, threat, insult, identity_hate);
-  we take the max and flag when it exceeds ``toxicity_threshold``.
+  ``text-classification`` pipeline. It emits 16 labels, of which only seven
+  describe harm (toxicity, severe_toxicity, obscene, identity_attack, insult,
+  threat, sexual_explicit). The remaining nine are identity-PRESENCE
+  attributes that score highly when a group is merely mentioned, so the score
+  is the max over the harm labels only — see ``_TOXICITY_HARM_LABELS``. This
+  docstring previously listed the Jigsaw label set, which this model does not
+  emit, and the code took the max over all 16.
 
 Both sub-detectors are independent — either may be configured without
 the other.

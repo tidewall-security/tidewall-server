@@ -122,7 +122,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # --- NEW: PolicyService (DB-backed policy resolution) ---
     from app.services.policy_service import PolicyService
 
-    app.state.policy_service = PolicyService(session_factory=SessionLocal, use_onnx=settings.USE_ONNX)
+    app.state.policy_service = PolicyService(session_factory=SessionLocal)
 
     # Install the operator-supplied first admin key if the database has none.
     # The refusal for a missing key happened earlier, before any database

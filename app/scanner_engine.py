@@ -200,11 +200,9 @@ class ScannerEngine:
         self,
         policy: PolicyConfig,
         session_factory: Any = None,
-        use_onnx: bool = False,
     ) -> None:
         self._policy = policy
         self._session_factory = session_factory
-        self._use_onnx = use_onnx
         # ALL detectors initialized once at startup
         self._detectors: list[tuple[str, BaseDetector]] = []
         # Detectors the policy enabled but which could not be constructed.
@@ -229,7 +227,6 @@ class ScannerEngine:
                 continue
 
             cfg_dict = det_cfg.model_dump()
-            cfg_dict["use_onnx"] = use_onnx
             if det_name == "malicious_prompt" and self._session_factory:
                 detector, code = _make_detector(det_name, cfg_dict, session_factory=self._session_factory)
             else:
@@ -330,7 +327,6 @@ class ScannerEngine:
         detectors: dict[str, dict[str, Any]],
         report_only: bool = False,
         session_factory: Any = None,
-        use_onnx: bool = False,
         on_detector_failure: OnDetectorFailure = OnDetectorFailure.REPORT,
     ) -> ScannerEngine:
         """Build a ScannerEngine from a raw detectors dict (from DB RuleSet.detectors)."""
@@ -342,7 +338,7 @@ class ScannerEngine:
             on_detector_failure=on_detector_failure,
             detectors={name: DetectorConfig(**cfg) for name, cfg in detectors.items() if isinstance(cfg, dict)},
         )
-        return cls(policy, session_factory=session_factory, use_onnx=use_onnx)
+        return cls(policy, session_factory=session_factory)
 
     # -----------------------------------------------------------------------
     # Full scan (all messages concatenated)

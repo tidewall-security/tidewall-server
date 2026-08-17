@@ -329,12 +329,16 @@ Export guard events to external systems in OCSF Data Security Finding (class 200
 
 ## Detector Reference
 
+Every model is pinned to an immutable commit in `app/model_registry.py`, which
+is the single source of truth; the identifiers below are for reference. Model
+licences are listed in `NOTICE`.
+
 | Detector | Engine | ML Model | Actions |
 |---|---|---|---|
-| `malicious_prompt` | HF text-classification + custom lists + intent conformance | `vijil/vijil_dome_prompt_injection_detection` (default) + `all-MiniLM-L6-v2` | Block, Report |
+| `malicious_prompt` | HF text-classification + custom lists + intent conformance | `protectai/deberta-v3-base-prompt-injection-v2` + `sentence-transformers/all-MiniLM-L6-v2` | Block, Report |
 | `confidential_and_pii_entity` | Presidio Analyzer + Anonymizer | `en_core_web_lg` (spaCy) + Presidio recognizers | 6 redaction methods |
 | `secret_and_key_entity` | detect-secrets | 18 vendor pattern detectors (AWS, GitHub, JWT, Stripe, …) | 6 redaction methods |
-| `malicious_entity` | Entity extraction + threat intel + HF text-classification | `DunnBC22/codebert-base-Malicious_URLs` | Defang, Block, Report |
+| `malicious_entity` | Entity extraction + threat intel + HF text-classification | `kmack/malicious-url-detection` | Defang, Block, Report |
 | `mcp_validation` | SequenceMatcher (stdlib) | N/A (structural check) | Block, Report |
 | `topic` | HF zero-shot + text-classification | `MoritzLaurer/roberta-base-zeroshot-v2.0-c` + `unitary/unbiased-toxic-roberta` | Block, Report |
 | `language` | HF text-classification | `papluca/xlm-roberta-base-language-detection` | Block, Report |

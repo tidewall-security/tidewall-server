@@ -1,6 +1,5 @@
 FROM python:3.12-slim AS builder
 
-ARG USE_ONNX=false
 
 WORKDIR /build
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
@@ -13,12 +12,10 @@ COPY pyproject.toml .
 # Install CPU-only PyTorch first (avoids pulling 2GB+ CUDA variant)
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir .
-RUN if [ "$USE_ONNX" = "true" ]; then pip install --no-cache-dir onnxruntime optimum; fi
 
 # Pre-download all ML models into the image
 ENV HF_HOME=/opt/models
 ENV TRANSFORMERS_CACHE=/opt/models
-ENV USE_ONNX=$USE_ONNX
 # prewarm.py reads app/model_registry.py for the pinned revisions, so the
 # builder stage needs the package too. Copying only prewarm.py made the build
 # fail with ModuleNotFoundError before it fetched anything — the same class of
