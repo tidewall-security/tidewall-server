@@ -8,20 +8,23 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-COPY pyproject.toml .
+# Everything Hatch needs to build the project. `pip install .` reads the
+# readme, licence and notice declared in pyproject metadata and packages the
+# `app` wheel target, so copying pyproject alone failed with
+# "Readme file does not exist: README.md" before installing anything.
+COPY pyproject.toml README.md LICENSE NOTICE ./
+COPY app ./app
+
 # Install CPU-only PyTorch first (avoids pulling 2GB+ CUDA variant)
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir .
 
-# Pre-download all ML models into the image
+# Pre-download all ML models into the image. prewarm.py reads
+# app/model_registry.py for the pinned revisions, so `app` must already be
+# present — it is, from the copy above.
 ENV HF_HOME=/opt/models
 ENV TRANSFORMERS_CACHE=/opt/models
-# prewarm.py reads app/model_registry.py for the pinned revisions, so the
-# builder stage needs the package too. Copying only prewarm.py made the build
-# fail with ModuleNotFoundError before it fetched anything — the same class of
-# defect as the 401'ing model reference this change exists to fix.
 COPY prewarm.py .
-COPY app ./app
 RUN python prewarm.py
 
 # ---- Runtime stage ----

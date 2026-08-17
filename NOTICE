@@ -28,10 +28,14 @@ This product includes software developed by:
 
 This product distributes pre-trained model artifacts:
 
-The Docker image bakes the following models into /opt/models. They are
-redistributed under their own licences, which are separate from this product's
-Apache-2.0 licence and from the licences of the libraries above. Each is pinned
-to an immutable commit in app/model_registry.py.
+The Docker image redistributes the following model artifacts under their own
+licences, which are separate from this product's Apache-2.0 licence and from
+the licences of the libraries above.
+
+The seven Hugging Face models are downloaded into /opt/models and pinned to an
+immutable commit in app/model_registry.py. The spaCy pipeline is different: it
+is a Python package installed into /opt/venv, pinned by release URL and a
+SHA-256 hash in pyproject.toml rather than by that registry.
 
 - protectai/deberta-v3-base-prompt-injection-v2 — Apache License 2.0
   https://huggingface.co/protectai/deberta-v3-base-prompt-injection-v2
@@ -45,14 +49,20 @@ to an immutable commit in app/model_registry.py.
   https://huggingface.co/philomath-1209/programming-language-identification
   NOTE: the WTFPL is extremely permissive — it grants essentially unrestricted
   use — but it is not OSI-approved and some organisations' policies reject it
-  outright. This model is used by the `code` detector, which is ENABLED by
-  default (policy.yaml). An organisation whose policy excludes the WTFPL can
-  set `code.enabled: false`, which disables programming-language
-  identification and affects nothing else.
+  outright.
+
+  Be clear about what this means in practice. This artifact is downloaded by
+  prewarm.py and baked into every image built from this repository, so the
+  image redistributes it regardless of policy configuration. Setting
+  `code.enabled: false` stops the `code` detector running; it does NOT remove
+  the artifact and is therefore not a licence opt-out.
+
+  An organisation that cannot accept the WTFPL must build an image without it:
+  remove CODE from `ALL` in app/model_registry.py and set `code.enabled: false`
+  in policy.yaml. The detector is then unavailable and nothing else changes.
 - kmack/malicious-url-detection — Apache License 2.0
   https://huggingface.co/kmack/malicious-url-detection
 - sentence-transformers/all-MiniLM-L6-v2 — Apache License 2.0
   https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
 - explosion/spacy-models en_core_web_lg 3.8.0 — MIT License
   https://github.com/explosion/spacy-models
-
