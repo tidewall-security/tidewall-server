@@ -36,7 +36,21 @@ def test_sandbox_clean_allowed(authed_page, server_url, console_errors):
     assert len(js_errors) == 0, f"Console errors: {js_errors}"
 
 
-def test_sandbox_aws_key_blocked(authed_page, server_url, console_errors):
+def test_sandbox_aws_key_blocked_by_injection_detector(authed_page, server_url, console_errors):
+    """The AWS key preset is BLOCKED, but not by the secrets detector.
+
+    Worth spelling out, because the obvious reading is wrong. secret_and_key_
+    entity is action: redact (policy.yaml:24-26), so one would expect
+    TRANSFORMED. What actually happens is that malicious_prompt fires on
+    "Help me use this: AWS_ACCESS_KEY_ID=..." above its 0.9 threshold and
+    blocks; blockers short-circuit, so the secrets detector never runs and its
+    entry in the response is null.
+
+    The original assertion of BLOCKED was therefore correct by accident. The
+    injection model firing on this text is arguably a false positive and is
+    tracked separately; if that changes, this test should start expecting
+    TRANSFORMED and the name should change with it.
+    """
     authed_page.goto(server_url + "/ui/sandbox")
     authed_page.click("button:has-text('Leak AWS Key')")
     authed_page.wait_for_selector("text=BLOCKED", timeout=15000)

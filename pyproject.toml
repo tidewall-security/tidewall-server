@@ -56,6 +56,18 @@ dev = [
     "types-pyyaml>=6.0",
     "pre-commit>=4.0",
 ]
+# Browser tests, opt-in. Kept out of `dev` because Playwright is irrelevant to
+# server work and needs a further ~150MB of browser binaries installed by
+# `playwright install`, which pip does not handle. Install with:
+#   uv sync --group e2e && uv run playwright install chromium
+e2e = [
+    "pytest-playwright>=0.7,<0.8",
+    # Imported directly by tests/e2e/conftest.py. It was previously satisfied
+    # only transitively through a production dependency, which is not a
+    # contract a test can rely on.
+    "requests>=2.32,<3",
+]
+
 
 [project.urls]
 Homepage = "https://tidewall.ai"
@@ -67,7 +79,12 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
-markers = ["e2e: End-to-end browser tests"]
+# The default run is backend-only. The e2e marker was already declared here but
+# nothing deselected it, so these tests were collected on every run and emitted
+# 12 errors — and that constant noise is how the fact that none of them had
+# ever actually executed went unnoticed.
+addopts = "-m 'not e2e'"
+markers = ["e2e: browser tests; need the e2e group and `playwright install chromium`"]
 testpaths = ["tests"]
 
 [tool.hatch.metadata]

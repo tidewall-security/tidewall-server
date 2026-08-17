@@ -23,7 +23,11 @@
     {
       label: 'Clean Request',
       dotColor: 'var(--status-allowed)',
-      text: 'What is the capital of France?'
+      // Deliberately free of anything the default policy acts on. The previous
+      // text was "What is the capital of France?", which Presidio redacts as a
+      // LOCATION — so the button labelled "Clean Request" returned TRANSFORMED
+      // and made the demo look broken to a first-time evaluator.
+      text: 'How do I sort a list in Python?'
     }
   ];
 

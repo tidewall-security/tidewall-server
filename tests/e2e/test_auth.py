@@ -51,9 +51,13 @@ def test_auth_full_flow_enter_key_then_data_loads(page, server_url, admin_key, c
     page.fill("#auth-key-input", admin_key)
     page.click("#auth-key-submit")
 
-    # Overlay should disappear and page content should load
-    page.wait_for_selector("h1", timeout=10000)
-    assert not page.is_visible("#auth-overlay")
+    # Wait for the overlay to go, not for h1.
+    #
+    # The page shell is public now, so its h1 is already in the DOM behind the
+    # overlay before authentication happens. Waiting for h1 therefore returns
+    # immediately and the overlay assertion races the submit handler. The
+    # overlay disappearing is the actual signal that authentication succeeded.
+    page.wait_for_selector("#auth-overlay", state="detached", timeout=10000)
     assert page.text_content("h1").strip() == "Visibility"
 
     # No unexpected JS errors (401 resource loads are expected during auth check)
