@@ -14,11 +14,14 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.model_registry import CODE as _REF
+
 from .base import BaseDetector, DetectorResult, FailureCode
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL = "philomath-1209/programming-language-identification"
+
+_DEFAULT_MODEL = _REF.repo_id
 
 
 class CodeDetector(BaseDetector):
@@ -37,6 +40,7 @@ class CodeDetector(BaseDetector):
             self._pipeline = pipeline(
                 "text-classification",
                 model=model_path,
+                revision=_REF.revision_for(model_path),
                 truncation=True,
                 max_length=512,
                 device=self._device,

@@ -19,12 +19,50 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.model_registry import TOPICS as _TOPICS_REF
+from app.model_registry import TOXICITY as _TOXICITY_REF
+
 from .base import BaseDetector, ComponentStatus, DetectorResult, DetectorStatus, FailureCode, SkipReason
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_TOPICS_MODEL = "MoritzLaurer/roberta-base-zeroshot-v2.0-c"
-_DEFAULT_TOXICITY_MODEL = "unitary/unbiased-toxic-roberta"
+
+_DEFAULT_TOPICS_MODEL = _TOPICS_REF.repo_id
+_DEFAULT_TOXICITY_MODEL = _TOXICITY_REF.repo_id
+
+# `unitary/unbiased-toxic-roberta` emits 16 labels, and only these seven
+# describe harm. The other nine are identity-PRESENCE attributes — male,
+# female, homosexual_gay_or_lesbian, christian, jewish, muslim, black, white,
+# psychiatric_or_mental_illness — which the model scores highly when a group is
+# merely *mentioned*.
+#
+# Taking the maximum across all 16, which is what this did, therefore reported
+# "toxicity" for saying someone is Muslim, or Black, or has a mental illness.
+# In a guard that flags user content, that is discriminatory behaviour rather
+# than a tuning problem, so the harm axes are named explicitly and anything
+# outside this set is ignored.
+# Two vocabularies appear in practice and both are accepted: the original
+# Jigsaw names (toxic, severe_toxic, identity_hate), which this module's
+# docstring was written against, and the `unbiased-toxic-roberta` names
+# (toxicity, severe_toxicity, identity_attack), which the configured model
+# actually emits. The two had drifted apart unnoticed.
+_TOXICITY_HARM_LABELS = frozenset(
+    {
+        # unitary/unbiased-toxic-roberta
+        "toxicity",
+        "severe_toxicity",
+        "identity_attack",
+        "sexual_explicit",
+        # unitary/toxic-bert (Jigsaw)
+        "toxic",
+        "severe_toxic",
+        "identity_hate",
+        # common to both
+        "obscene",
+        "insult",
+        "threat",
+    }
+)
 
 
 class TopicDetector(BaseDetector):
@@ -59,6 +97,7 @@ class TopicDetector(BaseDetector):
                     "zero-shot-classification",
                     model=topics_model,
                     device=self._device,
+                    revision=_TOPICS_REF.revision_for(topics_model),
                 )
                 logger.info("Loaded topics classifier: %s", topics_model)
             except Exception:
@@ -70,6 +109,7 @@ class TopicDetector(BaseDetector):
             self._toxicity_pipeline = pipeline(
                 "text-classification",
                 model=toxicity_model,
+                revision=_TOXICITY_REF.revision_for(toxicity_model),
                 top_k=None,  # return all labels with scores (multi-label)
                 truncation=True,
                 max_length=512,
@@ -98,7 +138,7 @@ class TopicDetector(BaseDetector):
         # See the aggregation rule below.
         components: dict[str, ComponentStatus] = {}
 
-        # Toxicity: take the max score across all toxicity sub-labels.
+        # Toxicity: max across the HARM labels only — see _TOXICITY_HARM_LABELS.
         if self._toxicity_pipeline is not None:
             try:
                 results = self._toxicity_pipeline(text)
@@ -106,7 +146,21 @@ class TopicDetector(BaseDetector):
                 scores = (
                     results[0] if isinstance(results, list) and results and isinstance(results[0], list) else results
                 )
-                tox_score = max((float(r["score"]) for r in scores), default=0.0)
+                harm_scores = [
+                    float(r["score"]) for r in scores if str(r.get("label", "")).lower() in _TOXICITY_HARM_LABELS
+                ]
+                if not harm_scores:
+                    # The configured model publishes none of the expected harm
+                    # labels, so this cannot produce a toxicity verdict at all.
+                    # Reporting 0.0 would be a confident "not toxic" from a
+                    # check that never ran.
+                    logger.error(
+                        "Toxicity model emitted no recognised harm labels (got %s); " "it cannot be scored against %s",
+                        sorted({str(r.get("label", "")) for r in scores}),
+                        sorted(_TOXICITY_HARM_LABELS),
+                    )
+                    raise ValueError("no recognised toxicity harm labels")
+                tox_score = max(harm_scores, default=0.0)
                 if tox_score >= self._toxicity_threshold:
                     detected = True
                     topics_found.append({"topic": "toxicity", "confidence": max(0.0, min(1.0, tox_score))})

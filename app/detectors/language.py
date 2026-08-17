@@ -11,11 +11,14 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.model_registry import LANGUAGE as _REF
+
 from .base import BaseDetector, DetectorResult, FailureCode
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL = "papluca/xlm-roberta-base-language-detection"
+
+_DEFAULT_MODEL = _REF.repo_id
 
 
 class LanguageDetector(BaseDetector):
@@ -33,6 +36,7 @@ class LanguageDetector(BaseDetector):
             self._pipeline = pipeline(
                 "text-classification",
                 model=model_path,
+                revision=_REF.revision_for(model_path),
                 truncation=True,
                 max_length=512,
                 device=self._device,

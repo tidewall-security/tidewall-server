@@ -23,10 +23,12 @@ import numpy as np
 from sqlalchemy.orm import Session
 
 from app.db.models import ModelIntent
+from app.model_registry import SENTENCE_SIMILARITY as _REF
 
 logger = logging.getLogger(__name__)
 
-_MODEL_NAME = "all-MiniLM-L6-v2"
+
+_MODEL_NAME = _REF.repo_id
 
 
 class IntentConformanceService:
@@ -52,7 +54,7 @@ class IntentConformanceService:
         try:
             from sentence_transformers import SentenceTransformer
 
-            self._model = SentenceTransformer(_MODEL_NAME)
+            self._model = SentenceTransformer(_MODEL_NAME, revision=_REF.revision)
             logger.debug("Loaded sentence-transformer: %s", _MODEL_NAME)
         except ImportError:
             logger.warning("sentence-transformers not installed — intent conformance unavailable")
