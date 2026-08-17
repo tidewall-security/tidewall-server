@@ -28,10 +28,9 @@ class PolicyService:
     end of the call, avoiding stale-session bugs.
     """
 
-    def __init__(self, session: Session | None = None, session_factory: Any = None, use_onnx: bool = False) -> None:
+    def __init__(self, session: Session | None = None, session_factory: Any = None) -> None:
         self._session = session
         self._session_factory = session_factory
-        self._use_onnx = use_onnx
         self._engine_cache: dict[tuple[str, str], ScannerEngine] = {}
 
     def _get_session(self) -> tuple[Session, bool]:
@@ -259,7 +258,6 @@ class PolicyService:
                 rs.detectors,
                 report_only=report_only,
                 session_factory=self._session_factory,
-                use_onnx=self._use_onnx,
                 on_detector_failure=on_detector_failure,
             )
             self._engine_cache[cache_key] = engine

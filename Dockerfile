@@ -1,6 +1,5 @@
 FROM python:3.12-slim AS builder
 
-ARG USE_ONNX=false
 
 WORKDIR /build
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
@@ -9,16 +8,22 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-COPY pyproject.toml .
+# Everything Hatch needs to build the project. `pip install .` reads the
+# readme, licence and notice declared in pyproject metadata and packages the
+# `app` wheel target, so copying pyproject alone failed with
+# "Readme file does not exist: README.md" before installing anything.
+COPY pyproject.toml README.md LICENSE NOTICE ./
+COPY app ./app
+
 # Install CPU-only PyTorch first (avoids pulling 2GB+ CUDA variant)
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir .
-RUN if [ "$USE_ONNX" = "true" ]; then pip install --no-cache-dir onnxruntime optimum; fi
 
-# Pre-download all ML models into the image
+# Pre-download all ML models into the image. prewarm.py reads
+# app/model_registry.py for the pinned revisions, so `app` must already be
+# present — it is, from the copy above.
 ENV HF_HOME=/opt/models
 ENV TRANSFORMERS_CACHE=/opt/models
-ENV USE_ONNX=$USE_ONNX
 COPY prewarm.py .
 RUN python prewarm.py
 

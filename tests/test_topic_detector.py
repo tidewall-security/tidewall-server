@@ -172,3 +172,69 @@ def test_no_detection_plus_a_failure_is_still_failed():
 
     assert r.detected is False
     assert r.status is DetectorStatus.FAILED
+
+
+def test_identity_labels_are_not_scored_as_toxicity():
+    """The fairness bug: identity mentions were reported as toxic.
+
+    unitary/unbiased-toxic-roberta emits 16 labels, nine of which are
+    identity-PRESENCE attributes that score highly when a group is merely
+    mentioned. Taking the max across all of them meant "my colleague is
+    Muslim" scored 0.97 on the `muslim` output and was reported as toxicity.
+    """
+    d = _make(toxicity_threshold=0.5)
+    d._topics_pipeline = None
+    d._topics = []
+    # A benign sentence: high identity signal, no harm signal.
+    d._toxicity_pipeline = lambda text: [
+        [
+            {"label": "toxicity", "score": 0.02},
+            {"label": "severe_toxicity", "score": 0.00},
+            {"label": "obscene", "score": 0.01},
+            {"label": "identity_attack", "score": 0.03},
+            {"label": "insult", "score": 0.01},
+            {"label": "threat", "score": 0.00},
+            {"label": "sexual_explicit", "score": 0.00},
+            {"label": "muslim", "score": 0.97},
+            {"label": "black", "score": 0.88},
+            {"label": "female", "score": 0.71},
+        ]
+    ]
+
+    r = d.scan("My colleague is Muslim and she is Black.")
+
+    assert r.detected is False, "identity mentions must not be scored as toxicity"
+
+
+def test_genuine_harm_is_still_detected():
+    """The narrowing must not stop real toxicity being caught."""
+    d = _make(toxicity_threshold=0.5)
+    d._topics_pipeline = None
+    d._topics = []
+    d._toxicity_pipeline = lambda text: [
+        [
+            {"label": "toxicity", "score": 0.94},
+            {"label": "insult", "score": 0.91},
+            {"label": "muslim", "score": 0.02},
+        ]
+    ]
+
+    r = d.scan("something genuinely abusive")
+
+    assert r.detected is True
+    assert r.data["topics"][0]["topic"] == "toxicity"
+    assert abs(r.data["topics"][0]["confidence"] - 0.94) < 1e-6
+
+
+def test_unrecognised_label_set_fails_rather_than_reporting_clean():
+    """A model with no harm labels cannot produce a verdict."""
+    from app.detectors.base import DetectorStatus
+
+    d = _make(toxicity_threshold=0.5)
+    d._topics_pipeline = None
+    d._topics = []
+    d._toxicity_pipeline = lambda text: [[{"label": "LABEL_0", "score": 0.9}]]
+
+    r = d.scan("anything")
+
+    assert r.status is DetectorStatus.FAILED

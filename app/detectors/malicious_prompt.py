@@ -14,6 +14,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.model_registry import INJECTION as _INJECTION_REF
+
 from .base import BaseDetector, ComponentStatus, DetectorResult, DetectorStatus, FailureCode, SkipReason
 
 logger = logging.getLogger(__name__)
@@ -141,13 +143,15 @@ class MaliciousPromptDetector(BaseDetector):
                         pipeline,
                     )
 
-                    # Pin by revision when the policy supplies one, so the
-                    # artifact behind a model name cannot change under us. An
-                    # unread pin would be decorative.
-                    revision = config.get("revision")
-                    load_kwargs = {"revision": revision} if revision else {}
-                    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, **load_kwargs)
-                    model = AutoModelForSequenceClassification.from_pretrained(model_path, **load_kwargs)
+                    # Pin the artifact so it cannot change under us. An
+                    # explicit policy revision wins; otherwise fall back to the
+                    # registry, which knows the SHA for the shipped default.
+                    # Without that fallback the policy file and the registry
+                    # are two sources of truth for the same pin, and only one
+                    # of them is verified by the model-reference tests.
+                    revision = config.get("revision") or _INJECTION_REF.revision_for(model_path)
+                    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, revision=revision)
+                    model = AutoModelForSequenceClassification.from_pretrained(model_path, revision=revision)
                     self._pipeline = pipeline(
                         "text-classification",
                         model=model,

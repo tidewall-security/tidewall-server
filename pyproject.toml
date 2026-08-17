@@ -44,7 +44,12 @@ dependencies = [
     # `uv sync` produces a broken install (Presidio falls back silently on
     # PII entities). Pinned to 3.8.x because spaCy model versions track the
     # spaCy minor release.
-    "en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl",
+    #
+    # The #sha256 fragment makes the download content-addressed. Version
+    # pinning alone does not: a GitHub release asset can be replaced, and this
+    # is a 382MB artifact that feeds the PII detector, fetched over the network
+    # during every clean build. Verified 2026-08-17 at 400,658,291 bytes.
+    "en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl#sha256=293e9547a655b25499198ab15a525b05b9407a75f10255e405e8c3854329ab63",
 ]
 
 [dependency-groups]

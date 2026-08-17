@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.model_registry import MALICIOUS_URL as _URL_REF
+
 from .base import BaseDetector, DetectorResult, FailureCode
 
 logger = logging.getLogger(__name__)
@@ -36,7 +38,7 @@ class MaliciousEntityDetector(BaseDetector):
         self._ml_threshold = config.get("threshold", 0.5)
         self._ml_pipeline = None
         if intel_config.get("ml_url_classification", True):
-            model_path = config.get("url_model") or "DunnBC22/codebert-base-Malicious_URLs"
+            model_path = config.get("url_model") or _URL_REF.repo_id
             device = config.get("device", "cpu")
             try:
                 from transformers import pipeline
@@ -44,6 +46,7 @@ class MaliciousEntityDetector(BaseDetector):
                 self._ml_pipeline = pipeline(
                     "text-classification",
                     model=model_path,
+                    revision=_URL_REF.revision_for(model_path),
                     truncation=True,
                     max_length=512,
                     device=device,

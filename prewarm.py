@@ -1,60 +1,94 @@
-"""Pre-warm all ML models at Docker build time.
+"""Pre-warm every pinned model artifact at Docker build time.
 
-Triggers HuggingFace Hub model downloads + Presidio engine init so all
-binaries are baked into the Docker image; no internet access is needed
-at runtime. The spaCy ``en_core_web_lg`` model used by Presidio is
-already pulled by ``uv sync`` (declared as a direct dep in pyproject.toml),
-so this script doesn't need to download it.
+Downloads each artifact into the image so a running container never fetches a
+model on the request path.
+
+Driven entirely by :mod:`app.model_registry`. It previously repeated the
+identifiers itself, which let it drift from the runtime defaults — and one of
+those repeated identifiers,`DunnBC22/codebert-base-Malicious_URLs`, returns 401
+anonymously. Because nothing caught the exception, the RUN layer raised and no
+image could be built at all.
+
+Failures are now collected and reported together rather than aborting on the
+first one, so a broken reference names itself instead of hiding whatever comes
+after it. The exit code is still non-zero: a half-populated image would fail
+later, at runtime, on a user's request.
 """
 
+from __future__ import annotations
+
 import logging
+import sys
 
-from presidio_analyzer import AnalyzerEngine
-from sentence_transformers import SentenceTransformer
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
+from app.model_registry import (
+    ALL,
+    CODE,
+    INJECTION,
+    LANGUAGE,
+    MALICIOUS_URL,
+    SENTENCE_SIMILARITY,
+    TOPICS,
+    TOXICITY,
+    ModelRef,
+)
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("prewarm")
 
-logger.info("Pre-warming Tidewall ML models...")
 
-# Prompt injection — ungated and Apache-2.0, pinned by revision, tokenizer
-# ships with the model. The previous default was gated: manual, so a clean
-# no-cache build required Hugging Face credentials nobody had configured.
-_INJECTION_MODEL = "protectai/deberta-v3-base-prompt-injection-v2"
-_INJECTION_REVISION = "90c9989b1a342275dd0d1a95aad283c04e075671"
-logger.info("Prompt-injection model (%s)...", _INJECTION_MODEL)
-_ = AutoTokenizer.from_pretrained(_INJECTION_MODEL, revision=_INJECTION_REVISION)
-_ = AutoModelForSequenceClassification.from_pretrained(_INJECTION_MODEL, revision=_INJECTION_REVISION)
+def _fetch(ref: ModelRef) -> None:
+    """Materialise one artifact using the loader the application will use."""
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
 
-# Toxicity classifier
-logger.info("Toxicity model (unitary/unbiased-toxic-roberta)...")
-_ = pipeline("text-classification", model="unitary/unbiased-toxic-roberta", top_k=None, device="cpu")
+    if ref is SENTENCE_SIMILARITY:
+        from sentence_transformers import SentenceTransformer
 
-# Zero-shot topic classifier
-logger.info("Zero-shot topic model (MoritzLaurer/roberta-base-zeroshot-v2.0-c)...")
-_ = pipeline("zero-shot-classification", model="MoritzLaurer/roberta-base-zeroshot-v2.0-c", device="cpu")
+        SentenceTransformer(ref.repo_id, revision=ref.revision)
+    elif ref is TOPICS:
+        pipeline("zero-shot-classification", model=ref.repo_id, device="cpu", revision=ref.revision)
+    elif ref is TOXICITY:
+        pipeline("text-classification", model=ref.repo_id, top_k=None, device="cpu", revision=ref.revision)
+    elif ref in (INJECTION, LANGUAGE, CODE, MALICIOUS_URL):
+        AutoTokenizer.from_pretrained(ref.repo_id, revision=ref.revision)
+        AutoModelForSequenceClassification.from_pretrained(ref.repo_id, revision=ref.revision)
+    else:  # pragma: no cover - a new entry with no fetch strategy
+        raise RuntimeError(f"no prewarm strategy for {ref.repo_id}")
 
-# Language detection
-logger.info("Language detector (papluca/xlm-roberta-base-language-detection)...")
-_ = pipeline("text-classification", model="papluca/xlm-roberta-base-language-detection", device="cpu")
 
-# Code-language identification
-logger.info("Code-language classifier (philomath-1209/programming-language-identification)...")
-_ = pipeline("text-classification", model="philomath-1209/programming-language-identification", device="cpu")
+def main() -> int:
+    logger.info("Pre-warming %d pinned model artifacts...", len(ALL))
+    failures: list[tuple[str, str]] = []
 
-# Malicious URL classifier
-logger.info("Malicious-URL classifier (DunnBC22/codebert-base-Malicious_URLs)...")
-_ = pipeline("text-classification", model="DunnBC22/codebert-base-Malicious_URLs", device="cpu")
+    for ref in ALL:
+        logger.info("  %s @ %s", ref.repo_id, ref.revision[:12])
+        try:
+            _fetch(ref)
+        except Exception as exc:  # noqa: BLE001 - reported, then re-raised in aggregate
+            logger.error("    FAILED: %s", exc)
+            failures.append((ref.repo_id, str(exc)))
 
-# Sentence-transformer for intent conformance
-logger.info("Sentence-transformer (all-MiniLM-L6-v2)...")
-_ = SentenceTransformer("all-MiniLM-L6-v2")
+    # Presidio's engine and its spaCy backbone.
+    try:
+        from presidio_analyzer import AnalyzerEngine
 
-# Presidio AnalyzerEngine — warms NER models. en_core_web_lg is already
-# installed via uv sync (direct dep in pyproject.toml), so this just
-# loads it into memory.
-logger.info("Presidio AnalyzerEngine (warms NER models)...")
-_ = AnalyzerEngine()
+        AnalyzerEngine()
+        logger.info("  Presidio analyzer engine")
+    except Exception as exc:  # noqa: BLE001
+        logger.error("    FAILED: Presidio — %s", exc)
+        failures.append(("presidio", str(exc)))
 
-logger.info("All models pre-warmed successfully!")
+    if failures:
+        logger.error("")
+        logger.error("%d artifact(s) could not be fetched:", len(failures))
+        for repo_id, err in failures:
+            logger.error("  %s: %s", repo_id, err)
+        logger.error("")
+        logger.error("Every artifact must be fetchable anonymously at its pinned revision.")
+        return 1
+
+    logger.info("All %d artifacts pre-warmed.", len(ALL))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -25,3 +25,44 @@ This product includes software developed by:
 - Microsoft Presidio (https://github.com/microsoft/presidio) — MIT License
 - detect-secrets (https://github.com/Yelp/detect-secrets) — Apache License 2.0
 - spaCy (https://spacy.io/) — MIT License
+
+This product distributes pre-trained model artifacts:
+
+The Docker image redistributes the following model artifacts under their own
+licences, which are separate from this product's Apache-2.0 licence and from
+the licences of the libraries above.
+
+The seven Hugging Face models are downloaded into /opt/models and pinned to an
+immutable commit in app/model_registry.py. The spaCy pipeline is different: it
+is a Python package installed into /opt/venv, pinned by release URL and a
+SHA-256 hash in pyproject.toml rather than by that registry.
+
+- protectai/deberta-v3-base-prompt-injection-v2 — Apache License 2.0
+  https://huggingface.co/protectai/deberta-v3-base-prompt-injection-v2
+- unitary/unbiased-toxic-roberta — Apache License 2.0
+  https://huggingface.co/unitary/unbiased-toxic-roberta
+- MoritzLaurer/roberta-base-zeroshot-v2.0-c — MIT License
+  https://huggingface.co/MoritzLaurer/roberta-base-zeroshot-v2.0-c
+- papluca/xlm-roberta-base-language-detection — MIT License
+  https://huggingface.co/papluca/xlm-roberta-base-language-detection
+- philomath-1209/programming-language-identification — WTFPL
+  https://huggingface.co/philomath-1209/programming-language-identification
+  NOTE: the WTFPL is extremely permissive — it grants essentially unrestricted
+  use — but it is not OSI-approved and some organisations' policies reject it
+  outright.
+
+  Be clear about what this means in practice. This artifact is downloaded by
+  prewarm.py and baked into every image built from this repository, so the
+  image redistributes it regardless of policy configuration. Setting
+  `code.enabled: false` stops the `code` detector running; it does NOT remove
+  the artifact and is therefore not a licence opt-out.
+
+  An organisation that cannot accept the WTFPL must build an image without it:
+  remove CODE from `ALL` in app/model_registry.py and set `code.enabled: false`
+  in policy.yaml. The detector is then unavailable and nothing else changes.
+- kmack/malicious-url-detection — Apache License 2.0
+  https://huggingface.co/kmack/malicious-url-detection
+- sentence-transformers/all-MiniLM-L6-v2 — Apache License 2.0
+  https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
+- explosion/spacy-models en_core_web_lg 3.8.0 — MIT License
+  https://github.com/explosion/spacy-models
