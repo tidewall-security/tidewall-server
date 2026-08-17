@@ -136,16 +136,11 @@ def test_enrol_creates_a_device_and_issues_a_token(db_session):
     assert result["result"]["access_token"]["token"].startswith("at_")
 
 
-def test_enrol_inherits_the_registration_token_policy(db_session):
-    """Enrolment previously conferred no scope at all."""
-    policy = Policy(name="engineering", type="application")
-    db_session.add(policy)
-    db_session.commit()
-    raw_rt, _ = _reg_token(db_session, policy_id=policy.id)
-
-    result = _enrol(db_session, raw_rt, "inst-scoped")
-
-    assert db_session.get(Device, result["result"]["device_id"]).policy_id == policy.id
+# Enrolment's inheritance of the token's policy is asserted by
+# `test_a_token_created_through_the_service_carries_its_policy_to_enrolment`,
+# which builds the token the way the product does. The version that lived here
+# injected a RegistrationToken row with the policy already set, so it passed
+# while nothing in the application could produce one.
 
 
 def test_enrol_refuses_an_already_enrolled_installation(db_session):
@@ -230,3 +225,141 @@ def test_registration_token_model_round_trips(db_session):
     assert stored.name == "Q1 Onboarding"
     assert stored.token_hash == hash_key(raw)
     assert stored.expires_at is None
+
+
+# ---------------------------------------------------------------------------
+# Rotation is one-time
+# ---------------------------------------------------------------------------
+
+
+def test_a_rotated_token_cannot_be_used_to_refresh_again(db_session):
+    """Rotation must be one-time, or the overlap becomes a minting oracle.
+
+    The first fix accepted any unexpired token. Because refresh also reset the
+    presented token's expiry to a fresh overlap, a client could replay the same
+    token indefinitely: each replay issued another hour-long token and pushed
+    the replayed token's own deadline out again, so it never expired.
+    """
+    raw_rt, _ = _reg_token(db_session)
+    enrolled = _enrol(db_session, raw_rt, "inst-1")
+    device_id = enrolled["result"]["device_id"]
+    first_raw = enrolled["result"]["access_token"]["token"]
+
+    svc = DeviceService(db_session)
+    svc.refresh_device(device_id=device_id, access_token_hash=hash_key(first_raw))
+
+    with pytest.raises(PermissionError, match="already been rotated"):
+        svc.refresh_device(device_id=device_id, access_token_hash=hash_key(first_raw))
+
+
+def test_replaying_a_rotated_token_mints_nothing_and_extends_nothing(db_session):
+    """The replay must be inert, not merely refused.
+
+    Two separate guarantees: no additional live credential, and no renewal of
+    the replayed token's own overlap.
+    """
+    raw_rt, _ = _reg_token(db_session)
+    enrolled = _enrol(db_session, raw_rt, "inst-1")
+    device_id = enrolled["result"]["device_id"]
+    first_raw = enrolled["result"]["access_token"]["token"]
+
+    svc = DeviceService(db_session)
+    svc.refresh_device(device_id=device_id, access_token_hash=hash_key(first_raw))
+
+    first = db_session.query(AccessToken).filter_by(token_hash=hash_key(first_raw)).one()
+    deadline_before = first.expires_at
+    successor_before = first.replaced_by_id
+    count_before = db_session.query(AccessToken).count()
+
+    for _ in range(3):
+        with pytest.raises(PermissionError):
+            svc.refresh_device(device_id=device_id, access_token_hash=hash_key(first_raw))
+
+    db_session.expire_all()
+    first = db_session.query(AccessToken).filter_by(token_hash=hash_key(first_raw)).one()
+    assert db_session.query(AccessToken).count() == count_before, "replay minted a token"
+    assert first.expires_at == deadline_before, "replay renewed its own overlap"
+    assert first.replaced_by_id == successor_before, "replay rewrote the rotation chain"
+
+
+def test_the_overlap_can_only_shorten_a_token_never_lengthen_it(db_session):
+    """A token already due to expire sooner than the overlap keeps its deadline."""
+    raw_rt, _ = _reg_token(db_session)
+    enrolled = _enrol(db_session, raw_rt, "inst-1")
+    device_id = enrolled["result"]["device_id"]
+    raw = enrolled["result"]["access_token"]["token"]
+
+    token = db_session.query(AccessToken).filter_by(token_hash=hash_key(raw)).one()
+    nearly_expired = datetime.now(UTC) + timedelta(seconds=5)
+    token.expires_at = nearly_expired
+    db_session.commit()
+
+    DeviceService(db_session).refresh_device(device_id=device_id, access_token_hash=hash_key(raw))
+
+    db_session.expire_all()
+    token = db_session.query(AccessToken).filter_by(token_hash=hash_key(raw)).one()
+    expires = token.expires_at.replace(tzinfo=UTC) if token.expires_at.tzinfo is None else token.expires_at
+    assert expires <= nearly_expired + timedelta(seconds=1), "rotation extended a nearly-expired token"
+
+
+def test_the_rotation_overlap_is_about_a_minute(db_session):
+    """Assert the actual overlap, not merely 'under two minutes'."""
+    raw_rt, _ = _reg_token(db_session)
+    enrolled = _enrol(db_session, raw_rt, "inst-1")
+    raw = enrolled["result"]["access_token"]["token"]
+
+    DeviceService(db_session).refresh_device(device_id=enrolled["result"]["device_id"], access_token_hash=hash_key(raw))
+
+    token = db_session.query(AccessToken).filter_by(token_hash=hash_key(raw)).one()
+    expires = token.expires_at.replace(tzinfo=UTC) if token.expires_at.tzinfo is None else token.expires_at
+    remaining = (expires - datetime.now(UTC)).total_seconds()
+    assert 50 <= remaining <= 60, f"overlap was {remaining}s, expected ~60"
+
+
+def test_revoking_a_device_kills_the_overlapping_token_too(db_session):
+    """Rotation must not leave a credential that survives revocation."""
+    raw_rt, _ = _reg_token(db_session)
+    enrolled = _enrol(db_session, raw_rt, "inst-1")
+    device_id = enrolled["result"]["device_id"]
+    old_raw = enrolled["result"]["access_token"]["token"]
+
+    svc = DeviceService(db_session)
+    svc.refresh_device(device_id=device_id, access_token_hash=hash_key(old_raw))
+    assert db_session.query(AccessToken).filter_by(device_id=device_id).count() == 2
+
+    svc.update_device_status(device_id, "revoked")
+
+    assert db_session.query(AccessToken).filter_by(device_id=device_id).count() == 0
+
+
+# ---------------------------------------------------------------------------
+# Policy scope is actually produced, not only consumed
+# ---------------------------------------------------------------------------
+
+
+def test_creating_a_registration_token_requires_a_policy_that_exists(db_session):
+    with pytest.raises(ValueError, match="not found"):
+        DeviceService(db_session).create_registration_token(name="onboarding", policy_id="no-such-policy")
+
+
+def test_a_token_created_through_the_service_carries_its_policy_to_enrolment(db_session):
+    """The end-to-end producer/consumer path.
+
+    The earlier test for this injected a `RegistrationToken(policy_id=...)`
+    directly, so it passed while no code anywhere could create such a token:
+    the service had no parameter for it and the admin route had no field. Every
+    real device enrolled with policy_id NULL and silently used the default
+    policy. Build the token the way the product does.
+    """
+    policy = Policy(name="engineering", type="application")
+    db_session.add(policy)
+    db_session.commit()
+
+    raw_rt, record = DeviceService(db_session).create_registration_token(
+        name="engineering-onboarding", policy_id=policy.id
+    )
+    assert record.policy_id == policy.id
+
+    result = _enrol(db_session, raw_rt, "inst-scoped")
+
+    assert db_session.get(Device, result["result"]["device_id"]).policy_id == policy.id

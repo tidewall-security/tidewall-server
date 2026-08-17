@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.auth.dependencies import require_role
 
@@ -13,7 +13,12 @@ router = APIRouter(prefix="/v1/devices", tags=["devices"])
 class DeviceEnrolRequest(BaseModel):
     # Client-generated, high-entropy, stored by the extension. This is the
     # device's identity; `fingerprint` is advisory metadata only.
-    installation_id: str
+    #
+    # The length floor is enforceable entropy, not decoration: a short or
+    # guessable installation ID lets a registration-token holder pre-enrol
+    # someone else's value and deny them enrolment, because the first claim
+    # wins and enrolment never reassigns. `crypto.randomUUID()` satisfies it.
+    installation_id: str = Field(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
     device_name: str
     user_name: str
     user_email: str
@@ -72,7 +77,7 @@ async def enrol_device(body: DeviceEnrolRequest, request: Request) -> dict:
     try:
         from app.services.device_service import DeviceService
 
-        return DeviceService(session).enrol_device(
+        result = DeviceService(session).enrol_device(
             rt_token_hash=rt_token_hash,
             installation_id=body.installation_id,
             device_name=body.device_name,
@@ -83,6 +88,12 @@ async def enrol_device(body: DeviceEnrolRequest, request: Request) -> dict:
             ext_version=body.extension_version,
             fingerprint=body.fingerprint,
         )
+        if result["status"] == "InstallationIdAlreadyEnrolled":
+            # 409, not a 201 carrying a failure in the body: nothing was
+            # created. The client already holds credentials for this
+            # installation and should refresh, or enrol as a new one.
+            raise HTTPException(status_code=409, detail="Installation ID is already enrolled")
+        return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
     finally:
@@ -100,7 +111,7 @@ async def refresh_device(device_id: str, body: DeviceRefreshRequest, request: Re
     try:
         from app.services.device_service import DeviceService
 
-        return DeviceService(session).refresh_device(
+        result = DeviceService(session).refresh_device(
             device_id=device_id,
             access_token_hash=token_hash,
             device_name=body.device_name,
@@ -111,6 +122,9 @@ async def refresh_device(device_id: str, body: DeviceRefreshRequest, request: Re
             ext_version=body.extension_version,
             fingerprint=body.fingerprint,
         )
+        if result["status"] == "InactiveDevice":
+            raise HTTPException(status_code=403, detail="Device is not active")
+        return result
     except PermissionError as e:
         # 403, not 401: the caller authenticated, but this credential does not
         # authorise this device.

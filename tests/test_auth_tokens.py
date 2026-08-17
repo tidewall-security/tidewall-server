@@ -143,7 +143,7 @@ def test_middleware_rt_prefix_routes_to_enrol_only():
     resp2 = client.post(
         "/v1/devices/enrol",
         json={
-            "installation_id": "inst-mw-test",
+            "installation_id": "inst-mw-test-0123456789abcdef",
             "fingerprint": "fp-mw-test",
             "device_name": "MWTest",
             "user_name": "bob",
