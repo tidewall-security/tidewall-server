@@ -30,7 +30,6 @@ def app_with_auth():
 
     app = FastAPI()
     app.state.session_factory = SessionLocal
-    app.state.auth_enabled = True
 
     app.add_middleware(AuthMiddleware)
 

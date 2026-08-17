@@ -54,4 +54,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
 USER appuser
 
 EXPOSE 8080
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+# Launch through the package entry point rather than the uvicorn CLI: the
+# bind address must come from validated settings, or the insecure-mode guard
+# checks a value the server does not use.
+CMD ["python", "-m", "app"]

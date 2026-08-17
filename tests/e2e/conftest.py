@@ -3,14 +3,13 @@ import os
 import pathlib
 import subprocess
 import time
+
 import pytest
 import requests
-from app.auth.key_utils import generate_key, hash_key
-from app.db.models import Base, APIKey, Policy
-from app.db.engine import get_engine, get_session_factory
 
 _PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 _DB_PATH = _PROJECT_ROOT / "data" / "e2e-test.db"
+_BOOTSTRAP_KEY = "ak_e2e_bootstrap_key_for_tests_only"
 _DB_URL = f"sqlite:///{_DB_PATH}"
 _LOG_PATH = _PROJECT_ROOT / "data" / "e2e-server.log"
 
@@ -23,15 +22,24 @@ def server_url():
         return
 
     env = os.environ.copy()
-    env["AUTH_ENABLED"] = "true"
     env["DB_URL"] = _DB_URL
+    env["HOST"] = "127.0.0.1"
+    env["PORT"] = "8090"
+    # Startup now refuses a clean authenticated database with no API keys
+    # rather than generating a credential it would have to log to deliver, so
+    # the key must exist before the server starts — the fixture previously
+    # created one only after waiting for /health, which it could never reach.
+    env["BOOTSTRAP_KEY"] = _BOOTSTRAP_KEY
 
     # Clean up any previous test DB
     _DB_PATH.unlink(missing_ok=True)
+    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     log_file = open(_LOG_PATH, "w")
     proc = subprocess.Popen(
-        [".venv/bin/uvicorn", "app.main:app", "--port", "8090"],
+        # The package entry point, so the fixture exercises the launcher the
+        # product documents rather than a path of its own.
+        [".venv/bin/python", "-m", "app"],
         stdout=log_file,
         stderr=log_file,
         env=env,
@@ -64,22 +72,10 @@ def admin_key(server_url):
     if key:
         return key
 
-    # Create admin key via DB
-    engine = get_engine(_DB_URL)
-    SessionLocal = get_session_factory(engine)
-    session = SessionLocal()
-
-    raw = generate_key()
-    ak = APIKey(
-        name="e2e-admin",
-        key_hash=hash_key(raw),
-        key_prefix=raw[:7] + "...",
-        role="admin",
-    )
-    session.add(ak)
-    session.commit()
-    session.close()
-    return raw
+    # The server installed this as the bootstrap admin key at startup, so
+    # there is no need to insert one afterwards — and inserting one afterwards
+    # was impossible anyway, since startup refuses to come up without it.
+    return _BOOTSTRAP_KEY
 
 
 @pytest.fixture

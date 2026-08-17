@@ -139,7 +139,6 @@ def start_server(policy_path: Path) -> subprocess.Popen:
         "DB_URL": f"sqlite:///{db_path}",
         "LOG_LEVEL": "warning",
         "PREWARM": "false",
-        "AUTH_ENABLED": "false",
     }
     proc = subprocess.Popen(
         [

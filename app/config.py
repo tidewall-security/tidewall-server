@@ -26,10 +26,14 @@ class Settings(BaseModel):
     DB_URL: str = "sqlite:///data/tidewall.db"
     LOG_LEVEL: str = "info"
     PREWARM: bool = True
-    AUTH_ENABLED: bool = False
+    # Bind address and port. Launch configuration, not an authorization
+    # control: authentication is unconditional, so where the server listens no
+    # longer decides who may administer it.
+    HOST: str = "0.0.0.0"
+    PORT: int = 8080
     USE_ONNX: bool = False
-    # Operator-supplied first admin credential. Consulted only when
-    # AUTH_ENABLED is set and no API keys exist yet; only its hash is stored.
+    # Operator-supplied first admin credential. Consulted only when no API
+    # keys exist yet; only its hash is stored.
     # Tidewall never generates this, because a generated value would have to be
     # emitted to logs or stdout to reach the operator, where it would persist.
     BOOTSTRAP_KEY: str | None = None

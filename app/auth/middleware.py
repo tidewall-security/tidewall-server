@@ -11,43 +11,58 @@ from starlette.responses import JSONResponse
 from app.auth.key_utils import hash_key
 from app.db.models import AccessToken, APIKey, Device, RegistrationToken
 
-# Paths that never require authentication
-_PUBLIC_PATHS = {"/health", "/docs", "/openapi.json", "/redoc", "/favicon.ico"}
+# Paths served without a credential. Deliberately minimal: /docs, /redoc and
+# /openapi.json used to be here, which published the full surface of a security
+# control plane to anyone who could reach the port. The schema is still
+# retrievable with a bearer token.
+_PUBLIC_PATHS = {"/health", "/favicon.ico"}
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
     """Validates Bearer tokens against the api_keys, registration_tokens,
     or access_tokens table depending on the token prefix.
 
-    When auth is disabled (app.state.auth_enabled is False), all requests
-    pass through with an implicit admin role.
+    Authentication is unconditional. There is no configuration value that
+    turns it off.
+
+    Three branches here used to assign ``admin`` — an auth-disabled mode, the
+    public path list, and the static/UI prefixes — so "skip authentication" and
+    "become an administrator" were the same code path. The disabled mode is
+    gone entirely: its loopback guard was bypassable because a directly
+    launched ASGI server binds whatever address it is given, and uvicorn binds
+    *after* lifespan runs, so the application cannot inspect its own listener
+    in time to refuse. Rather than defend that, the mode was removed.
+
+    What remains anonymous is health, favicon, and the data-free dashboard
+    shells, all with ``role=None``. ``require_role`` rejects a missing role, so
+    anything protected stays protected even if this list is wrong.
     """
 
+    @staticmethod
+    def _anonymous(request: Request) -> None:
+        """Pass a request through with no identity and no role."""
+        request.state.role = None
+        request.state.policy_id = None
+        request.state.api_key_id = None
+        request.state.device_id = None
+
     async def dispatch(self, request: Request, call_next):
-        # Check if auth is enabled
-        auth_enabled = getattr(request.app.state, "auth_enabled", False)
-        if not auth_enabled:
-            # Auth disabled — implicit admin, no policy binding
-            request.state.role = "admin"
-            request.state.policy_id = None
-            request.state.api_key_id = None
-            request.state.device_id = None
-            return await call_next(request)
-
-        # Public paths bypass auth
+        # Public paths carry no identity.
         if request.url.path in _PUBLIC_PATHS:
-            request.state.role = "admin"
-            request.state.policy_id = None
-            request.state.api_key_id = None
-            request.state.device_id = None
+            self._anonymous(request)
             return await call_next(request)
 
-        # Static files and UI pages bypass auth (UI handles auth client-side)
-        if request.url.path.startswith("/static/") or request.url.path.startswith("/ui/"):
-            request.state.role = "admin"
-            request.state.policy_id = None
-            request.state.api_key_id = None
-            request.state.device_id = None
+        # Static assets and dashboard page shells are public and carry no
+        # identity either. The pages contain no data: app/static/js/auth.js
+        # collects an API key and attaches it to the XHR calls that do, so the
+        # shell being anonymous costs nothing and removes the need to
+        # authenticate a browser navigation that sends no bearer header.
+        if (
+            request.url.path == "/dashboard"
+            or request.url.path.startswith("/static/")
+            or request.url.path.startswith("/ui/")
+        ):
+            self._anonymous(request)
             return await call_next(request)
 
         # Extract Bearer token

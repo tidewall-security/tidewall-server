@@ -11,13 +11,14 @@ Startup sequence (in ``lifespan``):
 
 Imports inside ``lifespan`` are intentionally deferred to avoid circular
 imports and to keep startup fast when modules aren't needed (e.g. auth
-services when ``AUTH_ENABLED=false``).
+services are unused).
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import pathlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -32,12 +33,67 @@ from app.vault_manager import VaultManager
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+
+
+def _has_existing_api_keys(db_url: str) -> bool:
+    """Read-only probe for existing API keys, without migrating anything.
+
+    The bootstrap refusal used to run after migrations, seeding and service
+    construction, so rejecting a clean configuration still left a fully
+    migrated and seeded database behind — 159KB of state written for a startup
+    that then refused to serve. Answering the question read-only lets the
+    refusal happen before any write.
+
+    Returns False when the database, or the table, does not exist yet: both
+    mean there is no key, which is the condition that requires a bootstrap
+    secret.
+    """
+    from sqlalchemy import create_engine, inspect, text
+
+    # Connecting to a SQLite URL creates the file, so a refusal would still
+    # leave a zero-byte artefact behind. Absent file means absent keys.
+    if db_url.startswith("sqlite"):
+        path = db_url.split("///")[-1]
+        if path not in (":memory:", "") and not pathlib.Path(path).exists():
+            return False
+
+    probe = create_engine(db_url)
+    try:
+        if "api_keys" not in inspect(probe).get_table_names():
+            return False
+        with probe.connect() as conn:
+            return conn.execute(text("SELECT 1 FROM api_keys LIMIT 1")).first() is not None
+    except Exception:
+        # An unreadable database is not evidence that a key exists, and
+        # refusing here would be wrong for a genuine connectivity problem, so
+        # defer to the later check rather than guessing.
+        return True
+    finally:
+        probe.dispose()
+
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan: startup and shutdown logic."""
     settings = Settings.from_env()
 
     logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
+
+    # Validate authentication configuration BEFORE touching the database.
+    # This previously ran after directory creation, migrations, seeding and
+    # service construction, so an invalid configuration created and migrated a
+    # database and only then refused to serve — a rejected config should not
+    # leave persistent state behind.
+    if not settings.BOOTSTRAP_KEY and not _has_existing_api_keys(settings.DB_URL):
+        # Checked before any database work: a configuration that will be
+        # refused must not leave a migrated, seeded database behind.
+        raise RuntimeError(
+            "No API keys exist and BOOTSTRAP_KEY is not set. Set it to a secret you "
+            "generate to install the first admin key. Tidewall does not generate one "
+            "because it would have to be emitted to logs or stdout to reach you, where "
+            "it would persist as an administrator credential."
+        )
 
     # --- Database setup ---
     from app.db.engine import get_engine, get_session_factory
@@ -71,32 +127,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.state.policy_service = PolicyService(session_factory=SessionLocal, use_onnx=settings.USE_ONNX)
 
-    app.state.auth_enabled = settings.AUTH_ENABLED
+    # Install the operator-supplied first admin key if the database has none.
+    # The refusal for a missing key happened earlier, before any database
+    # write; this is the install, which only runs when a key was supplied.
+    from app.services.key_service import KeyService
 
-    if settings.AUTH_ENABLED:
-        from app.services.key_service import KeyService
-
-        key_session = SessionLocal()
-        try:
-            key_svc = KeyService(key_session)
-            if not key_svc.has_any_key():
-                # No keys exist and auth is on, so the deployment is
-                # unreachable unless the operator supplies the first
-                # credential. We refuse to start rather than generating one:
-                # a generated key has to be communicated somehow, and every
-                # available channel (logs, stdout) is collected and retained.
-                if not settings.BOOTSTRAP_KEY:
-                    raise RuntimeError(
-                        "AUTH_ENABLED is set but no API keys exist. Set "
-                        "BOOTSTRAP_KEY to a secret you generate to install the "
-                        "first admin key. Tidewall does not generate it for you "
-                        "because it would have to be emitted to logs or stdout "
-                        "to reach you, where it would persist as an "
-                        "administrator credential."
-                    )
-                key_svc.install_bootstrap_admin_key(settings.BOOTSTRAP_KEY)
-        finally:
-            key_session.close()
+    key_session = SessionLocal()
+    try:
+        key_svc = KeyService(key_session)
+        if not key_svc.has_any_key() and settings.BOOTSTRAP_KEY:
+            key_svc.install_bootstrap_admin_key(settings.BOOTSTRAP_KEY)
+    finally:
+        key_session.close()
 
     # --- EXISTING: VaultManager and InteractionLog still needed ---
     app.state.vault_manager = VaultManager(SessionLocal)
@@ -115,11 +157,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     """Build and configure the Tidewall FastAPI application."""
 
+    # Swagger UI fetches /openapi.json from the browser with no Authorization
+    # header, so a protected schema leaves the stock docs page permanently
+    # broken. Authentication is now unconditional, so the routes are simply not
+    # registered; the schema remains available to an API client through the
+    # OpenAPI object.
     app = FastAPI(
         title="Tidewall",
         description="Open-source AI security guard API server",
         version="0.3.0",
-        docs_url="/docs",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
         lifespan=lifespan,
     )
 
@@ -130,7 +179,10 @@ def create_app() -> FastAPI:
     # Starlette processes middleware in reverse add order (last added = outermost).
     # Auth must be added first so CORS wraps it and handles preflight OPTIONS
     # requests (which have no Authorization header) before auth runs.
+    from app.security_headers import SecurityHeadersMiddleware
+
     app.add_middleware(AuthMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

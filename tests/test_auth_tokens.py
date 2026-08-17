@@ -64,7 +64,6 @@ def _make_test_app():
     app = FastAPI()
     app.add_middleware(AuthMiddleware)
     app.state.session_factory = SessionLocal
-    app.state.auth_enabled = True
 
     @app.get("/health")
     async def health():
@@ -105,16 +104,20 @@ def test_middleware_ak_sets_device_id_none():
     assert resp.json()["device_id"] is None
 
 
-def test_middleware_auth_disabled_sets_device_id_none():
-    """When auth is disabled, device_id should still be set to None."""
-    app, _ = _make_test_app()
-    app.state.auth_enabled = False
+def test_middleware_rejects_an_uncredentialed_request():
+    """This test used to assert the opposite.
 
-    client = TestClient(app)
-    resp = client.get("/v1/test")
-    assert resp.status_code == 200
-    assert resp.json()["role"] == "admin"
-    assert resp.json()["device_id"] is None
+    It verified that with authentication disabled an uncredentialed request
+    received the admin role. That mode is gone: its loopback guard could not
+    be enforced from inside an ASGI application, because uvicorn binds its
+    socket after lifespan startup completes. There is no configuration value
+    that produces the old behaviour, so the assertion inverts.
+    """
+    app, _ = _make_test_app()
+
+    resp = TestClient(app).get("/v1/test")
+
+    assert resp.status_code == 401
 
 
 def test_middleware_rt_prefix_routes_to_check_only():
