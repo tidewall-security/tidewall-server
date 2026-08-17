@@ -152,9 +152,7 @@ def _detector_applies(name: str, event_type: str) -> bool:
     return True
 
 
-def _make_detector(
-    name: str, config: dict[str, Any], **kwargs: Any
-) -> tuple[BaseDetector | None, FailureCode | None]:
+def _make_detector(name: str, config: dict[str, Any], **kwargs: Any) -> tuple[BaseDetector | None, FailureCode | None]:
     """Dynamically instantiate a detector by policy name.
 
     Returns ``(detector, None)`` on success or ``(None, code)`` on failure.
@@ -242,9 +240,7 @@ class ScannerEngine:
                 logger.info("Loaded detector: %s (action=%s)", det_name, det_cfg.action)
             else:
                 assert code is not None  # _make_detector returns one or the other
-                self._construction_failures.append(
-                    FailedDetector(name=det_name, code=code, action=det_cfg.action)
-                )
+                self._construction_failures.append(FailedDetector(name=det_name, code=code, action=det_cfg.action))
                 logger.error(
                     "Detector '%s' (action=%s) is enabled by policy but could not be "
                     "constructed: %s. Scans will report a degraded verdict.",
@@ -284,9 +280,7 @@ class ScannerEngine:
             #    dead sub-component. The detector is `available`, so only this
             #    reaches the preflight.
             for component, code in det.load_failures.items():
-                unavailable.append(
-                    FailedDetector(name=f"{name}.{component}", code=code, action=det.action)
-                )
+                unavailable.append(FailedDetector(name=f"{name}.{component}", code=code, action=det.action))
         return [*self._construction_failures, *unavailable]
 
     @property

@@ -94,18 +94,18 @@ def _validate_status(
     status is rejected outright rather than silently treated as OK.
     """
     try:
-        status = DetectorStatus(status)
+        coerced: DetectorStatus = DetectorStatus(status)
     except ValueError:
         raise ValueError(f"{what}: {status!r} is not a valid DetectorStatus") from None
 
-    if status is DetectorStatus.FAILED:
+    if coerced is DetectorStatus.FAILED:
         if detected:
             raise ValueError(f"{what} cannot be both FAILED and detected")
         if failure_code is None:
             raise ValueError(f"FAILED {what} requires a failure_code")
-    if status is DetectorStatus.SKIPPED and skip_reason is None:
+    if coerced is DetectorStatus.SKIPPED and skip_reason is None:
         raise ValueError(f"SKIPPED {what} requires a skip_reason")
-    return status
+    return coerced
 
 
 def _validate_degraded(status: DetectorStatus, detected: bool, degraded: bool) -> None:

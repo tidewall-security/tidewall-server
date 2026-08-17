@@ -33,8 +33,6 @@ from app.vault_manager import VaultManager
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
-
-
 def _has_existing_api_keys(db_url: str) -> bool:
     """Read-only probe for existing API keys, without migrating anything.
 
@@ -70,7 +68,6 @@ def _has_existing_api_keys(db_url: str) -> bool:
         return True
     finally:
         probe.dispose()
-
 
 
 @asynccontextmanager

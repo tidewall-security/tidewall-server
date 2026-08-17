@@ -52,9 +52,9 @@ def _resolve_injection_label(configured: Any, model: Any) -> str | None:
     if not label2id:
         label2id = {v: k for k, v in id2label.items()}
     if not id2label:
-        for label, idx in label2id.items():
+        for label, label_id in label2id.items():
             try:
-                id2label[int(idx)] = str(label)
+                id2label[int(label_id)] = str(label)
             except (TypeError, ValueError):
                 continue
 
@@ -66,6 +66,7 @@ def _resolve_injection_label(configured: Any, model: Any) -> str | None:
         return str(configured)
 
     # An index, given as int or as a numeric string.
+    idx: int | None
     try:
         idx = int(configured)
     except (TypeError, ValueError):

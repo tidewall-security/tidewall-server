@@ -97,7 +97,6 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     elif policy and policy.report_only:
         effective_report_only = policy.report_only
 
-
     access_rules_data: list[dict[str, Any]] = []
     access_rules_result: dict[str, Any] = {"action": "continue", "matched_rules": [], "blocked": False}
 
@@ -301,9 +300,7 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
         scan_result.transformed = False
         guard_output = None
         fpe_context = None
-        scan_result.summary_parts.append(
-            f"Blocked: required detectors could not run ({', '.join(failed_names)})."
-        )
+        scan_result.summary_parts.append(f"Blocked: required detectors could not run ({', '.join(failed_names)}).")
 
     # Compute 5-value status.  In report_only mode, destructive actions
     # (block/transform) are downgraded so the request is never actually
