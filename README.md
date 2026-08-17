@@ -147,8 +147,8 @@ itself is public — it holds no data — and every call it makes is authenticat
 
 The interactive API docs (`/docs`, `/redoc`) are not served: Swagger UI fetches
 the schema from the browser without an `Authorization` header, so a protected
-schema leaves the page permanently broken. The OpenAPI document is available to
-an authenticated API client.
+schema leaves the page permanently broken. No HTTP schema endpoint is served at
+all — the routes are simply not registered.
 
 ---
 
@@ -267,7 +267,7 @@ credential you cannot see.
 | `PUT` | `/v1/settings/model-intent/{id}` | admin | Update intent |
 | `DELETE` | `/v1/settings/model-intent/{id}` | admin | Delete intent |
 | `GET` | `/health` | public | Health check |
-| `GET` | `/ui/{page}` | viewer+ | Web dashboard |
+| `GET` | `/ui/{page}` | public | Dashboard shell (data-free; its API calls are authenticated) |
 
 ---
 
