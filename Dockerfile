@@ -19,7 +19,12 @@ RUN if [ "$USE_ONNX" = "true" ]; then pip install --no-cache-dir onnxruntime opt
 ENV HF_HOME=/opt/models
 ENV TRANSFORMERS_CACHE=/opt/models
 ENV USE_ONNX=$USE_ONNX
+# prewarm.py reads app/model_registry.py for the pinned revisions, so the
+# builder stage needs the package too. Copying only prewarm.py made the build
+# fail with ModuleNotFoundError before it fetched anything — the same class of
+# defect as the 401'ing model reference this change exists to fix.
 COPY prewarm.py .
+COPY app ./app
 RUN python prewarm.py
 
 # ---- Runtime stage ----

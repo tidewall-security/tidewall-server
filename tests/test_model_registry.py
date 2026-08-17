@@ -118,3 +118,108 @@ def test_pipeline_tag_matches_how_the_code_uses_it(ref: ModelRef):
     assert published == ref.pipeline_tag, (
         f"{ref.repo_id} is a {published} model but the registry declares {ref.pipeline_tag}"
     )
+
+
+# ---------------------------------------------------------------------------
+# The pin must reach the loader, not merely exist in the registry
+# ---------------------------------------------------------------------------
+
+
+def test_prewarm_imports_in_a_builder_only_context():
+    """The Docker builder stage runs prewarm before app/ was copied.
+
+    Adding the registry import broke the build with ModuleNotFoundError before
+    a single artifact was fetched — the same defect class as the 401'ing model
+    reference this work exists to fix. This asserts the dependency is declared
+    where the Dockerfile can satisfy it.
+    """
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    tree = ast.parse((root / "prewarm.py").read_text())
+    app_imports = {
+        n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and (n.module or "").startswith("app")
+    }
+    dockerfile = (root / "Dockerfile").read_text()
+
+    if app_imports:
+        builder = dockerfile.split("# ---- Runtime stage ----")[0]
+        assert "COPY app" in builder, (
+            f"prewarm.py imports {sorted(app_imports)} but the Docker builder stage does not copy app/"
+        )
+
+
+def _call_bodies(source: str, loader: str) -> list[str]:
+    """Argument text of every `loader(...)` call, matching parentheses properly.
+
+    A naive scan to the first ")" stops inside a nested call and reports a
+    missing revision that is actually present a few arguments later.
+    """
+    import re
+
+    bodies = []
+    # Constructions only. Excluding a preceding word character skips
+    # `self._pipeline(text)`, which invokes the already-built pipeline and
+    # takes no revision, while still matching `AutoTokenizer.from_pretrained(`
+    # where the preceding character is a dot.
+    pattern = re.compile(r"(?<![\w])" + re.escape(loader) + r"\(")
+    for match in pattern.finditer(source):
+        start = match.end()
+        depth, pos = 1, start
+        while pos < len(source) and depth:
+            if source[pos] == "(":
+                depth += 1
+            elif source[pos] == ")":
+                depth -= 1
+            pos += 1
+        bodies.append(source[start : pos - 1])
+    return bodies
+
+
+@pytest.mark.parametrize(
+    ("module", "loader"),
+    [
+        ("app/detectors/language.py", "pipeline"),
+        ("app/detectors/code.py", "pipeline"),
+        ("app/detectors/topic.py", "pipeline"),
+        ("app/detectors/malicious_entity.py", "pipeline"),
+        ("app/detectors/malicious_prompt.py", "from_pretrained"),
+        ("app/services/intent_conformance_service.py", "SentenceTransformer"),
+    ],
+)
+def test_every_loader_call_passes_a_revision(module: str, loader: str):
+    """The pin must reach the loader, not merely sit in the registry.
+
+    A registry that is read but never applied is the produced-but-not-consumed
+    defect that has recurred repeatedly in this codebase, and it would be
+    invisible: the model still loads, just from an unpinned branch.
+
+    Asserted at the source rather than by mocking, because transformers
+    exposes `pipeline` through a lazy module that ordinary patching does not
+    intercept — a mock-based test here silently exercised the real loader and
+    passed while asserting nothing.
+    """
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    source = (root / module).read_text()
+
+    bodies = _call_bodies(source, loader)
+    assert bodies, f"{module} does not call {loader}("
+
+    for i, body in enumerate(bodies):
+        assert "revision" in body, f"{module}: {loader}() call #{i + 1} passes no revision — the pin is not applied"
+
+
+def test_an_operator_model_is_not_pinned_to_our_sha():
+    """Pinning someone else's model to our commit would be wrong.
+
+    It would either fail to resolve or, worse, fetch an unrelated commit that
+    happens to exist in their repository.
+    """
+    from app.model_registry import LANGUAGE
+
+    assert LANGUAGE.revision_for(LANGUAGE.repo_id) == LANGUAGE.revision
+    assert LANGUAGE.revision_for("someone-else/their-model") is None
+    assert LANGUAGE.revision_for(None) is None
