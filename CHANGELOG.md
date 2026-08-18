@@ -45,12 +45,15 @@ Client contract:
    token**, and replace the stored token from the response. Refresh well
    before the one-hour expiry; there is no need to poll every minute.
 4. Rotation is one-time. The presented token is marked replaced and expires
-   after a 60-second overlap, which exists so a request already in flight
-   still succeeds — it is not a window in which to refresh again. Presenting
-   an already-replaced token returns 403.
+   after an overlap of **at most** 60 seconds — the deadline is
+   `min(now + 60s, its existing expiry)`, so a token already closer to expiry
+   keeps the shorter one; the overlap only ever shortens a token's life, never
+   extends it. It exists so a request already in flight still succeeds, and is
+   not a window in which to refresh again. Presenting an already-replaced token
+   returns 403.
 5. **Retain the registration token.** A refresh response carries the only copy
    of the new secret, so if that response is lost the client is left holding a
-   token it can no longer use to refresh, which expires 60 seconds later. Treat
+   token it can no longer use to refresh, which expires within 60 seconds. Treat
    403 with `"already been rotated"` as credential loss: enrol again under a
    **new** `installation_id`. Re-issuing on a replayed token is deliberately
    not offered — it would let a stolen predecessor be traded for a fresh
