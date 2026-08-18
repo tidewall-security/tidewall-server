@@ -47,6 +47,15 @@ class KeyService:
         # successfully and shows an empty dashboard, which reads as a bug.
         if role == "viewer" and not policy_id:
             raise ValueError("a viewer key must be bound to a policy: an unbound viewer can see nothing")
+        if policy_id is not None:
+            # Validate here rather than relying on the database: an in-memory
+            # session without FK enforcement would otherwise create a viewer
+            # bound to a policy that does not exist, which authenticates and
+            # then sees nothing.
+            from app.db.models import Policy
+
+            if self._session.get(Policy, policy_id) is None:
+                raise ValueError(f"policy {policy_id} does not exist")
 
         self._session.add(api_key)
         self._session.commit()

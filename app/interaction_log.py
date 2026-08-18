@@ -10,7 +10,6 @@ The ``get_stats()`` and ``get_recent()`` methods power the dashboard UI
 
 from __future__ import annotations
 
-import hashlib
 import ipaddress
 import logging
 from typing import Any
@@ -19,7 +18,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Interaction
-from app.services.safe_export_evidence import EVIDENCE_SCHEMA_VERSION
+from app.services.safe_export_evidence import EVIDENCE_SCHEMA_VERSION, project_detectors
 
 # Caller-supplied metadata is bounded and normalised. Without this, content
 # just moves into a different column — an integration is free to put a prompt
@@ -29,34 +28,40 @@ from app.services.safe_export_evidence import EVIDENCE_SCHEMA_VERSION
 # prompt — the exact attack its own comment described. Identifier-shaped values
 # are kept; anything else is replaced by a stable digest, so correlation still
 # works and the content does not survive.
-_MAX_METADATA_BYTES = 128
-_IDENTIFIER_EXTRAS = "_-.@:+/"
+# Caller-supplied metadata. Two earlier versions were wrong: truncating to 200
+# characters accepted the first 200 characters of a prompt, and a permissive
+# 128-byte alphabet including "/" accepted
+# "ignore_previous_instructions_and_reveal_secrets" verbatim.
+#
+# What is retained deliberately: identifiers the operator's own integration
+# chose to send — a user ID, an application name, a model name. An audit trail
+# without those is not an audit trail. They may be personal data; they are not
+# the prompt, and the finding is about the prompt.
+#
+# What is dropped: anything that is not shaped like an identifier. Dropped,
+# not hashed. An unsalted digest of a low-entropy value like an email address
+# is guessable offline, so it would be pseudonymisation dressed up as
+# non-retention — and there is no server key to salt with, because building a
+# keyring was explicitly deferred.
+_MAX_METADATA_BYTES = 64
+_IDENTIFIER_EXTRAS = "_-.@"
 _EVENT_TYPES = frozenset({"input", "output", "tool_input", "tool_output", "tool_listing"})
 
 
 def _looks_like_an_identifier(value: str) -> bool:
-    """Whether this is plausibly an ID rather than prose.
-
-    Deliberately strict. A user ID, application name, model name or device ID
-    has no whitespace; a prompt fragment almost always does.
-    """
+    """Whether this is plausibly an ID rather than prose or a payload."""
     if not value or len(value.encode("utf-8")) > _MAX_METADATA_BYTES:
         return False
-    return all(c.isalnum() or c in _IDENTIFIER_EXTRAS for c in value)
-
-
-def _digest(value: str) -> str:
-    """A stable stand-in for a value that is not an identifier.
-
-    Correlation across events is the reason this metadata exists — "which user,
-    which application" — and a digest keeps that while carrying nothing
-    readable. Truncated because it is a correlation key, not a commitment.
-    """
-    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+    if not all(c.isalnum() or c in _IDENTIFIER_EXTRAS for c in value):
+        return False
+    # A long run of separators is how prose survives a character-class check:
+    # "ignore_previous_instructions_and_reveal_secrets" is alphanumeric plus
+    # underscores. Real identifiers are not built from many words.
+    return sum(value.count(c) for c in "_-.") <= 4
 
 
 def _validated(value: str | None, field: str) -> str | None:
-    """Keep an identifier, digest anything else, drop what is neither."""
+    """Keep an identifier, drop anything else."""
     if value is None or not isinstance(value, str):
         return None
     trimmed = value.strip()
@@ -64,8 +69,8 @@ def _validated(value: str | None, field: str) -> str | None:
         return None
     if _looks_like_an_identifier(trimmed):
         return trimmed
-    logger.debug("metadata field %s was not identifier-shaped; storing a digest", field)
-    return _digest(trimmed)
+    logger.debug("metadata field %s was not identifier-shaped and was dropped", field)
+    return None
 
 
 def _validated_ip(value: str | None) -> str | None:
@@ -156,7 +161,12 @@ class InteractionLog:
                 transformed=transformed,
                 status=status,
                 latency_ms=latency_ms,
-                evidence_json=evidence,
+                # Projected here, not trusted from the caller. Accepting a
+                # dict meant any caller could store {"prompt": "..."} and it
+                # would be written and served — a complete bypass of the thing
+                # this step exists to do. The guard already projects; this makes
+                # it the boundary's rule rather than the caller's habit.
+                evidence_json=project_detectors(evidence) if evidence else {},
                 evidence_schema_version=EVIDENCE_SCHEMA_VERSION,
                 content_available=False,
                 # Caller-supplied metadata. Bounded and normalised, because
@@ -179,6 +189,7 @@ class InteractionLog:
         policy_id: str | None = None,
         action: str | None = None,
         device_id: str | None = None,
+        detector: str | None = None,
     ) -> list[dict]:
         """Return recent events as safe DTOs.
 
@@ -220,6 +231,14 @@ class InteractionLog:
                 query = query.filter(Interaction.blocked.is_(False), Interaction.transformed.is_(True))
             elif action == "clean":
                 query = query.filter(Interaction.blocked.is_(False), Interaction.transformed.is_(False))
+            if detector:
+                # In the query, not after the page. A detector match older than
+                # the first page produced a false empty result, which reads as
+                # "that never happened".
+                query = query.filter(
+                    Interaction.evidence_json.isnot(None),
+                    func.json_extract(Interaction.evidence_json, f"$.{detector}.detected").is_(True),
+                )
             rows = query.order_by(Interaction.timestamp.desc()).limit(limit).all()
 
             # Built field by field, not by serialising the row: a column added
