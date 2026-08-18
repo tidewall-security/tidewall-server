@@ -250,13 +250,20 @@ class ScannerEngine:
     def construction_failures(self) -> list[FailedDetector]:
         """Detectors the policy enabled that cannot produce a verdict.
 
-        The activation protocol's startup preflight reads this to decide whether
-        a candidate runtime is servable at all — an engine that silently omits a
-        detector is not a successfully built runtime.
+        An engine that silently omits a detector is not a successfully built
+        runtime, so this records what could not be built.
+
+        Nothing currently refuses to serve on the strength of it. This is
+        reporting, not a gate: the failures are seeded into every scan result
+        so a missing control cannot be mistaken for a clean verdict, but
+        ``get_engine`` caches and the guard route serves regardless. A startup
+        preflight that reads ``is_enforcement_complete`` and rejects an
+        unservable policy is separate, unbuilt work — do not read this property
+        as though that gate exists.
 
         There are two ways a detector ends up unable to run, and only counting
-        the first would leave the preflight declaring an engine servable while
-        one of its redactors is dead:
+        the first would leave an engine reporting itself healthy while one of
+        its redactors is dead:
 
         1. Construction raised, so the detector is absent from ``_detectors``.
         2. Construction *succeeded* but the detector caught its own load error

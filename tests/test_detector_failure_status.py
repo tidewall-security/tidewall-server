@@ -422,9 +422,7 @@ def test_valid_string_status_is_coerced_to_the_enum():
 def test_inapplicable_detector_failure_does_not_degrade_the_scan():
     """A failed output-only detector must not degrade an input scan."""
     engine = _engine({"malicious_entity": {"enabled": True, "action": "block"}})
-    engine._construction_failures = [
-        FailedDetector("malicious_entity", FailureCode.MODEL_LOAD_FAILED, action="block")
-    ]
+    engine._construction_failures = [FailedDetector("malicious_entity", FailureCode.MODEL_LOAD_FAILED, action="block")]
 
     on_input = engine.scan("hi", event_type="input", vault_id="v", vault=None)
     on_output = engine.scan("hi", event_type="output", vault_id="v", vault=None)
@@ -538,12 +536,15 @@ def test_malicious_override_does_not_report_a_prevented_stage_as_degraded():
     assert r.components["generic_injection"].status is DetectorStatus.SKIPPED
 
 
-def test_composite_component_failure_reaches_the_preflight():
+def test_composite_component_failure_reaches_construction_failures():
     """A composite that constructed fine with a dead sub-component.
 
     The detector reports available, so only the component view surfaces this.
-    The activation preflight reads construction_failures, and would otherwise
-    certify an engine whose injection model never loaded.
+    Without it, an engine whose injection model never loaded would report
+    nothing wrong at all.
+
+    Reporting, not refusal: nothing reads construction_failures to reject an
+    engine, so such a policy is still served. That gate is unbuilt.
     """
     engine = _engine({})
     d = _composite(generic_injection_detection=True)  # no model configured

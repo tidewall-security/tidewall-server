@@ -10,13 +10,13 @@ import re
 from typing import Any
 
 # IPv4 pattern — 4 octets
-_IPV4 = re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b")  # hardcoded-pattern
+_IPV4 = re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b")
 
 # URL pattern — http:// or https://
-_URL = re.compile(r"https?://[^\s<>\"']+")  # hardcoded-pattern
+_URL = re.compile(r"https?://[^\s<>\"']+")
 
 # Domain pattern — word.word.tld (at least 2 dots or known TLDs)
-_DOMAIN = re.compile(r"\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+(?:[a-zA-Z]{2,})\b")  # hardcoded-pattern
+_DOMAIN = re.compile(r"\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+(?:[a-zA-Z]{2,})\b")
 
 # Common non-domain words that match the domain regex
 _DOMAIN_IGNORE = {"e.g", "i.e", "etc.com"}

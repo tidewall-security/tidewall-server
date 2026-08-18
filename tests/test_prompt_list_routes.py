@@ -127,3 +127,78 @@ def test_a_genuinely_missing_entry_is_still_404(client_and_key):
     )
 
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Engine invalidation
+#
+# Detectors compile the global prompt lists once, at engine construction, and
+# hold the result. Without invalidation an administrator who corrects a rejected
+# row keeps seeing the old failure, and one who adds a malicious pattern does
+# not get it enforced, until an unrelated policy edit or a restart.
+#
+# The service-level test for this passed with all three route calls removed,
+# which is precisely the wiring the fix depends on — hence these.
+# ---------------------------------------------------------------------------
+
+
+class _SpyPolicyService:
+    def __init__(self) -> None:
+        self.invalidations = 0
+
+    def invalidate_all_engines(self) -> None:
+        self.invalidations += 1
+
+
+@pytest.fixture
+def client_key_spy(client_and_key):
+    client, key = client_and_key
+    spy = _SpyPolicyService()
+    client.app.state.policy_service = spy
+    return client, key, spy
+
+
+def test_creating_an_entry_invalidates_cached_engines(client_key_spy):
+    client, key, spy = client_key_spy
+
+    resp = _create(client, key, r"attack-\d+")
+
+    assert resp.status_code == 201
+    assert spy.invalidations == 1, "a new pattern would not be enforced until something else rebuilt the engines"
+
+
+def test_updating_an_entry_invalidates_cached_engines(client_key_spy):
+    client, key, spy = client_key_spy
+    entry_id = _create(client, key, r"before-\d+").json()["id"]
+    spy.invalidations = 0
+
+    resp = client.put(
+        f"/v1/settings/prompt-lists/{entry_id}",
+        json={"pattern": r"after-\d+"},
+        headers={"Authorization": f"Bearer {key}"},
+    )
+
+    assert resp.status_code == 200
+    assert spy.invalidations == 1
+
+
+def test_deleting_an_entry_invalidates_cached_engines(client_key_spy):
+    client, key, spy = client_key_spy
+    entry_id = _create(client, key, r"doomed-\d+").json()["id"]
+    spy.invalidations = 0
+
+    resp = client.delete(
+        f"/v1/settings/prompt-lists/{entry_id}",
+        headers={"Authorization": f"Bearer {key}"},
+    )
+
+    assert resp.status_code == 204
+    assert spy.invalidations == 1
+
+
+def test_a_rejected_write_does_not_invalidate(client_key_spy):
+    """Nothing changed, so nothing should be rebuilt."""
+    client, key, spy = client_key_spy
+
+    assert _create(client, key, r"(?=x)y").status_code == 400
+    assert spy.invalidations == 0

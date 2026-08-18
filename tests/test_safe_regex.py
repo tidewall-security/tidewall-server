@@ -168,36 +168,52 @@ def test_the_compiled_object_is_not_a_stdlib_re_pattern():
 
 
 def test_no_backtracking_engine_runs_a_supplied_pattern():
-    """Catch a new consumer, an alias, or an unlisted `re` call.
+    """Structural check: the pattern argument must be a source literal.
 
-    Two earlier versions of this were too weak. A substring search for
-    `re.compile(` and `re.search(` in three named files passes for
-    `re.finditer`, an aliased import, the third-party `regex` module, or a new
-    consumer elsewhere. Allowlisting whole modules then fixed that but created
-    the opposite hole: a supplied-pattern consumer added *inside* an exempt
-    module would be invisible, and every unrelated hard-coded `re` use forces
-    another whole-module exemption until the rule means nothing.
+    Three earlier versions of this were too weak, each in a different way.
 
-    So the exemption is per line. A call site using the backtracking engine on
-    a pattern that is hard-coded in source must say so on that line:
+    1. A substring search for `re.compile(` in three named files passed for
+       `re.finditer`, an aliased import, or a new consumer elsewhere.
+    2. Allowlisting whole modules closed that but hid any supplied-pattern
+       consumer added *inside* an exempt module.
+    3. A per-line `# hardcoded-pattern` marker was narrower, but it asserted
+       nothing: the rule trusted a substring on a physical line, so
+       `re.search(pattern, text)  # hardcoded-pattern` sailed through — using
+       the exact marker the failure message told a contributor to add. A
+       control a contributor can self-approve with a comment is not a control.
 
-        _EMOJI = re.compile("...")  # hardcoded-pattern
-
-    which keeps the claim next to the code it describes, and keeps a new
-    supplied-pattern consumer visible even in a module that already has
-    exemptions.
+    So do not ask anyone to attest. Resolve calls into the backtracking module
+    and require the pattern argument to be a literal written in the source. A
+    hard-coded regex satisfies that by construction; anything reaching the
+    engine from configuration or a database row cannot. This also removes the
+    multiline false positive, because it inspects the call node's argument
+    rather than whatever text happens to share a line number.
     """
     import ast
     import pathlib
 
-    MARKER = "hardcoded-pattern"
     repo = pathlib.Path(__file__).resolve().parent.parent
     offenders: list[str] = []
 
+    def is_source_literal(node: ast.AST) -> bool:
+        """A pattern written in the file, not one that arrived from outside."""
+        if isinstance(node, ast.Constant):
+            return isinstance(node.value, str)
+        # Adjacent or explicitly concatenated string literals.
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            return is_source_literal(node.left) and is_source_literal(node.right)
+        # An f-string whose interpolations are themselves literals.
+        if isinstance(node, ast.JoinedStr):
+            return all(
+                isinstance(v, ast.Constant) or (isinstance(v, ast.FormattedValue) and is_source_literal(v.value))
+                for v in node.values
+            )
+        return False
+
     for path in sorted((repo / "app").rglob("*.py")):
         source = path.read_text()
-        lines = source.splitlines()
         tree = ast.parse(source)
+        rel = path.relative_to(repo).as_posix()
 
         backtracking: set[str] = set()
         for node in ast.walk(tree):
@@ -213,24 +229,34 @@ def test_no_backtracking_engine_runs_a_supplied_pattern():
             continue
 
         for node in ast.walk(tree):
-            name = None
-            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-                name = node.value.id
-            elif isinstance(node, ast.Name):
-                name = node.id
-            if name not in backtracking:
+            if not isinstance(node, ast.Call):
                 continue
-            line = lines[node.lineno - 1] if node.lineno <= len(lines) else ""
-            if MARKER in line:
+
+            func = node.func
+            # getattr(re, "search") defeats attribute resolution, so refuse it
+            # outright rather than pretend to follow it.
+            if isinstance(func, ast.Name) and func.id == "getattr" and node.args:
+                target = node.args[0]
+                if isinstance(target, ast.Name) and target.id in backtracking:
+                    offenders.append(f"{rel}:{node.lineno} (dynamic getattr on the regex module)")
                 continue
-            rel = path.relative_to(repo).as_posix()
-            offenders.append(f"{rel}:{node.lineno}")
+
+            called_module = None
+            if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+                called_module = func.value.id
+            elif isinstance(func, ast.Name):
+                called_module = func.id
+            if called_module not in backtracking:
+                continue
+
+            # Every pattern-taking function in this module takes it first.
+            if not node.args or not is_source_literal(node.args[0]):
+                offenders.append(f"{rel}:{node.lineno} (pattern is not a source literal)")
 
     assert not offenders, (
-        "backtracking regex engine used without a `# hardcoded-pattern` marker at: "
+        "a backtracking regex engine is being handed a pattern that is not written in the source at: "
         + ", ".join(offenders)
-        + ". Administrator-supplied patterns must go through app/services/safe_regex.py (P0-12); "
-        "if the pattern is hard-coded in source, mark the line."
+        + ". Administrator-supplied patterns must go through app/services/safe_regex.py (P0-12)."
     )
 
 
