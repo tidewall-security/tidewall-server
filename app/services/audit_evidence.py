@@ -65,6 +65,11 @@ MAX_MATCHES_JSON_BYTES = 256 * 1024
 # unbounded values and originals before any aggregate limit is reached.
 MAX_MATCHES_COLLECTED = MAX_MATCH_GROUPS * MAX_OCCURRENCES_PER_GROUP
 
+# Persistence contract. Step 4 must store exactly the bytes canonical_json()
+# produces, not re-serialise the dicts: the size limit is measured on these
+# bytes, and a different serialiser would bound something else.
+MATCHES_SCHEMA_VERSION = 1
+
 SOURCE_KINDS = ("message", "tool")
 SOURCE_FIELDS = ("content", "name", "description", "parameters")
 _MAX_IDENTIFIER_LENGTH = 64
@@ -96,7 +101,10 @@ def _check_identifier(value: object, code: str) -> str:
         raise EvidenceError(code, "must be a non-empty string")
     if len(value) > _MAX_IDENTIFIER_LENGTH:
         raise EvidenceError(code, "is too long")
-    if not all(c.isalnum() or c in "_-." for c in value):
+    # ASCII deliberately: str.isalnum() accepts Cyrillic and fullwidth
+    # characters, so "pii" and "\u0440\u0456\u0456" would be different identifiers that look
+    # identical. These become persistence and authorization discriminators.
+    if not all(("a" <= c <= "z") or ("A" <= c <= "Z") or ("0" <= c <= "9") or c in "_-." for c in value):
         raise EvidenceError(code, "contains characters that are not allowed in an identifier")
     return value
 
@@ -186,7 +194,12 @@ class MatchGroup:
     occurrences: int
 
     def as_storable(self) -> dict[str, Any]:
-        """The canonical form that will be persisted. Never includes offsets."""
+        """The canonical form that will be persisted. Never includes offsets.
+
+        Source provenance is included deliberately: without it the same value
+        found in a user question and in a tool response are indistinguishable,
+        and which one leaked is usually the question being asked.
+        """
         return {
             "detector": self.detector,
             "match_type": self.match_type,
@@ -203,8 +216,15 @@ class MatchGroup:
 
 
 def canonical_json(groups: list[MatchGroup]) -> str:
-    """The exact representation that gets stored, so the limit can measure it."""
-    return json.dumps([g.as_storable() for g in groups], sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    """The exact representation that gets stored, so the limit can measure it.
+
+    Persistence must write these bytes rather than re-serialising the dicts.
+    A JSON column with its own serialiser would produce different whitespace,
+    escaping or key order, and the size limit would then be bounding something
+    other than what is stored.
+    """
+    payload = {"schema_version": MATCHES_SCHEMA_VERSION, "matches": [g.as_storable() for g in groups]}
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def validate_match(match: ExactMatch, original: str) -> None:
@@ -264,6 +284,7 @@ class MatchCollector:
     _originals: dict[SourceRef, str] = field(default_factory=dict, repr=False)
     _matches: list[ExactMatch] = field(default_factory=list, repr=False)
     _finalized: bool = field(default=False, repr=False)
+    _capture_open: bool = field(default=False, repr=False)
 
     def __getstate__(self) -> None:
         raise EvidenceError("collector.not_serializable", "the collector holds original content and offsets")
@@ -288,19 +309,42 @@ class MatchCollector:
         Validating one at a time let earlier good matches survive a later bad
         one, so a detector that went wrong part-way still contributed a partial
         set — indistinguishable, once stored, from a complete one.
+
+        Captures do not nest and cannot overlap finalization. Allowing either
+        made the transaction boundary depend on call order: an inner capture
+        could commit while its outer block rolled back, and calling finalize()
+        from inside a block left a committed match in a collector that had
+        already destroyed the originals it would be validated against.
         """
         if self._finalized:
             raise EvidenceError("collector.finalized")
+        if self._capture_open:
+            raise EvidenceError("collector.capture_already_open")
         _check_identifier(detector, "match.detector.invalid")
+
         staged = _DetectorCapture(detector, self)
+        self._capture_open = True
         try:
             yield staged
-        except EvidenceError:
+        except BaseException:
+            # Any failure discards the batch, not only EvidenceError: an
+            # exception raised by the caller mid-batch leaves exactly the same
+            # partial set as a validation failure.
             raise
         else:
-            if len(self._matches) + len(staged.staged) > MAX_MATCHES_COLLECTED:
+            # State can have changed inside the block; the commit has to look
+            # again rather than trust what was true on entry.
+            if self._finalized:
+                raise EvidenceError("collector.finalized")
+            for match in staged._staged:
+                if match.detector != detector:
+                    raise EvidenceError("match.detector.mismatch")
+            if len(self._matches) + len(staged._staged) > MAX_MATCHES_COLLECTED:
                 raise EvidenceError("collector.too_many_matches")
-            self._matches.extend(staged.staged)
+            self._matches.extend(staged._staged)
+        finally:
+            staged._closed = True
+            self._capture_open = False
 
     def finalize(self) -> list[MatchGroup]:
         """Group the matches and destroy the originals and offsets.
@@ -310,7 +354,22 @@ class MatchCollector:
         """
         if self._finalized:
             raise EvidenceError("collector.finalized")
+        if self._capture_open:
+            raise EvidenceError("collector.capture_already_open")
 
+        # One-shot from here regardless of outcome. Clearing only on success
+        # left a fully populated collector behind every failure — the caller
+        # could retry, add sources, or simply keep it, which is the opposite of
+        # "overflow invalidates the entire capture".
+        self._finalized = True
+        groups: list[MatchGroup] = []
+        try:
+            return self._build_groups(groups)
+        finally:
+            self._originals.clear()
+            self._matches.clear()
+
+    def _build_groups(self, groups: list[MatchGroup]) -> list[MatchGroup]:
         grouped: dict[tuple, list[Any]] = {}
         for match in self._matches:
             original = self._originals.get(match.source)
@@ -335,7 +394,7 @@ class MatchCollector:
                     raise EvidenceError("capture.too_many_occurrences")
                 existing[1] += 1
 
-        groups = [
+        groups.extend(
             MatchGroup(
                 detector=m.detector,
                 match_type=m.match_type,
@@ -345,17 +404,17 @@ class MatchCollector:
                 occurrences=count,
             )
             for m, count in grouped.values()
-        ]
+        )
         groups.sort(key=_sort_key)
 
         if len(canonical_json(groups).encode("utf-8")) > MAX_MATCHES_JSON_BYTES:
+            # Empty the list the caller would otherwise reach through this
+            # frame: an exception keeps its traceback, and the traceback keeps
+            # the locals, so simply raising would hand back the oversized
+            # result it is refusing to return.
+            groups.clear()
             raise EvidenceError("capture.serialized_too_large")
 
-        # Destroy the sensitive state. This is the offset-lifetime guarantee;
-        # returning offset-free groups while retaining every original was not.
-        self._originals.clear()
-        self._matches.clear()
-        self._finalized = True
         return groups
 
 
@@ -366,15 +425,21 @@ class _DetectorCapture:
 
     detector: str
     _collector: MatchCollector = field(repr=False)
-    staged: list[ExactMatch] = field(default_factory=list, repr=False)
+    _staged: list[ExactMatch] = field(default_factory=list, repr=False)
+    _closed: bool = field(default=False, repr=False)
 
     def add(self, match: ExactMatch) -> None:
+        # Continuing to accept matches after the block exits produced a
+        # plausible partial capture: they validated, they appended, and the
+        # commit had already run, so they were silently never stored.
+        if self._closed:
+            raise EvidenceError("capture.closed")
         if match.detector != self.detector:
             raise EvidenceError("match.detector.mismatch")
         original = self._collector._originals.get(match.source)
         if original is None:
             raise EvidenceError("source.unregistered")
         validate_match(match, original)
-        if len(self.staged) >= MAX_MATCHES_COLLECTED:
+        if len(self._staged) >= MAX_MATCHES_COLLECTED:
             raise EvidenceError("collector.too_many_matches")
-        self.staged.append(match)
+        self._staged.append(match)

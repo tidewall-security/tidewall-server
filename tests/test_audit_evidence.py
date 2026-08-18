@@ -459,3 +459,125 @@ def test_no_error_path_quotes_content_offsets_or_caller_strings():
         assert secret not in message
         assert "my password" not in message
         assert "9999" not in message
+
+
+# ---------------------------------------------------------------------------
+# Round 2: failure must also be terminal, and captures must not overlap
+# ---------------------------------------------------------------------------
+
+
+def test_a_failed_finalize_still_destroys_state_and_is_terminal():
+    """Clearing only on success left a fully populated collector behind every
+    failure — the caller could retry, add sources, or simply keep it."""
+    value = "secret"
+    text = " ".join([value] * (MAX_OCCURRENCES_PER_GROUP + 2))
+    collector = _collector(text)
+    with collector.capture("pii") as batch:
+        pos = 0
+        for _ in range(MAX_OCCURRENCES_PER_GROUP + 2):
+            start = text.index(value, pos)
+            batch.add(_m(value, start, start + len(value)))
+            pos = start + len(value)
+
+    with pytest.raises(EvidenceError):
+        collector.finalize()
+
+    assert collector._originals == {}
+    assert collector._matches == []
+    with pytest.raises(EvidenceError) as exc:
+        collector.finalize()
+    assert exc.value.code == "collector.finalized"
+
+
+def test_an_overflowing_result_is_not_reachable_through_the_traceback():
+    """An exception keeps its traceback and the traceback keeps the locals, so
+    raising alone would hand back the oversized result it is refusing."""
+    collector = MatchCollector()
+    value = "v" * (MAX_VALUE_BYTES - 1)
+    for i in range(MAX_MATCH_GROUPS):
+        src = SourceRef(kind="message", index=i, field="content", role="user")
+        collector.register_source(src, value)
+        _capture(collector, _m(value, 0, len(value), source=src))
+
+    with pytest.raises(EvidenceError) as exc:
+        collector.finalize()
+    assert exc.value.code == "capture.serialized_too_large"
+
+    tb = exc.tb
+    seen = []
+    while tb is not None:
+        seen.extend(v for v in tb.tb_frame.f_locals.values() if isinstance(v, list))
+        tb = tb.tb_next
+    for candidate in seen:
+        assert not any(
+            hasattr(item, "value") and item.value == value for item in candidate
+        ), "the oversized result is reachable through the traceback"
+
+
+def test_captures_cannot_nest():
+    """An inner capture could commit while the outer block rolled back."""
+    collector = _collector("hello")
+    with pytest.raises(EvidenceError) as exc:
+        with collector.capture("pii"):
+            with collector.capture("pii"):
+                pass
+    assert exc.value.code == "collector.capture_already_open"
+
+
+def test_finalize_cannot_run_inside_a_capture():
+    """It returned [], cleared state, marked the collector finalized, and then
+    the clean context exit committed a match into it anyway."""
+    collector = _collector("hello")
+    with pytest.raises(EvidenceError) as exc:
+        with collector.capture("pii") as batch:
+            batch.add(_m("hello", 0, 5))
+            collector.finalize()
+    assert exc.value.code == "collector.capture_already_open"
+
+
+def test_a_non_evidence_exception_also_discards_the_batch():
+    """A caller failing mid-batch leaves exactly the same partial set as a
+    validation failure."""
+    collector = _collector("alice@example.com")
+
+    with pytest.raises(RuntimeError):
+        with collector.capture("pii") as batch:
+            batch.add(_m("alice@example.com", 0, 17))
+            raise RuntimeError("caller blew up")
+
+    assert collector.finalize() == []
+
+
+def test_a_batch_cannot_be_used_after_its_block_exits():
+    """They validated, they appended, the commit had already run — so they were
+    silently never stored."""
+    collector = _collector("alice@example.com")
+    with collector.capture("pii") as batch:
+        batch.add(_m("alice@example.com", 0, 17))
+
+    with pytest.raises(EvidenceError) as exc:
+        batch.add(_m("alice@example.com", 0, 17))
+    assert exc.value.code == "capture.closed"
+
+
+def test_identifiers_reject_unicode_confusables():
+    """str.isalnum() accepts Cyrillic and fullwidth characters, so two
+    identifiers could look identical and not be."""
+    for confusable in ("ріі", "１２３", "café"):
+        with pytest.raises(EvidenceError) as exc:
+            ExactMatch(detector=confusable, match_type="X", source=MSG, value="x", start=0, end=1)
+        assert exc.value.code == "match.detector.invalid"
+
+
+def test_the_stored_form_carries_a_schema_version():
+    """Step 4 must store these bytes rather than re-serialise the dicts."""
+    import json
+
+    collector = _collector("alice@example.com")
+    _capture(collector, _m("alice@example.com", 0, 17))
+
+    payload = json.loads(canonical_json(collector.finalize()))
+
+    assert payload["schema_version"] == 1
+    assert payload["matches"][0]["value"] == "alice@example.com"
+    assert "start" not in json_keys(payload)
