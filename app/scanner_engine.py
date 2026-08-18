@@ -281,8 +281,8 @@ class ScannerEngine:
                 unavailable.append(FailedDetector(name=name, code=det.unavailability, action=det.action))
                 continue
             # 3. A composite whose own construction succeeded but which has a
-            #    dead sub-component. The detector is `available`, so only this
-            #    reaches the preflight.
+            #    dead sub-component. The detector is `available`, so this is the
+            #    only place such a failure is recorded at all.
             for component, code in det.load_failures.items():
                 unavailable.append(FailedDetector(name=f"{name}.{component}", code=code, action=det.action))
         return [*self._construction_failures, *unavailable]

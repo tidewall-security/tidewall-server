@@ -245,10 +245,10 @@ class BaseDetector(ABC):
 
         Composite detectors record per-component load failures and remain
         ``available`` themselves, because the other components still work. That
-        left a third place where "cannot run" was recorded and the startup
-        preflight read neither — so it could certify an engine whose generic
-        injection model or intent service never loaded. Exposed publicly so
-        there is one interface to ask.
+        left a third place where "cannot run" was recorded and nothing read
+        it — so an engine whose generic injection model or intent service never
+        loaded reported nothing wrong. Exposed publicly so there is one
+        interface to ask. Reporting only: no caller refuses to serve on it.
         """
         return dict(getattr(self, "_load_failures", {}) or {})
 

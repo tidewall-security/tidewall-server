@@ -168,89 +168,132 @@ def test_the_compiled_object_is_not_a_stdlib_re_pattern():
 
 
 def test_no_backtracking_engine_runs_a_supplied_pattern():
-    """Structural check: the pattern argument must be a source literal.
+    """Structural check: a pattern reaching `re` must be written in the source.
 
-    Three earlier versions of this were too weak, each in a different way.
+    Four earlier versions were each too weak in a different way — a substring
+    search (evaded by `re.finditer` or an alias), a whole-module allowlist (hid
+    consumers added inside exempt modules), and a per-line `# hardcoded-pattern`
+    marker which asserted nothing at all, since a contributor could apply the
+    very marker the failure message suggested. A control you can self-approve
+    with a comment is not a control.
 
-    1. A substring search for `re.compile(` in three named files passed for
-       `re.finditer`, an aliased import, or a new consumer elsewhere.
-    2. Allowlisting whole modules closed that but hid any supplied-pattern
-       consumer added *inside* an exempt module.
-    3. A per-line `# hardcoded-pattern` marker was narrower, but it asserted
-       nothing: the rule trusted a substring on a physical line, so
-       `re.search(pattern, text)  # hardcoded-pattern` sailed through — using
-       the exact marker the failure message told a contributor to add. A
-       control a contributor can self-approve with a comment is not a control.
+    So nobody attests to anything. This resolves calls into the backtracking
+    module and requires the pattern argument to be a literal written in the
+    source, or a module-level constant that is itself a literal. A hard-coded
+    regex satisfies that by construction; a value arriving from configuration
+    or a database row cannot.
 
-    So do not ask anyone to attest. Resolve calls into the backtracking module
-    and require the pattern argument to be a literal written in the source. A
-    hard-coded regex satisfies that by construction; anything reaching the
-    engine from configuration or a database row cannot. This also removes the
-    multiline false positive, because it inspects the call node's argument
-    rather than whatever text happens to share a line number.
+    Known limits, stated rather than implied: it does not follow a pattern
+    through a helper defined outside `app/`, and it does not analyse
+    `compiled.search(text)` on an already-compiled object — that call receives
+    text, and the compilation itself was checked where it happened.
     """
     import ast
     import pathlib
 
+    # Only the APIs that actually take a pattern. Including everything made
+    # `re.escape(text)` and `re.purge()` failures, which is noise that teaches
+    # contributors to route around the rule.
+    PATTERN_APIS = {"compile", "search", "match", "fullmatch", "findall", "finditer", "sub", "subn", "split"}
+
     repo = pathlib.Path(__file__).resolve().parent.parent
     offenders: list[str] = []
-
-    def is_source_literal(node: ast.AST) -> bool:
-        """A pattern written in the file, not one that arrived from outside."""
-        if isinstance(node, ast.Constant):
-            return isinstance(node.value, str)
-        # Adjacent or explicitly concatenated string literals.
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-            return is_source_literal(node.left) and is_source_literal(node.right)
-        # An f-string whose interpolations are themselves literals.
-        if isinstance(node, ast.JoinedStr):
-            return all(
-                isinstance(v, ast.Constant) or (isinstance(v, ast.FormattedValue) and is_source_literal(v.value))
-                for v in node.values
-            )
-        return False
 
     for path in sorted((repo / "app").rglob("*.py")):
         source = path.read_text()
         tree = ast.parse(source)
         rel = path.relative_to(repo).as_posix()
 
-        backtracking: set[str] = set()
+        module_names: set[str] = set()  # names bound to the re/regex module
+        func_names: set[str] = set()  # names bound to a pattern-taking function
+        literal_consts: set[str] = set()  # module-level NAME = "literal"
+
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     if alias.name in ("re", "regex"):
-                        backtracking.add(alias.asname or alias.name)
+                        module_names.add(alias.asname or alias.name)
             elif isinstance(node, ast.ImportFrom) and node.module in ("re", "regex"):
                 for alias in node.names:
-                    backtracking.add(alias.asname or alias.name)
+                    if alias.name in PATTERN_APIS:
+                        func_names.add(alias.asname or alias.name)
 
-        if not backtracking:
+        # A trivial rebinding (`engine = re`) previously defeated the whole rule.
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Name) and node.value.id in module_names:
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        module_names.add(target.id)
+
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+                if isinstance(node.value.value, str):
+                    for target in node.targets:
+                        if isinstance(target, ast.Name):
+                            literal_consts.add(target.id)
+
+        if not module_names and not func_names:
             continue
+
+        def is_source_literal(node: ast.AST) -> bool:
+            if isinstance(node, ast.Constant):
+                return isinstance(node.value, str)
+            if isinstance(node, ast.Name):
+                return node.id in literal_consts
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add | ast.Mod):
+                return is_source_literal(node.left) and is_source_literal(node.right)
+            if isinstance(node, ast.JoinedStr):
+                return all(
+                    isinstance(v, ast.Constant) or (isinstance(v, ast.FormattedValue) and is_source_literal(v.value))
+                    for v in node.values
+                )
+            # "literal".format(only, literals)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "format":
+                return is_source_literal(node.func.value) and all(is_source_literal(a) for a in node.args)
+            return False
+
+        def pattern_arg(call: ast.Call):
+            if call.args:
+                return call.args[0]
+            for kw in call.keywords:
+                if kw.arg == "pattern":
+                    return kw.value
+            return None
 
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
-
             func = node.func
-            # getattr(re, "search") defeats attribute resolution, so refuse it
-            # outright rather than pretend to follow it.
+
+            # Indirection that hands the callable itself somewhere else —
+            # functools.partial(re.compile, supplied) and getattr(re, "search")
+            # both previously sailed straight past.
+            if isinstance(func, ast.Attribute) and func.attr == "partial":
+                for arg in node.args:
+                    if (
+                        isinstance(arg, ast.Attribute)
+                        and isinstance(arg.value, ast.Name)
+                        and arg.value.id in module_names
+                        and arg.attr in PATTERN_APIS
+                    ) or (isinstance(arg, ast.Name) and arg.id in func_names):
+                        offenders.append(f"{rel}:{node.lineno} (regex callable passed through partial)")
+                continue
             if isinstance(func, ast.Name) and func.id == "getattr" and node.args:
                 target = node.args[0]
-                if isinstance(target, ast.Name) and target.id in backtracking:
+                if isinstance(target, ast.Name) and target.id in module_names:
                     offenders.append(f"{rel}:{node.lineno} (dynamic getattr on the regex module)")
                 continue
 
-            called_module = None
+            hit = False
             if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-                called_module = func.value.id
+                hit = func.value.id in module_names and func.attr in PATTERN_APIS
             elif isinstance(func, ast.Name):
-                called_module = func.id
-            if called_module not in backtracking:
+                hit = func.id in func_names
+            if not hit:
                 continue
 
-            # Every pattern-taking function in this module takes it first.
-            if not node.args or not is_source_literal(node.args[0]):
+            arg = pattern_arg(node)
+            if arg is None or not is_source_literal(arg):
                 offenders.append(f"{rel}:{node.lineno} (pattern is not a source literal)")
 
     assert not offenders, (

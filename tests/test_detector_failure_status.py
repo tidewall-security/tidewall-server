@@ -476,8 +476,8 @@ def test_self_disabled_detector_counts_as_unable_to_run():
     A detector that catches its own load error calls mark_unavailable() and
     constructs *successfully*, so it sits in _detectors looking healthy. PII
     without Presidio is exactly this. Counting only construction exceptions
-    would let the startup preflight declare an engine servable while one of its
-    redactors is dead.
+    would leave an engine reporting itself healthy while one of its redactors
+    is dead. (Reporting only — nothing refuses to serve such an engine.)
     """
     engine = _engine({})
     det = _RaisingDetector({"action": "redact"})
