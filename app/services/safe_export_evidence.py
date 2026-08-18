@@ -216,6 +216,15 @@ def project_detectors(detectors: Any) -> dict[str, Any]:
         status = _safe_identifier(payload.get("status"))
         if status is not None:
             entry["status"] = status
+        # Dropping these was a contract regression, not a privacy gain: they
+        # are the difference between "a dependency is missing", "the model
+        # would not load", "the configuration is invalid" and "the scan blew
+        # up", which is exactly what a caller or operator acts on. They are
+        # fixed enum values produced by this codebase, not request content.
+        for key in ("failure_code", "skip_reason"):
+            code = _safe_identifier(payload.get(key))
+            if code is not None:
+                entry[key] = code
         if payload.get("degraded"):
             entry["degraded"] = True
 

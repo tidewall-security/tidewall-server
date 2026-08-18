@@ -35,6 +35,7 @@ from app.config import OnDetectorFailure
 from app.detectors.base import FailureCode
 from app.models import GuardRequest, GuardResponse, GuardResult
 from app.services.safe_export_evidence import project_detectors
+from app.services.safe_logging import describe
 from app.utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
@@ -121,13 +122,13 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
         }
         try:
             access_rules_result = evaluate_access_rules(access_rules_data, request_metadata)
-        except ValueError:
+        except ValueError as exc:
             # A stored rule the evaluator cannot apply. Validation rejects these
             # at write time, so reaching here means an unvalidated write path.
             # Blocking is the honest response: the rule might have blocked this
             # request and we cannot tell. Raising would 500 and produce no audit
             # record at all.
-            logger.error("Access rule could not be evaluated; blocking", exc_info=True)
+            logger.error("Access rule could not be evaluated; blocking: %s", describe(exc))
             access_rules_result = {
                 "action": "block",
                 "matched_rules": [{"name": "invalid-rule", "matched": True, "action": "block"}],
@@ -238,8 +239,8 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
 
             try:
                 msg_result = await asyncio.to_thread(engine.scan_single, content, vault_id, vault)
-            except Exception:
-                logger.error("Message reconstruction raised", exc_info=True)
+            except Exception as exc:
+                logger.error("Message reconstruction raised: %s", describe(exc))
                 scan_result.record_failure("_reconstruction", FailureCode.RECONSTRUCTION_FAILED, action="redact")
                 reconstruction_failed = True
                 break

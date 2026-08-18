@@ -80,3 +80,43 @@ def test_scan_time_sites_do_not_use_exc_info(module, line_fragment):
     for line in pathlib.Path(module).read_text().split("\n"):
         if line_fragment in line:
             assert "exc_info" not in line, f"{module}: {line.strip()}"
+
+
+@pytest.mark.parametrize(
+    "module,fragment",
+    [
+        ("app/routes/guard.py", "Access rule evaluation failed"),
+        ("app/routes/guard.py", "econstruct"),
+        ("app/detectors/pii.py", "Presidio analysis failed"),
+        ("app/detectors/malicious_entity.py", "ML URL classifier failed"),
+        ("app/detectors/malicious_prompt.py", "list check failed"),
+        ("app/detectors/malicious_prompt.py", "Intent conformance check failed"),
+    ],
+)
+def test_no_scan_path_site_retains_a_traceback(module, fragment):
+    """The first pass converted seven sites and I called it complete.
+
+    It missed ten, including PII and malicious_prompt — the two primary
+    content scanners — where the exception is raised inside scan(text) and the
+    library message routinely quotes the offending value.
+    """
+    import pathlib
+
+    for line in pathlib.Path(module).read_text().split("\n"):
+        if fragment in line and "logger." in line:
+            assert "exc_info" not in line, f"{module}: {line.strip()}"
+
+
+def test_construction_time_sites_deliberately_keep_their_traceback():
+    """Not everything should be stripped.
+
+    A model that will not load raises with a path and no request content, and
+    the traceback is the most useful thing in the log. Removing it there would
+    be cargo-culting the rule rather than applying it.
+    """
+    import pathlib
+
+    source = pathlib.Path("app/detectors/pii.py").read_text()
+    load_line = next(ln for ln in source.split("\n") if "Failed to initialize Presidio" in ln)
+
+    assert "exc_info=True" in load_line
