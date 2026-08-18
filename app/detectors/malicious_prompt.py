@@ -207,6 +207,24 @@ class MaliciousPromptDetector(BaseDetector):
                     from app.services.prompt_list_service import PromptListService
 
                     self._prompt_list_svc = PromptListService(session_factory())
+
+                    # Compile the stored rows now, not on whichever request
+                    # first scans this list. Without this, an unenforceable row
+                    # is invisible to activation preflight: the engine reports
+                    # no construction failure, activation declares the policy
+                    # servable, and the problem surfaces only once some caller's
+                    # text happens to exercise that list.
+                    for list_type, enabled in (
+                        ("malicious", self._custom_malicious_enabled),
+                        ("benign", self._custom_benign_enabled),
+                    ):
+                        if not enabled:
+                            continue
+                        try:
+                            self._prompt_list_svc.preflight(list_type)
+                        except PromptListConfigError:
+                            logger.error("Stored %s prompt list cannot be enforced as written", list_type)
+                            self._load_failures[f"custom_{list_type}"] = FailureCode.CONFIG_INVALID
                 except Exception:
                     logger.warning("Failed to initialize PromptListService", exc_info=True)
                     self._load_failures["custom_lists"] = FailureCode.CONSTRUCT_FAILED

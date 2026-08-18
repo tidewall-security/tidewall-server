@@ -167,27 +167,69 @@ def test_the_compiled_object_is_not_a_stdlib_re_pattern():
     )
 
 
-def test_every_supplied_pattern_site_uses_the_safe_compiler():
-    """The chokepoint only works if nothing bypasses it.
+def test_no_module_in_app_uses_a_backtracking_engine_on_supplied_patterns():
+    """Catch a new consumer, an alias, or an unlisted `re` call.
 
-    A new `re.compile` on an administrator-supplied pattern would reintroduce
-    the finding at that site while every test here still passed, so assert the
-    absence directly.
+    The earlier version of this test searched three named files for the literal
+    strings `re.compile(` and `re.search(`. That passes if someone uses
+    `re.finditer`, imports `re` under an alias, reaches for the third-party
+    `regex` module, or simply adds a fourth consumer somewhere else — which is
+    precisely how a chokepoint erodes. Parse the tree instead, and scan all of
+    `app/`.
+
+    A small allowlist covers modules whose patterns are hard-coded in source
+    and code-reviewed: those are not the supplied-pattern threat model, and
+    moving them to RE2 would risk semantic changes for no security gain.
     """
+    import ast
     import pathlib
 
-    repo = pathlib.Path(__file__).resolve().parent.parent
-    offenders = []
-    for module in (
-        "app/detectors/custom_entity.py",
-        "app/services/prompt_list_service.py",
-        "app/services/policy_validation.py",
-    ):
-        source = (repo / module).read_text()
-        if "re.compile(" in source or "re.search(" in source:
-            offenders.append(module)
+    # Hard-coded, code-reviewed patterns. Not administrator-supplied.
+    ALLOWED = {
+        "app/services/entity_extractor.py",
+        "app/detectors/emoji_detector.py",
+        "app/vault.py",
+        "app/services/safe_regex.py",  # imports re2, not re
+    }
 
-    assert not offenders, f"stdlib regex calls on supplied patterns in: {offenders}"
+    repo = pathlib.Path(__file__).resolve().parent.parent
+    offenders: list[str] = []
+
+    for path in sorted((repo / "app").rglob("*.py")):
+        rel = path.relative_to(repo).as_posix()
+        if rel in ALLOWED:
+            continue
+        tree = ast.parse(path.read_text())
+
+        # Which local names refer to a backtracking engine in this module?
+        backtracking: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in ("re", "regex"):
+                        backtracking.add(alias.asname or alias.name)
+            elif isinstance(node, ast.ImportFrom) and node.module in ("re", "regex"):
+                for alias in node.names:
+                    backtracking.add(alias.asname or alias.name)
+
+        if not backtracking:
+            continue
+
+        for node in ast.walk(tree):
+            called = None
+            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+                called = node.value.id
+            elif isinstance(node, ast.Name):
+                called = node.id
+            if called in backtracking:
+                offenders.append(f"{rel} (via {called})")
+                break
+
+    assert not offenders, (
+        "backtracking regex engine reachable in: "
+        + ", ".join(offenders)
+        + ". Administrator-supplied patterns must go through app/services/safe_regex.py (P0-12)."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -309,3 +351,77 @@ def test_ordinary_unicode_folds_still_agree(pattern, text):
 
     assert re.search(pattern, text, re.IGNORECASE) is not None
     assert compile_pattern(pattern, case_insensitive=True).search(text) is not None
+
+
+def test_an_unenforceable_row_is_visible_at_construction_not_first_scan(db_session):
+    """Activation preflight must see it.
+
+    Without construction-time compilation the engine reports no failure,
+    activation declares the policy servable, and the bad row is discovered by
+    whichever caller's text first happens to exercise that list — which for a
+    malicious list means an attacker chooses the moment.
+    """
+    from app.db.models import GlobalPromptList
+    from app.detectors.base import FailureCode
+    from app.detectors.malicious_prompt import MaliciousPromptDetector
+
+    db_session.add(GlobalPromptList(list_type="malicious", pattern=r"(?=x)y", match_type="regex"))
+    db_session.commit()
+
+    detector = MaliciousPromptDetector(
+        {"enabled": True, "custom_malicious_detection": True, "generic_injection": {"enabled": False}},
+        session_factory=lambda: db_session,
+    )
+
+    assert detector.load_failures.get("custom_malicious") is FailureCode.CONFIG_INVALID
+
+
+def test_a_valid_list_preflights_clean(db_session):
+    from app.db.models import GlobalPromptList
+    from app.detectors.malicious_prompt import MaliciousPromptDetector
+
+    db_session.add(GlobalPromptList(list_type="malicious", pattern=r"attack-\d+", match_type="regex"))
+    db_session.commit()
+
+    detector = MaliciousPromptDetector(
+        {"enabled": True, "custom_malicious_detection": True, "generic_injection": {"enabled": False}},
+        session_factory=lambda: db_session,
+    )
+
+    assert "custom_malicious" not in detector.load_failures
+
+
+def test_the_scan_query_is_bounded_not_just_the_scan(db_session):
+    """A cap applied after `.all()` is not a cap.
+
+    Checking the length of a full fetch still lets a direct write of a million
+    rows make every request retrieve and instantiate a million objects before
+    the limit fires. The bound has to be in the SQL, so assert the SQL.
+    """
+    from sqlalchemy import event
+
+    from app.db.models import GlobalPromptList
+    from app.services.prompt_list_service import MAX_PATTERNS, PromptListConfigError, PromptListService
+
+    for i in range(MAX_PATTERNS + 50):
+        db_session.add(GlobalPromptList(list_type="malicious", pattern=f"p{i}", match_type="substring"))
+    db_session.commit()
+
+    statements: list[str] = []
+    engine = db_session.get_bind()
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        if "global_prompt_lists" in statement:
+            statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        with pytest.raises(PromptListConfigError):
+            PromptListService(db_session).check_match("anything", "malicious")
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+    assert statements, "no query was emitted"
+    assert all(
+        "LIMIT" in st.upper() for st in statements
+    ), f"the scan path fetched without a LIMIT, so the row count is unbounded: {statements}"

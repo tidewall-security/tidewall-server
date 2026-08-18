@@ -59,6 +59,47 @@ class PromptListService:
         self._session.commit()
         return entry
 
+    def _bounded_entries(self, list_type: str) -> list[GlobalPromptList]:
+        """Fetch at most one row past the budget, and fail if it exists.
+
+        Checking the length of a full fetch is not a bound: the scan is capped
+        but the query is not, so a direct write of a million rows still makes
+        every request retrieve and instantiate a million objects before the cap
+        fires. The limit has to be in the SQL.
+
+        The extra row is what distinguishes "at budget" from "over budget"
+        without a second COUNT round trip.
+        """
+        entries = (
+            self._session.query(GlobalPromptList)
+            .filter_by(list_type=list_type)
+            .order_by(GlobalPromptList.created_at.desc())
+            .limit(MAX_PATTERNS + 1)
+            .all()
+        )
+        if len(entries) > MAX_PATTERNS:
+            # Create-time counting is not a hard invariant — two concurrent
+            # inserts can both pass it, and rows can be written directly. The
+            # scan path has to fail closed rather than do unbounded work.
+            raise PromptListConfigError(f"{list_type} prompt list holds more than the {MAX_PATTERNS}-entry limit")
+        return entries
+
+    def preflight(self, list_type: str) -> None:
+        """Compile every stored pattern for a list type without scanning.
+
+        Called at detector construction so an unenforceable row is visible to
+        activation preflight, rather than being discovered by whichever request
+        first happens to scan that list. Raises PromptListConfigError, which the
+        caller records as a CONFIG_INVALID component.
+        """
+        for entry in self._bounded_entries(list_type):
+            if entry.match_type == "regex":
+                try:
+                    compile_pattern(entry.pattern, case_insensitive=True)
+                except UnsafePatternError as exc:
+                    logger.error("Invalid regex in stored %s prompt list entry", list_type)
+                    raise PromptListConfigError("invalid regex in prompt list") from exc
+
     def list_entries(self, list_type: str | None = None) -> list[GlobalPromptList]:
         query = self._session.query(GlobalPromptList)
         if list_type:
@@ -110,14 +151,7 @@ class PromptListService:
 
         Matching is case-insensitive for all match types.
         """
-        entries = self.list_entries(list_type=list_type)
-        if len(entries) > MAX_PATTERNS:
-            # Create-time counting is not a hard invariant — two concurrent
-            # inserts can both pass it, and rows can be written directly. The
-            # scan path has to fail closed rather than do unbounded work.
-            raise PromptListConfigError(
-                f"{list_type} prompt list holds {len(entries)} entries, over the {MAX_PATTERNS} limit"
-            )
+        entries = self._bounded_entries(list_type)
         text_lower = text.lower()
 
         for entry in entries:
