@@ -183,10 +183,15 @@ def test_no_backtracking_engine_runs_a_supplied_pattern():
     regex satisfies that by construction; a value arriving from configuration
     or a database row cannot.
 
-    Known limits, stated rather than implied: it does not follow a pattern
-    through a helper defined outside `app/`, and it does not analyse
-    `compiled.search(text)` on an already-compiled object — that call receives
-    text, and the compilation itself was checked where it happened.
+    Known limits, stated rather than implied. This is a regression guard, not
+    the security control — RE2 is. It does not follow a pattern through a
+    helper defined outside `app/`; it does not analyse `compiled.search(text)`
+    on an already-compiled object (that call receives text, and the
+    compilation was checked where it happened); and it does not chase the
+    module or a bound callable through a class attribute, a container, tuple
+    unpacking, or `importlib`. Someone determined to route around it can.
+    What it reliably catches is the accident: a new consumer written the
+    ordinary way.
     """
     import ast
     import pathlib
@@ -225,19 +230,28 @@ def test_no_backtracking_engine_runs_a_supplied_pattern():
                     if isinstance(target, ast.Name):
                         module_names.add(target.id)
 
-        for node in tree.body:
+        for node in ast.walk(tree):
+            # Anywhere, not only module level: a literal assigned inside a
+            # function is just as clearly written in the source.
             if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
-                if isinstance(node.value.value, str):
+                if isinstance(node.value.value, str | bytes):
                     for target in node.targets:
                         if isinstance(target, ast.Name):
                             literal_consts.add(target.id)
+            elif (
+                isinstance(node, ast.AnnAssign)
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str | bytes)
+                and isinstance(node.target, ast.Name)
+            ):
+                literal_consts.add(node.target.id)
 
         if not module_names and not func_names:
             continue
 
         def is_source_literal(node: ast.AST) -> bool:
             if isinstance(node, ast.Constant):
-                return isinstance(node.value, str)
+                return isinstance(node.value, str | bytes)
             if isinstance(node, ast.Name):
                 return node.id in literal_consts
             if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add | ast.Mod):
@@ -249,7 +263,14 @@ def test_no_backtracking_engine_runs_a_supplied_pattern():
                 )
             # "literal".format(only, literals)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "format":
-                return is_source_literal(node.func.value) and all(is_source_literal(a) for a in node.args)
+                # Keyword substitutions count: "{x}".format(x=supplied) is not
+                # a source literal, and checking only positional args let it
+                # through.
+                return (
+                    is_source_literal(node.func.value)
+                    and all(is_source_literal(a) for a in node.args)
+                    and all(is_source_literal(kw.value) for kw in node.keywords)
+                )
             return False
 
         def pattern_arg(call: ast.Call):
@@ -268,7 +289,9 @@ def test_no_backtracking_engine_runs_a_supplied_pattern():
             # Indirection that hands the callable itself somewhere else —
             # functools.partial(re.compile, supplied) and getattr(re, "search")
             # both previously sailed straight past.
-            if isinstance(func, ast.Attribute) and func.attr == "partial":
+            if (isinstance(func, ast.Attribute) and func.attr == "partial") or (
+                isinstance(func, ast.Name) and func.id == "partial"
+            ):
                 for arg in node.args:
                     if (
                         isinstance(arg, ast.Attribute)
