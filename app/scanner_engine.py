@@ -25,6 +25,7 @@ from typing import Any
 
 from app.config import OnDetectorFailure, PolicyConfig
 from app.detectors.base import BaseDetector, DetectorStatus, FailureCode
+from app.services.safe_logging import describe
 
 logger = logging.getLogger(__name__)
 
@@ -378,8 +379,8 @@ class ScannerEngine:
                     det_result = detector.scan(current_text, vault=vault)
                 else:
                     det_result = detector.scan(current_text)
-            except Exception:
-                logger.error("Detector '%s' raised during scan", det_name, exc_info=True)
+            except Exception as exc:
+                logger.error("Detector '%s' raised during scan: %s", det_name, describe(exc))
                 result.record_failure(det_name, FailureCode.SCAN_FAILED, detector.action)
                 continue
 
@@ -483,8 +484,8 @@ class ScannerEngine:
                     det_result = detector.scan(current_text)
                 if det_result.status is DetectorStatus.FAILED:
                     failure_code = det_result.failure_code
-            except Exception:
-                logger.error("Redactor '%s' raised", det_name, exc_info=True)
+            except Exception as exc:
+                logger.error("Redactor '%s' raised: %s", det_name, describe(exc))
                 failure_code = FailureCode.REDACTION_FAILED
 
             if failure_code is not None:

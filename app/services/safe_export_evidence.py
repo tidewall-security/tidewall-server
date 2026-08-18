@@ -33,7 +33,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.detectors.base import DetectorStatus, FailureCode, SkipReason
+
 EVIDENCE_SCHEMA_VERSION = 1
+
+# Closed vocabularies, resolved from the enums rather than restated here, so a
+# new code cannot be silently unexportable and a hostile string cannot pass for
+# one.
+_FAILURE_CODES = frozenset(code.value for code in FailureCode)
+_SKIP_REASONS = frozenset(reason.value for reason in SkipReason)
+_STATUSES = frozenset(status.value for status in DetectorStatus)
 
 # Entity type names are drawn from detector taxonomies and policy-defined
 # labels, so they are bounded but not fully enumerable here. Cap them instead.
@@ -180,9 +189,9 @@ def _components(raw: Any) -> dict[str, Any]:
         if safe_name is None or not isinstance(value, dict):
             continue
         entry: dict[str, Any] = {}
-        for key in ("status", "failure_code", "skip_reason"):
-            candidate = _safe_identifier(value.get(key))
-            if candidate is not None:
+        for key, allowed in (("status", _STATUSES), ("failure_code", _FAILURE_CODES), ("skip_reason", _SKIP_REASONS)):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate in allowed:
                 entry[key] = candidate
         out[safe_name] = entry
         if len(out) >= _MAX_COMPONENTS:
@@ -213,9 +222,22 @@ def project_detectors(detectors: Any) -> dict[str, Any]:
 
         entry: dict[str, Any] = {"detected": bool(payload.get("detected"))}
 
-        status = _safe_identifier(payload.get("status"))
-        if status is not None:
+        status = payload.get("status")
+        if isinstance(status, str) and status in _STATUSES:
             entry["status"] = status
+        # Dropping these was a contract regression, not a privacy gain: they
+        # are the difference between "a dependency is missing", "the model
+        # would not load", "the configuration is invalid" and "the scan blew
+        # up", which is exactly what a caller or operator acts on.
+        #
+        # Checked for enum membership, not merely identifier shape. Saying in a
+        # comment that they are fixed enum values while accepting any 64-char
+        # identifier is the same overclaiming this work keeps removing —
+        # "sk_live_SECRET" is identifier-shaped.
+        for key, allowed in (("failure_code", _FAILURE_CODES), ("skip_reason", _SKIP_REASONS)):
+            code = payload.get(key)
+            if isinstance(code, str) and code in allowed:
+                entry[key] = code
         if payload.get("degraded"):
             entry["degraded"] = True
 

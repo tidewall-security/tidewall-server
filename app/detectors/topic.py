@@ -25,6 +25,7 @@ from typing import Any
 
 from app.model_registry import TOPICS as _TOPICS_REF
 from app.model_registry import TOXICITY as _TOXICITY_REF
+from app.services.safe_logging import describe
 
 from .base import BaseDetector, ComponentStatus, DetectorResult, DetectorStatus, FailureCode, SkipReason
 
@@ -169,8 +170,8 @@ class TopicDetector(BaseDetector):
                     detected = True
                     topics_found.append({"topic": "toxicity", "confidence": max(0.0, min(1.0, tox_score))})
                 components["toxicity"] = ComponentStatus()
-            except Exception:
-                logger.warning("Toxicity classifier inference failed", exc_info=True)
+            except Exception as exc:
+                logger.warning("Toxicity classifier inference failed: %s", describe(exc))
                 components["toxicity"] = ComponentStatus(
                     status=DetectorStatus.FAILED, failure_code=FailureCode.SCAN_FAILED
                 )
@@ -192,8 +193,8 @@ class TopicDetector(BaseDetector):
                     detected = True
                     topics_found.append({"topic": top_label, "confidence": max(0.0, min(1.0, top_score))})
                 components["topics"] = ComponentStatus()
-            except Exception:
-                logger.warning("Topics classifier inference failed", exc_info=True)
+            except Exception as exc:
+                logger.warning("Topics classifier inference failed: %s", describe(exc))
                 components["topics"] = ComponentStatus(
                     status=DetectorStatus.FAILED, failure_code=FailureCode.SCAN_FAILED
                 )

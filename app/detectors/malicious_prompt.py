@@ -16,6 +16,7 @@ from typing import Any
 
 from app.model_registry import INJECTION as _INJECTION_REF
 from app.services.prompt_list_service import PromptListConfigError
+from app.services.safe_logging import describe
 
 from .base import BaseDetector, ComponentStatus, DetectorResult, DetectorStatus, FailureCode, SkipReason
 
@@ -326,17 +327,17 @@ class MaliciousPromptDetector(BaseDetector):
             try:
                 matched = self._prompt_list_svc.check_match(text, "malicious")
                 components["custom_malicious"] = ComponentStatus()
-            except PromptListConfigError:
+            except PromptListConfigError as exc:
                 # Configuration that cannot be enforced as written, not an
                 # operational failure. The distinction matters to whoever has to
                 # fix it: retrying will never help, the row must be corrected.
-                logger.error("Custom malicious list has unenforceable configuration", exc_info=True)
+                logger.error("Custom malicious list has unenforceable configuration: %s", describe(exc))
                 components["custom_malicious"] = ComponentStatus(
                     status=DetectorStatus.FAILED, failure_code=FailureCode.CONFIG_INVALID
                 )
                 matched = False
-            except Exception:
-                logger.warning("Custom malicious list check failed", exc_info=True)
+            except Exception as exc:
+                logger.warning("Custom malicious list check failed: %s", describe(exc))
                 components["custom_malicious"] = ComponentStatus(
                     status=DetectorStatus.FAILED, failure_code=FailureCode.SCAN_FAILED
                 )
@@ -351,17 +352,17 @@ class MaliciousPromptDetector(BaseDetector):
             try:
                 matched = self._prompt_list_svc.check_match(text, "benign")
                 components["custom_benign"] = ComponentStatus()
-            except PromptListConfigError:
+            except PromptListConfigError as exc:
                 # Configuration that cannot be enforced as written, not an
                 # operational failure. The distinction matters to whoever has to
                 # fix it: retrying will never help, the row must be corrected.
-                logger.error("Custom benign list has unenforceable configuration", exc_info=True)
+                logger.error("Custom benign list has unenforceable configuration: %s", describe(exc))
                 components["custom_benign"] = ComponentStatus(
                     status=DetectorStatus.FAILED, failure_code=FailureCode.CONFIG_INVALID
                 )
                 matched = False
-            except Exception:
-                logger.warning("Custom benign list check failed", exc_info=True)
+            except Exception as exc:
+                logger.warning("Custom benign list check failed: %s", describe(exc))
                 components["custom_benign"] = ComponentStatus(
                     status=DetectorStatus.FAILED, failure_code=FailureCode.SCAN_FAILED
                 )
@@ -400,12 +401,12 @@ class MaliciousPromptDetector(BaseDetector):
                         injection_score = r["score"]
                         break
                 components["generic_injection"] = ComponentStatus()
-            except Exception:
+            except Exception as exc:
                 # Covers both inference and malformed output: indexing r["label"]
                 # or r["score"] on an unexpected response shape lands here rather
                 # than bubbling to the engine-wide catch, so the failure is
                 # attributed to this sub-detector.
-                logger.warning("Generic injection classifier failed", exc_info=True)
+                logger.warning("Generic injection classifier failed: %s", describe(exc))
                 components["generic_injection"] = ComponentStatus(
                     status=DetectorStatus.FAILED, failure_code=FailureCode.OUTPUT_INVALID
                 )
@@ -452,8 +453,8 @@ class MaliciousPromptDetector(BaseDetector):
                             if violation:
                                 analyzer_responses.append(violation)
                     components["intent_conformance"] = ComponentStatus()
-                except Exception:
-                    logger.warning("Intent conformance check failed", exc_info=True)
+                except Exception as exc:
+                    logger.warning("Intent conformance check failed: %s", describe(exc))
                     components["intent_conformance"] = ComponentStatus(
                         status=DetectorStatus.FAILED, failure_code=FailureCode.SCAN_FAILED
                     )

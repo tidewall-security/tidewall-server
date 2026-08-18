@@ -10,6 +10,7 @@ import logging
 from typing import Any
 
 from app.model_registry import MALICIOUS_URL as _URL_REF
+from app.services.safe_logging import describe
 
 from .base import BaseDetector, DetectorResult, FailureCode
 
@@ -114,10 +115,10 @@ class MaliciousEntityDetector(BaseDetector):
                     # above the configured threshold.
                     if label not in {"benign", "label_0"} and score >= self._ml_threshold:
                         is_malicious = True
-                except Exception:
+                except Exception as exc:
                     # Do not log `value`: URLs carry credentials and query
                     # tokens. The failure is attributable without the payload.
-                    logger.warning("ML URL classifier failed", exc_info=True)
+                    logger.warning("ML URL classifier failed: %s", describe(exc))
                     return DetectorResult.failed(FailureCode.SCAN_FAILED)
 
             if not is_malicious:

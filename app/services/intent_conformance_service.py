@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import ModelIntent
 from app.model_registry import SENTENCE_SIMILARITY as _REF
+from app.services.safe_logging import describe
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +82,8 @@ class IntentConformanceService:
             for intent in intents:
                 embedding = self._model.encode(intent.statement, convert_to_numpy=True)
                 embeddings.append((intent.statement, embedding))
-        except Exception:
-            logger.error("Failed to load or embed model intents", exc_info=True)
+        except Exception as exc:
+            logger.error("Failed to load or embed model intents: %s", describe(exc))
             self._failure_code = "construct_failed"
             self._intent_embeddings = []
             return

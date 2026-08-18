@@ -16,6 +16,7 @@ import logging
 from typing import Any
 
 from app.services.redactor import Redactor
+from app.services.safe_logging import describe
 from app.vault import TidewallVault
 
 from .base import BaseDetector, DetectorResult, FailureCode
@@ -78,8 +79,8 @@ class PIIDetector(BaseDetector):
 
         try:
             results = self._analyzer.analyze(text=text, language="en")
-        except Exception:
-            logger.warning("Presidio PII analysis failed", exc_info=True)
+        except Exception as exc:
+            logger.warning("Presidio PII analysis failed: %s", describe(exc))
             return DetectorResult.failed(FailureCode.SCAN_FAILED)
 
         if not results:

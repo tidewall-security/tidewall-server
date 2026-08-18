@@ -34,6 +34,8 @@ from app.auth.dependencies import require_role
 from app.config import OnDetectorFailure
 from app.detectors.base import FailureCode
 from app.models import GuardRequest, GuardResponse, GuardResult
+from app.services.safe_export_evidence import project_detectors
+from app.services.safe_logging import describe
 from app.utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
@@ -120,13 +122,13 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
         }
         try:
             access_rules_result = evaluate_access_rules(access_rules_data, request_metadata)
-        except ValueError:
+        except ValueError as exc:
             # A stored rule the evaluator cannot apply. Validation rejects these
             # at write time, so reaching here means an unvalidated write path.
             # Blocking is the honest response: the rule might have blocked this
             # request and we cannot tell. Raising would 500 and produce no audit
             # record at all.
-            logger.error("Access rule could not be evaluated; blocking", exc_info=True)
+            logger.error("Access rule could not be evaluated; blocking: %s", describe(exc))
             access_rules_result = {
                 "action": "block",
                 "matched_rules": [{"name": "invalid-rule", "matched": True, "action": "block"}],
@@ -237,8 +239,8 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
 
             try:
                 msg_result = await asyncio.to_thread(engine.scan_single, content, vault_id, vault)
-            except Exception:
-                logger.error("Message reconstruction raised", exc_info=True)
+            except Exception as exc:
+                logger.error("Message reconstruction raised: %s", describe(exc))
                 scan_result.record_failure("_reconstruction", FailureCode.RECONSTRUCTION_FAILED, action="redact")
                 reconstruction_failed = True
                 break
@@ -378,10 +380,14 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             transformed=scan_result.transformed,
             guard_output=guard_output,
             policy=policy_name,
-            # NOT projected here: the public response is step 3, which needs
-            # its own contract decision and its own tests. Mixing it into the
-            # export change would make one review cover two boundaries.
-            detectors=scan_result.detectors,
+            # The response carries the same unsafe detector payload the exports
+            # did — custom_entity's matched value and start_pos,
+            # malicious_entity's unmodified URL. The caller supplied the
+            # content, so this is not disclosure to a new party, but a response
+            # body fans out further than the request did: proxies, APM tools,
+            # browser devtools and the caller's own logging all see it. The
+            # caller acts on `guard_output`, not on exact values.
+            detectors=project_detectors(scan_result.detectors),
             access_rules={
                 r["name"]: {"matched": r["matched"], "action": r["action"]}
                 for r in access_rules_result["matched_rules"]

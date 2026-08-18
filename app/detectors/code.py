@@ -15,6 +15,7 @@ import logging
 from typing import Any
 
 from app.model_registry import CODE as _REF
+from app.services.safe_logging import describe
 
 from .base import BaseDetector, DetectorResult, FailureCode
 
@@ -63,8 +64,8 @@ class CodeDetector(BaseDetector):
 
         try:
             results = self._pipeline(text)
-        except Exception:
-            logger.warning("Code classifier inference failed", exc_info=True)
+        except Exception as exc:
+            logger.warning("Code classifier inference failed: %s", describe(exc))
             return DetectorResult.failed(FailureCode.SCAN_FAILED)
 
         # Pipeline returns [{"label": "Python", "score": 0.93}] for single inputs.

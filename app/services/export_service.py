@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.db.models import ExportTarget
 from app.services.ocsf_builder import build_aidr_compat_event, build_ocsf_event
 from app.services.safe_export_evidence import project_detectors
+from app.services.safe_logging import describe
 
 logger = logging.getLogger(__name__)
 
@@ -98,12 +99,12 @@ class ExportService:
                     await self._send_webhook(target, event)
                 elif target.type == "syslog":
                     await self._send_syslog(target, event)
-            except Exception:
+            except Exception as exc:
                 logger.warning(
-                    "Export to '%s' failed (status=%s)",
+                    "Export to '%s' failed (status=%s): %s",
                     target.name,
                     status,
-                    exc_info=True,
+                    describe(exc),
                 )
 
     async def _send_webhook(self, target: ExportTarget, event: dict) -> None:
@@ -160,5 +161,5 @@ class ExportService:
         try:
             await asyncio.to_thread(_blocking_send)
             logger.debug("Exported to syslog '%s' (%s:%d)", target.name, host, port)
-        except Exception:
-            logger.warning("Syslog export to '%s' (%s:%d) failed", target.name, host, port, exc_info=True)
+        except Exception as exc:
+            logger.warning("Syslog export to '%s' (%s:%d) failed: %s", target.name, host, port, describe(exc))

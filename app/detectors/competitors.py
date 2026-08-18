@@ -20,6 +20,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.services.safe_logging import describe
+
 from .base import BaseDetector, DetectorResult, FailureCode
 
 logger = logging.getLogger(__name__)
@@ -80,8 +82,8 @@ class CompetitorsDetector(BaseDetector):
                 entities=["COMPETITOR", "ORGANIZATION"],
                 language="en",
             )
-        except Exception:
-            logger.warning("Competitors analyzer inference failed", exc_info=True)
+        except Exception as exc:
+            logger.warning("Competitors analyzer inference failed: %s", describe(exc))
             return DetectorResult.failed(FailureCode.SCAN_FAILED)
 
         found: list[str] = []
