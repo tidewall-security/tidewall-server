@@ -226,12 +226,19 @@ def test_viewer_can_call_guard(setup):
 
 def test_rt_token_cannot_call_guard(setup):
     """Registration tokens (role=rt, level 0) cannot access the guard endpoint."""
-    client, admin_key, _, _, _ = setup
+    client, admin_key, _, _, session_factory = setup
+
+    # A registration token must now name the policy its devices will inherit.
+    session = session_factory()
+    try:
+        policy_id = session.query(Policy).filter_by(is_default=True).one().id
+    finally:
+        session.close()
 
     # Create an rt_ token via the registration endpoint
     resp = client.post(
         "/v1/registration-tokens",
-        json={"name": "test-rt"},
+        json={"name": "test-rt", "policy_id": policy_id},
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     assert resp.status_code == 201

@@ -143,10 +143,15 @@ async def update_policy(policy_id: str, body: UpdatePolicyRequest, request: Requ
 async def delete_policy(policy_id: str, request: Request) -> None:
     session = request.app.state.session_factory()
     try:
-        from app.services.policy_service import PolicyService
+        from app.services.policy_service import PolicyInUseError, PolicyService
 
         svc = PolicyService(session)
-        svc.delete_policy(policy_id)
+        try:
+            svc.delete_policy(policy_id)
+        except PolicyInUseError as e:
+            # 409: the request is well formed, but deleting would silently
+            # rebind the devices scoped to this policy onto the default one.
+            raise HTTPException(status_code=409, detail=str(e)) from None
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     finally:

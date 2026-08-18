@@ -6,14 +6,24 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.key_utils import generate_key, hash_key, key_prefix
-from app.db.models import AccessToken, Device, RegistrationToken
+from app.db.models import AccessToken, Device, Policy, RegistrationToken
 
 logger = logging.getLogger(__name__)
 
 _ACCESS_TOKEN_TTL_SECONDS = 3600
+# How long a rotated token stays valid after being replaced, so a request
+# already in flight when the refresh landed does not fail.
+_ROTATION_OVERLAP_SECONDS = 60
+
+
+def _as_utc(value: datetime) -> datetime:
+    """SQLite returns naive datetimes; compare them as UTC."""
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
 
 # 37 sites with mode "block"
 # Site modes keyed by alias (must match extension's SITE_REGISTRY aliases)
@@ -71,13 +81,22 @@ class DeviceService:
     def create_registration_token(
         self,
         name: str,
+        policy_id: str,
         created_by: str | None = None,
         expires_at: datetime | None = None,
     ) -> tuple[str, RegistrationToken]:
         """Create a new registration token. Returns (raw_token, record).
 
         The raw token is returned once and never stored — only its hash is persisted.
+
+        ``policy_id`` is required. Every device enrolled with this token
+        inherits it as its immutable scope, so a token without one silently
+        produces unscoped devices that fall back to the default policy — the
+        binding exists in the schema but is never established.
         """
+        if self._session.get(Policy, policy_id) is None:
+            raise ValueError(f"Policy {policy_id} not found")
+
         raw = generate_key(prefix="rt")
         record = RegistrationToken(
             name=name,
@@ -85,6 +104,7 @@ class DeviceService:
             token_prefix=key_prefix(raw),
             created_by=created_by,
             expires_at=expires_at,
+            policy_id=policy_id,
         )
         self._session.add(record)
         self._session.commit()
@@ -119,69 +139,164 @@ class DeviceService:
     # Device check (register or refresh)
     # ------------------------------------------------------------------
 
-    def check_device(
+    def enrol_device(
         self,
         rt_token_hash: str,
-        fingerprint: str,
+        installation_id: str,
         device_name: str,
         user_name: str,
         user_email: str,
         browser: str,
         os: str,
         ext_version: str,
+        fingerprint: str | None = None,
     ) -> dict[str, Any]:
-        """Register a new device or refresh an existing one.
+        """Enrol a NEW device against a registration token.
 
-        Returns a dict with keys 'status' and 'result'.
+        Enrolment only ever creates. It never selects an existing row, because
+        the only values a caller can offer at this point — a shared onboarding
+        token and a client-supplied fingerprint — prove nothing about owning
+        one. The previous combined flow looked a device up by fingerprint and
+        refreshed it, so any holder of any registration token could revoke a
+        victim's session and obtain an access token bound to their device and
+        policy (P0-11).
+
+        A client that has lost its stored credentials enrols again with a new
+        installation ID and becomes a new device. That leaves a stale row for
+        an administrator to remove, which is the cost of never letting an
+        unauthenticated caller reclaim one.
         """
-        # Validate the registration token
         rt = self.lookup_registration_token(rt_token_hash)
         if rt is None:
             raise ValueError("Invalid registration token")
 
-        device = self._session.query(Device).filter_by(fingerprint=fingerprint).first()
+        existing = self._session.query(Device).filter_by(installation_id=installation_id).first()
+        if existing is not None:
+            # The client already holds credentials for this installation and
+            # should refresh with its access token. Re-enrolling would be the
+            # takeover path again, so it is refused rather than served.
+            return {"status": "InstallationIdAlreadyEnrolled", "result": None}
 
-        if device is None:
-            # New device — register it
-            device = Device(
-                fingerprint=fingerprint,
-                device_name=device_name,
-                user_name=user_name,
-                user_email=user_email,
-                browser=browser,
-                os=os,
-                ext_version=ext_version,
-                reg_token_id=rt.id,
-                status="active",
-            )
-            self._session.add(device)
+        device = Device(
+            installation_id=installation_id,
+            fingerprint=fingerprint,
+            device_name=device_name,
+            user_name=user_name,
+            user_email=user_email,
+            browser=browser,
+            os=os,
+            ext_version=ext_version,
+            reg_token_id=rt.id,
+            # Scope is inherited from the token and is immutable thereafter.
+            policy_id=rt.policy_id,
+            status="active",
+        )
+        self._session.add(device)
+        try:
             self._session.flush()
-            logger.info("Registered new device fingerprint=%s", fingerprint)
-        else:
-            if device.status != "active":
-                return {"status": "InactiveDevice", "result": None}
+        except IntegrityError:
+            # Two enrolments with the same installation ID raced past the check
+            # above. The unique constraint keeps one row; the loser must get
+            # the documented conflict rather than a 500.
+            self._session.rollback()
+            return {"status": "InstallationIdAlreadyEnrolled", "result": None}
+        logger.info("Enrolled device %s via registration token %s", device.id, rt.id)
 
-            # Update mutable fields
-            device.device_name = device_name
-            device.user_name = user_name
-            device.user_email = user_email
-            device.browser = browser
-            device.os = os
-            device.ext_version = ext_version
-            device.last_seen = datetime.now(UTC)
-
-            # Delete old access tokens
-            self._session.query(AccessToken).filter_by(device_id=device.id).delete()
-            self._session.flush()
-            logger.info("Refreshing device fingerprint=%s", fingerprint)
-
-        # Issue a new access token
-        raw_at, at_record = self._issue_access_token(device.id)
+        raw_at, _ = self._issue_access_token(device.id)
         self._session.commit()
+        return self._success(device, raw_at)
 
+    def refresh_device(
+        self,
+        device_id: str,
+        access_token_hash: str,
+        device_name: str | None = None,
+        user_name: str | None = None,
+        user_email: str | None = None,
+        browser: str | None = None,
+        os: str | None = None,
+        ext_version: str | None = None,
+        fingerprint: str | None = None,
+    ) -> dict[str, Any]:
+        """Refresh an EXISTING device, proving ownership with its access token.
+
+        The presented token must belong to the named device. No registration
+        token is accepted here: holding one says nothing about owning a device.
+        """
+        token = self._session.query(AccessToken).filter_by(token_hash=access_token_hash).first()
+        if token is None:
+            raise PermissionError("Invalid access token")
+        if token.expires_at and _as_utc(token.expires_at) < datetime.now(UTC):
+            raise PermissionError("Access token expired")
+        if token.replaced_by_id is not None:
+            # Rotation is one-time. The overlap exists so requests already in
+            # flight with this token still succeed; it is not a licence to
+            # refresh again. Without this check a client could present the same
+            # token repeatedly, minting an unbounded number of live tokens and
+            # renewing its own overlap forever, so it would never expire.
+            raise PermissionError("Access token has already been rotated")
+        if token.device_id != device_id:
+            # A valid token for a different device. Distinguished from an
+            # invalid token so the caller can tell a bug from a credential
+            # problem, without revealing whether the target device exists.
+            raise PermissionError("Access token is not valid for this device")
+
+        device = self._session.get(Device, device_id)
+        if device is None:
+            raise PermissionError("Access token is not valid for this device")
+        if device.status != "active":
+            return {"status": "InactiveDevice", "result": None}
+
+        for field, value in (
+            ("device_name", device_name),
+            ("user_name", user_name),
+            ("user_email", user_email),
+            ("browser", browser),
+            ("os", os),
+            ("ext_version", ext_version),
+            ("fingerprint", fingerprint),
+        ):
+            if value is not None:
+                setattr(device, field, value)
+        device.last_seen = datetime.now(UTC)
+
+        raw_at, new_token = self._issue_access_token(device.id)
+
+        # Rotate rather than revoke. Deleting every token for the device, which
+        # is what this used to do, breaks any other in-flight request; expiring
+        # only the presented one after a short overlap lets a racing retry
+        # succeed. Explicit revocation and admin disablement still kill
+        # everything immediately, elsewhere.
+        #
+        # `min` because the overlap may only ever shorten a token's life: taking
+        # the new deadline unconditionally would *extend* one already due to
+        # expire sooner. The write is conditional on the token still being
+        # unrotated so that two concurrent refreshes cannot both mint a
+        # successor — the check above is a fast path, this is the guarantee.
+        overlap_deadline = datetime.now(UTC) + timedelta(seconds=_ROTATION_OVERLAP_SECONDS)
+        current_expiry = _as_utc(token.expires_at) if token.expires_at else None
+        deadline = min(overlap_deadline, current_expiry) if current_expiry else overlap_deadline
+
+        rotated = (
+            self._session.query(AccessToken)
+            .filter(AccessToken.id == token.id, AccessToken.replaced_by_id.is_(None))
+            .update({"replaced_by_id": new_token.id, "expires_at": deadline}, synchronize_session=False)
+        )
+        if rotated == 0:
+            # A concurrent refresh with the same token won. Discard the token
+            # just issued rather than leaving a second live credential behind.
+            self._session.rollback()
+            raise PermissionError("Access token has already been rotated")
+
+        self._session.commit()
+        logger.info("Refreshed device %s", device.id)
+        return self._success(device, raw_at)
+
+    def _success(self, device: Device, raw_at: str) -> dict[str, Any]:
         return {
             "status": "Success",
             "result": {
+                "device_id": device.id,
                 "access_token": {
                     "token": raw_at,
                     "expires_in": _ACCESS_TOKEN_TTL_SECONDS,
@@ -191,10 +306,6 @@ class DeviceService:
                 },
             },
         }
-
-    # ------------------------------------------------------------------
-    # Access token resolution
-    # ------------------------------------------------------------------
 
     def resolve_access_token(self, token_hash: str) -> Device | None:
         """Resolve an access token hash to its Device. Returns None if expired or inactive."""
@@ -263,6 +374,10 @@ class DeviceService:
             expires_at=expires_at,
         )
         self._session.add(at_record)
+        # Flush so the row has its primary key. The id comes from a Python-side
+        # default applied at flush, so a caller wiring up replaced_by_id would
+        # otherwise record None.
+        self._session.flush()
         return raw_at, at_record
 
     def _get_site_config(self) -> dict[str, str]:

@@ -5,14 +5,19 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import OnDetectorFailure
-from app.db.models import Policy, RuleSet
+from app.db.models import Device, Policy, RegistrationToken, RuleSet
 from app.scanner_engine import ScannerEngine
 from app.services.policy_validation import validate_detectors
 
 logger = logging.getLogger(__name__)
+
+
+class PolicyInUseError(Exception):
+    """Raised when deleting a policy would silently rebind devices to the default."""
 
 
 class PolicyService:
@@ -214,13 +219,39 @@ class PolicyService:
             if policy.is_default:
                 raise ValueError("Cannot delete the default policy")
 
+            # A null policy binding is read as "use the default" at guard time,
+            # so deleting a policy still in use must not be allowed to null one:
+            # it would move devices onto rules nobody chose for them, with
+            # nothing in the request saying so. A device's scope is fixed at
+            # enrolment, so reassignment has to be an explicit act.
+            #
+            # This count only produces a message worth reading. It is not the
+            # guarantee — it is not atomic with the delete, so an enrolment
+            # landing between the two would still slip through. Both foreign
+            # keys are ON DELETE RESTRICT, and that is what holds.
+            devices = session.query(Device).filter_by(policy_id=policy_id).count()
+            tokens = session.query(RegistrationToken).filter_by(policy_id=policy_id).count()
+            if devices or tokens:
+                raise PolicyInUseError(
+                    f"Policy {policy_id} is still bound to {devices} device(s) and "
+                    f"{tokens} registration token(s). Remove them first."
+                )
+
             # Invalidate all cached engines for this policy
             keys_to_remove = [k for k in self._engine_cache if k[0] == policy_id]
             for k in keys_to_remove:
                 del self._engine_cache[k]
 
             session.delete(policy)
-            session.commit()
+            try:
+                session.commit()
+            except IntegrityError as e:
+                # Something bound itself to the policy after the count above.
+                session.rollback()
+                raise PolicyInUseError(
+                    f"Policy {policy_id} became bound to a device or registration token "
+                    "while it was being deleted. Remove them first."
+                ) from e
             logger.info("Deleted policy '%s' (id=%s)", policy.name, policy_id)
         finally:
             if should_close:

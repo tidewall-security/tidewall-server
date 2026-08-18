@@ -109,12 +109,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def _handle_rt_token(self, request: Request, call_next, hashed: str):
         """Handle rt_ prefix registration tokens.
 
-        Only allowed for /v1/devices/check; returns 403 for anything else.
+        Only allowed for enrolment. A registration token is a shared onboarding
+        secret: it can create a device but must never be able to act on an
+        existing one, which is what /v1/devices/check allowed (P0-11).
         """
-        if request.url.path != "/v1/devices/check":
+        if request.url.path != "/v1/devices/enrol":
             return JSONResponse(
                 status_code=403,
-                content={"detail": "Registration tokens can only access /v1/devices/check"},
+                content={"detail": "Registration tokens can only access /v1/devices/enrol"},
             )
 
         session = request.app.state.session_factory()
@@ -163,6 +165,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
             request.state.role = "api"
             request.state.policy_id = device.policy_id
+            request.state.at_token_hash = hashed
             request.state.device_id = device.id
             request.state.api_key_id = None
         finally:

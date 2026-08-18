@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Device takeover via fingerprint (P0-11).** `POST /v1/devices/check`
+  looked a device up by the caller-supplied `fingerprint` and authorised the
+  refresh on the strength of holding *a* registration token. Any holder of
+  any registration token who learned or guessed a fingerprint could revoke
+  the victim's session and receive an access token bound to their device and
+  policy. Fingerprint was acting as both identity and proof of ownership,
+  and it is neither.
+
+### Changed — breaking
+
+`POST /v1/devices/check` is **removed** and replaced by two endpoints with
+separate credentials. Clients must be updated; there is no compatibility
+shim.
+
+| Was | Now |
+| --- | --- |
+| `POST /v1/devices/check` with `rt_`, for both first contact and refresh | `POST /v1/devices/enrol` with `rt_` — creates only |
+| | `POST /v1/devices/{device_id}/refresh` with `at_` — existing device only |
+
+Client contract:
+
+1. Generate an `installation_id` once with `crypto.randomUUID()` and store it.
+   This is the device's identity. The server requires UUID form and rejects
+   anything else — including the nil UUID — with 422. That check is on the
+   *form* only: the server sees a finished value and cannot tell whether it
+   came from a CSPRNG, so generating it properly is the client's
+   responsibility. It matters because enrolment is first-claim and never
+   reassigns, so anyone holding a registration token who can predict your
+   installation ID can enrol it first and lock you out.
+2. Enrol at `POST /v1/devices/enrol` with the `rt_` token. Store the returned
+   `device_id` and access token. A registration token is accepted at this
+   path and no other.
+3. Refresh at `POST /v1/devices/{device_id}/refresh` with the **current `at_`
+   token**, and replace the stored token from the response. Refresh well
+   before the one-hour expiry; there is no need to poll every minute.
+4. Rotation is one-time. The presented token is marked replaced and expires
+   after an overlap of **at most** 60 seconds — the deadline is
+   `min(now + 60s, its existing expiry)`, so a token already closer to expiry
+   keeps the shorter one; the overlap only ever shortens a token's life, never
+   extends it. It exists so a request already in flight still succeeds, and is
+   not a window in which to refresh again. Presenting an already-replaced token
+   returns 403.
+5. **Retain the registration token.** A refresh response carries the only copy
+   of the new secret, so if that response is lost the client is left holding a
+   token it can no longer use to refresh, which expires within 60 seconds. Treat
+   403 with `"already been rotated"` as credential loss: enrol again under a
+   **new** `installation_id`. Re-issuing on a replayed token is deliberately
+   not offered — it would let a stolen predecessor be traded for a fresh
+   full-lifetime token and simultaneously cut off the legitimate client, which
+   is a worse failure than re-enrolling.
+6. `409` from enrol means that `installation_id` is already enrolled. Do not
+   retry: refresh instead, or enrol as a new installation.
+7. **After losing local storage, generate a new `installation_id` and enrol
+   as a new device.** Recovery by fingerprint is exactly the takeover and is
+   not offered. The abandoned row remains for an administrator to remove.
+
+`fingerprint` is now optional, non-unique, advisory metadata. Two devices
+reporting the same fingerprint both enrol normally.
+
+`POST /v1/registration-tokens` now **requires** `policy_id` and returns it.
+Every device enrolled with the token inherits it as an immutable scope. The
+field previously existed only in the schema — nothing wrote it — so every
+device enrolled unscoped and silently fell back to the default policy.
+
+`DELETE /v1/policies/{id}` now returns **409** while devices or registration
+tokens are still bound to that policy. Both scope foreign keys were
+`ON DELETE SET NULL`, and guard reads a null binding as "use the default
+policy", so deleting a policy in use moved everything scoped to it silently
+onto the default rules. They are now `ON DELETE RESTRICT`, which is what
+enforces this — the API also counts the references first, but only to return a
+message worth reading.
+
+To delete a policy, first remove what is bound to it: `DELETE /v1/devices/{id}`
+and `DELETE /v1/registration-tokens/{id}`. There is deliberately no reassignment
+API — a device's scope is fixed at enrolment — so the affected devices re-enrol
+against a token for the policy you want them on.
+
+Migration `d5a71f3c8e02` deletes all existing `devices`, `access_tokens` **and
+`registration_tokens`** rows. Devices have no installation ID and no way to
+prove ownership, which is the defect. Registration tokens go too because
+`policy_id` is nullable — a surviving token would carry NULL and keep enrolling
+unscoped devices onto the default policy, which is what this change exists to
+stop. Every client re-enrols, and administrators mint new registration tokens
+against a chosen policy.
+
 ## [0.1.0] - 2026-05-02
 
 ### Added

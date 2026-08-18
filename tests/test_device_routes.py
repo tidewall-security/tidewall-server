@@ -1,16 +1,34 @@
 """Integration tests for device management routes and auth middleware token handling."""
+
 from __future__ import annotations
+
+import uuid
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.auth.key_utils import generate_key, hash_key, key_prefix
 from app.auth.middleware import AuthMiddleware
-from app.db.models import APIKey, Base
+from app.db.models import APIKey, Base, Policy
+
+
+def _iid(label: str) -> str:
+    """A realistic installation ID.
+
+    The API requires at least 16 characters of entropy, so a guessable value
+    cannot be squatted to deny someone else enrolment. Deterministic per label
+    so tests stay readable.
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, label))
+
+
+# Registration tokens must name a policy that exists, so the fixture seeds one
+# with a known id rather than every test having to create its own.
+TEST_POLICY_ID = "test-policy"
 
 
 def _make_app_and_client():
@@ -31,7 +49,8 @@ def _make_app_and_client():
     async def health():
         return {"status": "ok"}
 
-    from app.routes import registration, devices, keys, guard
+    from app.routes import devices, keys, registration
+
     app.include_router(registration.router)
     app.include_router(devices.router)
     app.include_router(keys.router)
@@ -46,6 +65,7 @@ def _make_app_and_client():
         role="admin",
     )
     session.add(admin_key)
+    session.add(Policy(id=TEST_POLICY_ID, name="test-policy", type="application"))
     session.commit()
     session.close()
 
@@ -68,7 +88,7 @@ def test_create_registration_token_admin(setup):
     client, admin_key, _ = setup
     resp = client.post(
         "/v1/registration-tokens",
-        json={"name": "test-rt"},
+        json={"name": "test-rt", "policy_id": TEST_POLICY_ID},
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     assert resp.status_code == 201
@@ -96,7 +116,7 @@ def test_create_registration_token_viewer_forbidden(setup):
 
     resp = client.post(
         "/v1/registration-tokens",
-        json={"name": "nope"},
+        json={"name": "nope", "policy_id": TEST_POLICY_ID},
         headers={"Authorization": f"Bearer {raw_viewer}"},
     )
     assert resp.status_code == 403
@@ -107,12 +127,12 @@ def test_list_registration_tokens(setup):
     # Create two tokens
     client.post(
         "/v1/registration-tokens",
-        json={"name": "rt-1"},
+        json={"name": "rt-1", "policy_id": TEST_POLICY_ID},
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     client.post(
         "/v1/registration-tokens",
-        json={"name": "rt-2"},
+        json={"name": "rt-2", "policy_id": TEST_POLICY_ID},
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     resp = client.get(
@@ -127,7 +147,7 @@ def test_delete_registration_token(setup):
     client, admin_key, _ = setup
     create_resp = client.post(
         "/v1/registration-tokens",
-        json={"name": "to-delete"},
+        json={"name": "to-delete", "policy_id": TEST_POLICY_ID},
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     token_id = create_resp.json()["id"]
@@ -147,16 +167,17 @@ def _create_rt_token(client, admin_key):
     """Helper: create an rt_ token and return the raw token string."""
     resp = client.post(
         "/v1/registration-tokens",
-        json={"name": "device-rt"},
+        json={"name": "device-rt", "policy_id": TEST_POLICY_ID},
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     return resp.json()["token"]
 
 
-def _check_device(client, rt_token, fingerprint="fp-abc-123"):
+def _enrol_device(client, rt_token, installation_id=_iid("inst-abc-123"), fingerprint="fp-abc-123"):
     return client.post(
-        "/v1/devices/check",
+        "/v1/devices/enrol",
         json={
+            "installation_id": installation_id,
             "fingerprint": fingerprint,
             "device_name": "Test Laptop",
             "user_name": "alice",
@@ -169,11 +190,11 @@ def _check_device(client, rt_token, fingerprint="fp-abc-123"):
     )
 
 
-def test_device_check_registers_new_device(setup):
+def test_enrol_registers_new_device(setup):
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
-    resp = _check_device(client, rt_token)
-    assert resp.status_code == 200
+    resp = _enrol_device(client, rt_token)
+    assert resp.status_code == 201
     data = resp.json()
     assert data["status"] == "Success"
     assert "access_token" in data["result"]
@@ -182,23 +203,57 @@ def test_device_check_registers_new_device(setup):
     assert at["expires_in"] == 3600
 
 
-def test_device_check_refresh_returns_new_at(setup):
+def test_refresh_with_the_devices_own_token_returns_a_new_one(setup):
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
-    resp1 = _check_device(client, rt_token, fingerprint="fp-refresh-1")
-    at1 = resp1.json()["result"]["access_token"]["token"]
+    enrolled = _enrol_device(client, rt_token, installation_id=_iid("inst-refresh-1")).json()["result"]
+    at1 = enrolled["access_token"]["token"]
 
-    resp2 = _check_device(client, rt_token, fingerprint="fp-refresh-1")
-    at2 = resp2.json()["result"]["access_token"]["token"]
+    resp = client.post(
+        f"/v1/devices/{enrolled['device_id']}/refresh",
+        json={"device_name": "Renamed"},
+        headers={"Authorization": f"Bearer {at1}"},
+    )
 
-    assert at1 != at2  # Each check issues a new token
+    assert resp.status_code == 200
+    assert resp.json()["result"]["access_token"]["token"] != at1
+
+
+def test_a_registration_token_cannot_refresh(setup):
+    """rt_ is constrained to enrolment; it must not reach a refresh."""
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+    enrolled = _enrol_device(client, rt_token, installation_id=_iid("inst-victim")).json()["result"]
+
+    resp = client.post(
+        f"/v1/devices/{enrolled['device_id']}/refresh",
+        json={},
+        headers={"Authorization": f"Bearer {rt_token}"},
+    )
+
+    assert resp.status_code == 403
+
+
+def test_another_devices_token_cannot_refresh(setup):
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+    victim = _enrol_device(client, rt_token, installation_id=_iid("inst-victim2")).json()["result"]
+    attacker = _enrol_device(client, rt_token, installation_id=_iid("inst-attacker")).json()["result"]
+
+    resp = client.post(
+        f"/v1/devices/{victim['device_id']}/refresh",
+        json={},
+        headers={"Authorization": f"Bearer {attacker['access_token']['token']}"},
+    )
+
+    assert resp.status_code == 403
 
 
 def test_at_token_works_for_guard_like_call(setup):
     """An at_ token should resolve to role=api and allow viewer-level access."""
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
-    resp = _check_device(client, rt_token)
+    resp = _enrol_device(client, rt_token)
     at_token = resp.json()["result"]["access_token"]["token"]
 
     # Use the at_ token to list devices (requires viewer role; at_ gives api role)
@@ -213,7 +268,7 @@ def test_at_token_works_for_guard_like_call(setup):
 def test_list_devices_with_admin(setup):
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
-    _check_device(client, rt_token)
+    _enrol_device(client, rt_token)
 
     resp = client.get(
         "/v1/devices",
@@ -228,7 +283,7 @@ def test_list_devices_with_admin(setup):
 def test_patch_device_status(setup):
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
-    _check_device(client, rt_token)
+    _enrol_device(client, rt_token)
 
     devices = client.get(
         "/v1/devices",
@@ -248,7 +303,7 @@ def test_patch_device_status(setup):
 def test_delete_device(setup):
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
-    _check_device(client, rt_token)
+    _enrol_device(client, rt_token)
 
     devices = client.get(
         "/v1/devices",
@@ -295,13 +350,13 @@ def test_at_token_rejected_for_admin_only_paths(setup):
     """at_ tokens resolve to role=api which should not access admin endpoints."""
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
-    resp = _check_device(client, rt_token)
+    resp = _enrol_device(client, rt_token)
     at_token = resp.json()["result"]["access_token"]["token"]
 
     # Try to create a registration token (admin only)
     resp2 = client.post(
         "/v1/registration-tokens",
-        json={"name": "nope"},
+        json={"name": "nope", "policy_id": TEST_POLICY_ID},
         headers={"Authorization": f"Bearer {at_token}"},
     )
     assert resp2.status_code == 403
@@ -311,7 +366,7 @@ def test_revoked_device_at_token_rejected(setup):
     """After revoking a device, its at_ token should be rejected."""
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
-    resp = _check_device(client, rt_token)
+    resp = _enrol_device(client, rt_token)
     at_token = resp.json()["result"]["access_token"]["token"]
 
     # Revoke the device
@@ -353,3 +408,128 @@ def test_health_bypasses_auth(setup):
     client, _, _ = setup
     resp = client.get("/health")
     assert resp.status_code == 200
+
+
+# ------------------------------------------------------------------
+# The enrolment contract
+# ------------------------------------------------------------------
+
+
+def test_a_registration_token_must_name_a_policy(setup):
+    """Without this the column existed but nothing ever wrote it."""
+    client, admin_key, _ = setup
+    resp = client.post(
+        "/v1/registration-tokens",
+        json={"name": "unscoped"},
+        headers={"Authorization": f"Bearer {admin_key}"},
+    )
+    assert resp.status_code == 422
+
+
+def test_a_registration_token_policy_must_exist(setup):
+    client, admin_key, _ = setup
+    resp = client.post(
+        "/v1/registration-tokens",
+        json={"name": "bad-policy", "policy_id": "no-such-policy"},
+        headers={"Authorization": f"Bearer {admin_key}"},
+    )
+    assert resp.status_code == 400
+
+
+def test_the_created_token_reports_its_policy(setup):
+    client, admin_key, _ = setup
+    resp = client.post(
+        "/v1/registration-tokens",
+        json={"name": "scoped", "policy_id": TEST_POLICY_ID},
+        headers={"Authorization": f"Bearer {admin_key}"},
+    )
+    assert resp.json()["policy_id"] == TEST_POLICY_ID
+
+
+def test_an_enrolled_device_inherits_the_tokens_policy_end_to_end(setup):
+    """Producer and consumer, both through the real API."""
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+
+    enrolled = _enrol_device(client, rt_token, installation_id=_iid("inst-scoped-e2e")).json()["result"]
+
+    devices = client.get("/v1/devices", headers={"Authorization": f"Bearer {admin_key}"}).json()
+    device = next(d for d in devices if d["id"] == enrolled["device_id"])
+    assert device["policy_id"] == TEST_POLICY_ID
+
+
+def test_enrolling_an_already_enrolled_installation_is_a_conflict(setup):
+    """409, not a 201 carrying a failure in the body: nothing was created."""
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+    _enrol_device(client, rt_token, installation_id=_iid("inst-duplicate"))
+
+    resp = _enrol_device(client, rt_token, installation_id=_iid("inst-duplicate"))
+
+    assert resp.status_code == 409
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "short",
+        "has spaces in it here",
+        "x" * 129,
+        "semi;colons;here!!",
+        "alice-laptop-2026",  # plausible, memorable, entirely predictable
+        "aaaaaaaaaaaaaaaa",  # long enough to pass a length floor, no entropy
+        "00000000-0000-0000-0000-000000000000",  # the nil UUID
+        "6ba7b810-9dad-11d1-80b4-00c04fd430",  # UUID-ish but malformed
+    ],
+)
+def test_a_non_uuid_installation_id_is_rejected(setup, bad):
+    """The server checks the form of the identifier, not its randomness.
+
+    It cannot do the latter — it sees only the result. Requiring a UUID rules
+    out the obviously weak values a free-text field allowed and gives clients
+    one unambiguous contract. Enrolment is first-claim and never reassigns, so
+    anyone able to predict an installation ID can enrol it first and lock the
+    genuine client out; that residual risk lives in the client's generator.
+    """
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+
+    resp = _enrol_device(client, rt_token, installation_id=bad)
+
+    assert resp.status_code == 422
+
+
+def test_a_rotated_token_cannot_refresh_again_over_http(setup):
+    """The replay defect, at the route."""
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+    enrolled = _enrol_device(client, rt_token, installation_id=_iid("inst-replay")).json()["result"]
+    first = enrolled["access_token"]["token"]
+    device_id = enrolled["device_id"]
+
+    ok = client.post(f"/v1/devices/{device_id}/refresh", json={}, headers={"Authorization": f"Bearer {first}"})
+    assert ok.status_code == 200
+
+    replay = client.post(f"/v1/devices/{device_id}/refresh", json={}, headers={"Authorization": f"Bearer {first}"})
+    assert replay.status_code == 403
+
+
+def test_refreshing_a_revoked_device_is_forbidden(setup):
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+    enrolled = _enrol_device(client, rt_token, installation_id=_iid("inst-revoked-refresh")).json()["result"]
+    at_token = enrolled["access_token"]["token"]
+
+    client.patch(
+        f"/v1/devices/{enrolled['device_id']}",
+        json={"status": "revoked"},
+        headers={"Authorization": f"Bearer {admin_key}"},
+    )
+
+    resp = client.post(
+        f"/v1/devices/{enrolled['device_id']}/refresh",
+        json={},
+        headers={"Authorization": f"Bearer {at_token}"},
+    )
+    assert resp.status_code == 401

@@ -14,6 +14,11 @@ router = APIRouter(prefix="/v1/registration-tokens", tags=["registration-tokens"
 
 class CreateRegistrationTokenRequest(BaseModel):
     name: str
+    # Required: every device enrolled with this token inherits it as its scope.
+    # Making it optional is what left the column unwritten by anything, so the
+    # inheritance code at enrolment read NULL and every device fell back to the
+    # default policy.
+    policy_id: str
     expires_at: datetime | None = None
 
 
@@ -22,6 +27,7 @@ def _to_dict(rt) -> dict:
         "id": rt.id,
         "name": rt.name,
         "token_prefix": rt.token_prefix,
+        "policy_id": rt.policy_id,
         "created_by": rt.created_by,
         "created_at": str(rt.created_at),
         "expires_at": str(rt.expires_at) if rt.expires_at else None,
@@ -37,6 +43,7 @@ async def create_registration_token(body: CreateRegistrationTokenRequest, reques
         svc = DeviceService(session)
         raw_token, record = svc.create_registration_token(
             name=body.name,
+            policy_id=body.policy_id,
             created_by=getattr(request.state, "api_key_id", None),
             expires_at=body.expires_at,
         )

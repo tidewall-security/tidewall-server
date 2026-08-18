@@ -33,6 +33,12 @@ def _make_app_and_client():
 
     app.include_router(router)
 
+    # Registration tokens bind to a policy, so whether one can be deleted while
+    # still in use is a policy-route concern.
+    from app.routes.registration import router as registration_router
+
+    app.include_router(registration_router)
+
     # Seed a default policy with detectors
     session = SessionLocal()
     default_policy = Policy(
@@ -515,3 +521,34 @@ def test_unauthenticated_import_policy(setup):
     client, _, _, _ = setup
     resp = client.post("/v1/policies/import", json={"name": "nope"})
     assert resp.status_code == 401
+
+
+def test_deleting_a_policy_still_bound_to_a_device_returns_409(setup):
+    """Not 400: the request is well formed, the policy is simply still in use.
+
+    Guard reads a null policy binding as "use the default", so allowing this
+    delete would quietly move the device onto rules nobody chose for it.
+    """
+    client, admin_key, _, _ = setup
+    auth = {"Authorization": f"Bearer {admin_key}"}
+
+    created = client.post(
+        "/v1/policies",
+        json={"name": "engineering", "type": "application"},
+        headers=auth,
+    )
+    assert created.status_code == 201
+    policy_id = created.json()["id"]
+
+    rt = client.post(
+        "/v1/registration-tokens",
+        json={"name": "engineering-onboarding", "policy_id": policy_id},
+        headers=auth,
+    )
+    assert rt.status_code == 201
+
+    resp = client.delete(f"/v1/policies/{policy_id}", headers=auth)
+
+    assert resp.status_code == 409
+    assert "still bound" in resp.json()["detail"]
+    assert client.get(f"/v1/policies/{policy_id}", headers=auth).status_code == 200
