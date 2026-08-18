@@ -209,11 +209,17 @@ class MaliciousPromptDetector(BaseDetector):
                     self._prompt_list_svc = PromptListService(session_factory())
 
                     # Compile the stored rows now, not on whichever request
-                    # first scans this list. Without this, an unenforceable row
-                    # is invisible to activation preflight: the engine reports
-                    # no construction failure, activation declares the policy
-                    # servable, and the problem surfaces only once some caller's
-                    # text happens to exercise that list.
+                    # first scans this list. Without this the engine reports no
+                    # construction failure at all, and an unenforceable row
+                    # surfaces only once some caller's text happens to exercise
+                    # that list — which for a malicious list means an attacker
+                    # picks the moment.
+                    #
+                    # This makes the failure visible in construction_failures
+                    # and in scan results. It does NOT refuse to serve: nothing
+                    # in this repository reads is_enforcement_complete to reject
+                    # an engine, so an unservable policy is still served. That
+                    # activation gate is separate, unbuilt work.
                     for list_type, enabled in (
                         ("malicious", self._custom_malicious_enabled),
                         ("benign", self._custom_benign_enabled),

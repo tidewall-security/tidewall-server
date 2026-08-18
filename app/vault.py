@@ -33,7 +33,7 @@ import re
 from collections import defaultdict
 
 _PLACEHOLDER_FMT = "[REDACTED_{type}_{n}]"
-_PLACEHOLDER_RE = re.compile(r"^\[REDACTED_(.+)_(\d+)\]$")
+_PLACEHOLDER_RE = re.compile(r"^\[REDACTED_(.+)_(\d+)\]$")  # hardcoded-pattern
 
 
 class TidewallVault:

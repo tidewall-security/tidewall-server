@@ -167,41 +167,38 @@ def test_the_compiled_object_is_not_a_stdlib_re_pattern():
     )
 
 
-def test_no_module_in_app_uses_a_backtracking_engine_on_supplied_patterns():
+def test_no_backtracking_engine_runs_a_supplied_pattern():
     """Catch a new consumer, an alias, or an unlisted `re` call.
 
-    The earlier version of this test searched three named files for the literal
-    strings `re.compile(` and `re.search(`. That passes if someone uses
-    `re.finditer`, imports `re` under an alias, reaches for the third-party
-    `regex` module, or simply adds a fourth consumer somewhere else — which is
-    precisely how a chokepoint erodes. Parse the tree instead, and scan all of
-    `app/`.
+    Two earlier versions of this were too weak. A substring search for
+    `re.compile(` and `re.search(` in three named files passes for
+    `re.finditer`, an aliased import, the third-party `regex` module, or a new
+    consumer elsewhere. Allowlisting whole modules then fixed that but created
+    the opposite hole: a supplied-pattern consumer added *inside* an exempt
+    module would be invisible, and every unrelated hard-coded `re` use forces
+    another whole-module exemption until the rule means nothing.
 
-    A small allowlist covers modules whose patterns are hard-coded in source
-    and code-reviewed: those are not the supplied-pattern threat model, and
-    moving them to RE2 would risk semantic changes for no security gain.
+    So the exemption is per line. A call site using the backtracking engine on
+    a pattern that is hard-coded in source must say so on that line:
+
+        _EMOJI = re.compile("...")  # hardcoded-pattern
+
+    which keeps the claim next to the code it describes, and keeps a new
+    supplied-pattern consumer visible even in a module that already has
+    exemptions.
     """
     import ast
     import pathlib
 
-    # Hard-coded, code-reviewed patterns. Not administrator-supplied.
-    ALLOWED = {
-        "app/services/entity_extractor.py",
-        "app/detectors/emoji_detector.py",
-        "app/vault.py",
-        "app/services/safe_regex.py",  # imports re2, not re
-    }
-
+    MARKER = "hardcoded-pattern"
     repo = pathlib.Path(__file__).resolve().parent.parent
     offenders: list[str] = []
 
     for path in sorted((repo / "app").rglob("*.py")):
-        rel = path.relative_to(repo).as_posix()
-        if rel in ALLOWED:
-            continue
-        tree = ast.parse(path.read_text())
+        source = path.read_text()
+        lines = source.splitlines()
+        tree = ast.parse(source)
 
-        # Which local names refer to a backtracking engine in this module?
         backtracking: set[str] = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -216,19 +213,24 @@ def test_no_module_in_app_uses_a_backtracking_engine_on_supplied_patterns():
             continue
 
         for node in ast.walk(tree):
-            called = None
+            name = None
             if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-                called = node.value.id
+                name = node.value.id
             elif isinstance(node, ast.Name):
-                called = node.id
-            if called in backtracking:
-                offenders.append(f"{rel} (via {called})")
-                break
+                name = node.id
+            if name not in backtracking:
+                continue
+            line = lines[node.lineno - 1] if node.lineno <= len(lines) else ""
+            if MARKER in line:
+                continue
+            rel = path.relative_to(repo).as_posix()
+            offenders.append(f"{rel}:{node.lineno}")
 
     assert not offenders, (
-        "backtracking regex engine reachable in: "
+        "backtracking regex engine used without a `# hardcoded-pattern` marker at: "
         + ", ".join(offenders)
-        + ". Administrator-supplied patterns must go through app/services/safe_regex.py (P0-12)."
+        + ". Administrator-supplied patterns must go through app/services/safe_regex.py (P0-12); "
+        "if the pattern is hard-coded in source, mark the line."
     )
 
 
@@ -354,12 +356,16 @@ def test_ordinary_unicode_folds_still_agree(pattern, text):
 
 
 def test_an_unenforceable_row_is_visible_at_construction_not_first_scan(db_session):
-    """Activation preflight must see it.
+    """The failure must be recorded when the engine is built.
 
-    Without construction-time compilation the engine reports no failure,
-    activation declares the policy servable, and the bad row is discovered by
-    whichever caller's text first happens to exercise that list — which for a
-    malicious list means an attacker chooses the moment.
+    Without construction-time compilation the engine reports no failure at all,
+    and the bad row is discovered by whichever caller's text first happens to
+    exercise that list — which for a malicious list means an attacker chooses
+    the moment.
+
+    Visibility, not refusal: nothing in this repository reads
+    is_enforcement_complete to reject an engine, so a policy with an
+    unenforceable list is still served. That gate is separate, unbuilt work.
     """
     from app.db.models import GlobalPromptList
     from app.detectors.base import FailureCode
@@ -425,3 +431,115 @@ def test_the_scan_query_is_bounded_not_just_the_scan(db_session):
     assert all(
         "LIMIT" in st.upper() for st in statements
     ), f"the scan path fetched without a LIMIT, so the row count is unbounded: {statements}"
+
+
+def test_preflight_runs_for_benign_when_malicious_is_disabled(db_session):
+    """The two toggles are independent; only checking the malicious one would
+    leave a benign list unvalidated. A bad benign row matters: that list
+    suppresses detections."""
+    from app.db.models import GlobalPromptList
+    from app.detectors.base import FailureCode
+    from app.detectors.malicious_prompt import MaliciousPromptDetector
+
+    db_session.add(GlobalPromptList(list_type="benign", pattern=r"(?=x)y", match_type="regex"))
+    db_session.commit()
+
+    detector = MaliciousPromptDetector(
+        {
+            "enabled": True,
+            "custom_malicious_detection": False,
+            "custom_benign_detection": True,
+            "generic_injection": {"enabled": False},
+        },
+        session_factory=lambda: db_session,
+    )
+
+    assert detector.load_failures.get("custom_benign") is FailureCode.CONFIG_INVALID
+
+
+@pytest.mark.parametrize("list_type", ["malicious", "benign"])
+def test_both_list_types_are_fetched_with_a_bound(db_session, list_type):
+    """Round 3 noted the SQL assertion only covered malicious check_match."""
+    from sqlalchemy import event
+
+    from app.services.prompt_list_service import PromptListService
+
+    statements: list[str] = []
+    engine = db_session.get_bind()
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        if "global_prompt_lists" in statement:
+            statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        svc = PromptListService(db_session)
+        svc.check_match("text", list_type)
+        svc.preflight(list_type)
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+    assert statements, "no query emitted"
+    assert all("LIMIT" in st.upper() for st in statements), f"unbounded fetch: {statements}"
+
+
+def test_the_failure_reaches_a_real_scanner_engine(db_session):
+    """Assert the propagation rather than trusting the detector in isolation."""
+    from app.db.models import GlobalPromptList
+    from app.scanner_engine import ScannerEngine
+
+    db_session.add(GlobalPromptList(list_type="malicious", pattern=r"(?=x)y", match_type="regex"))
+    db_session.commit()
+
+    from app.config import PolicyConfig
+
+    policy = PolicyConfig(
+        name="test",
+        detectors={
+            "malicious_prompt": {
+                "enabled": True,
+                "action": "block",
+                "custom_malicious_detection": True,
+                "generic_injection": {"enabled": False},
+            }
+        },
+    )
+    engine = ScannerEngine(policy, session_factory=lambda: db_session)
+
+    names = [f.name for f in engine.construction_failures]
+    assert "malicious_prompt.custom_malicious" in names, f"not surfaced in engine: {names}"
+    assert (
+        not engine.is_enforcement_complete
+    ), "an enforcing detector with unenforceable config must not read as complete"
+
+
+def test_correcting_a_bad_row_clears_the_cached_failure(db_session):
+    """The defect the preflight introduced.
+
+    Compiling at construction means the verdict is a snapshot. Prompt lists are
+    global, so without invalidation an administrator who fixes the row keeps
+    seeing the old failure on every cached engine until an unrelated policy
+    edit or a restart.
+    """
+    from app.db.models import Policy, RuleSet
+    from app.services.policy_service import PolicyService
+
+    policy = Policy(name="p", type="application", is_default=True)
+    db_session.add(policy)
+    db_session.flush()
+    db_session.add(
+        RuleSet(
+            policy_id=policy.id,
+            event_type="input",
+            detectors={"emoji": {"enabled": True, "action": "report"}},
+        )
+    )
+    db_session.commit()
+
+    svc = PolicyService(db_session)
+    first = svc.get_engine(policy.id, "input")
+    assert svc.get_engine(policy.id, "input") is first, "engine should be cached"
+
+    svc.invalidate_all_engines()
+
+    assert svc.get_engine(policy.id, "input") is not first, "a global list change must rebuild engines"

@@ -9,7 +9,7 @@ from .base import BaseDetector, DetectorResult
 
 logger = logging.getLogger(__name__)
 
-_EMOJI_PATTERN = re.compile(
+_EMOJI_PATTERN = re.compile(  # hardcoded-pattern
     "["
     "\U0001f600-\U0001f64f"  # emoticons
     "\U0001f300-\U0001f5ff"  # symbols & pictographs
@@ -20,7 +20,7 @@ _EMOJI_PATTERN = re.compile(
     "\U0000200d"  # zero width joiner
     "\U0000fe0f"  # variation selector
     "]+",
-    re.UNICODE,
+    re.UNICODE,  # hardcoded-pattern
 )
 
 

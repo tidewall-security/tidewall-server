@@ -50,6 +50,20 @@ async def list_prompt_lists(request: Request, type: str | None = None) -> list[d
         session.close()
 
 
+def _invalidate_engines(request: Request) -> None:
+    """Rebuild every cached engine after a global prompt-list change.
+
+    Detectors compile these lists at construction and hold the result, so
+    without this an administrator who corrects a rejected row keeps seeing the
+    old construction failure — and one who adds a malicious pattern does not
+    get it enforced — until an unrelated policy edit or a restart. Prompt lists
+    are global rather than policy-scoped, so every cached engine is affected.
+    """
+    svc = getattr(request.app.state, "policy_service", None)
+    if svc is not None:
+        svc.invalidate_all_engines()
+
+
 @router.post("/prompt-lists", status_code=201, dependencies=[Depends(require_role("admin"))])
 async def create_prompt_list(body: CreatePromptListRequest, request: Request) -> dict:
     if body.list_type not in ("benign", "malicious"):
@@ -65,6 +79,7 @@ async def create_prompt_list(body: CreatePromptListRequest, request: Request) ->
             match_type=body.match_type,
             description=body.description,
         )
+        _invalidate_engines(request)
         return _entry_to_dict(entry)
     except PolicyValidationError as e:
         # Uncaught, this surfaced as a 500: the request is well formed, the
@@ -82,6 +97,7 @@ async def update_prompt_list(entry_id: str, body: UpdatePromptListRequest, reque
 
         svc = PromptListService(session)
         entry = svc.update(entry_id, pattern=body.pattern, match_type=body.match_type, description=body.description)
+        _invalidate_engines(request)
         return _entry_to_dict(entry)
     except PolicyValidationError as e:
         # Must precede the ValueError arm: PolicyValidationError is a
@@ -102,6 +118,7 @@ async def delete_prompt_list(entry_id: str, request: Request) -> None:
 
         svc = PromptListService(session)
         svc.delete(entry_id)
+        _invalidate_engines(request)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     finally:

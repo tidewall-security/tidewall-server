@@ -87,10 +87,13 @@ class PromptListService:
     def preflight(self, list_type: str) -> None:
         """Compile every stored pattern for a list type without scanning.
 
-        Called at detector construction so an unenforceable row is visible to
-        activation preflight, rather than being discovered by whichever request
-        first happens to scan that list. Raises PromptListConfigError, which the
-        caller records as a CONFIG_INVALID component.
+        Called at detector construction so an unenforceable row is recorded as
+        a construction failure, rather than being discovered by whichever
+        request first happens to scan that list. Raises PromptListConfigError,
+        which the caller records as a CONFIG_INVALID component.
+
+        Visibility only: nothing currently refuses to serve an engine on the
+        strength of it.
         """
         for entry in self._bounded_entries(list_type):
             if entry.match_type == "regex":
