@@ -226,7 +226,7 @@ class MatchGroup:
         }
 
 
-def canonical_json(groups: list[MatchGroup]) -> str:
+def canonical_json(groups: list[MatchGroup]) -> bytes:
     """The exact representation that gets stored, so the limit can measure it.
 
     Persistence must write these bytes rather than re-serialising the dicts.
@@ -235,32 +235,42 @@ def canonical_json(groups: list[MatchGroup]) -> str:
     other than what is stored.
     """
     payload = {"schema_version": MATCHES_SCHEMA_VERSION, "matches": [g.as_storable() for g in groups]}
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def validation_error(match: ExactMatch, original: str) -> str | None:
+    """Return a stable error code, or None. Deliberately does not raise.
+
+    A function that raises while holding sensitive arguments puts them in the
+    traceback, and a caller cannot clear a callee's frame. So this returns, its
+    frame disappears, and the caller raises only after releasing its own
+    references.
+    """
+    if not isinstance(match.value, str) or not match.value:
+        return "match.value.empty"
+    if not (0 <= match.start < match.end <= len(original)):
+        return "match.span.out_of_range"
+    if original[match.start : match.end] != match.value:
+        return "match.span.stale"
+    try:
+        if len(match.value.encode("utf-8")) > MAX_VALUE_BYTES:
+            return "match.value.too_large"
+    except UnicodeEncodeError:
+        return "match.value.invalid_unicode"
+    if unicodedata.normalize("NFC", match.value) != match.value:
+        # Non-canonical forms let one value be stored under several
+        # representations, silently defeating grouping and comparison. NFC not
+        # NFKC: NFKC would collapse compatibility-distinct source text and
+        # claim an equality the proven slice does not have.
+        return "match.value.not_canonical"
+    return None
 
 
 def validate_match(match: ExactMatch, original: str) -> None:
-    """Check a match against the field it claims to come from.
-
-    The byte-for-byte comparison is the point. A detector reporting a value
-    that is no longer at the offsets it reported has read something else — a
-    transformed copy, a stale buffer, a different message — and cannot be
-    trusted as provenance for any of them.
-    """
-    if not isinstance(match.value, str) or not match.value:
-        raise EvidenceError("match.value.empty")
-    if not (0 <= match.start < match.end <= len(original)):
-        # No coordinates in the message: they are a reconstruction aid.
-        raise EvidenceError("match.span.out_of_range")
-    if original[match.start : match.end] != match.value:
-        raise EvidenceError("match.span.stale", "the recorded span no longer contains the recorded value")
-    if _utf8_length(match.value, "match.value.invalid_unicode") > MAX_VALUE_BYTES:
-        raise EvidenceError("match.value.too_large")
-    if unicodedata.normalize("NFC", match.value) != match.value:
-        # Non-canonical forms let one value be stored under several
-        # representations, which silently defeats grouping and comparison.
-        # NFC, not NFKC: NFKC would collapse compatibility-distinct source
-        # text and claim an equality the proven slice does not have.
-        raise EvidenceError("match.value.not_canonical")
+    """Raising wrapper, for callers with nothing sensitive to release."""
+    code = validation_error(match, original)
+    if code is not None:
+        raise EvidenceError(code)
 
 
 def _sort_key(group: MatchGroup) -> tuple:
@@ -356,11 +366,20 @@ class MatchCollector:
                 original = self._originals.get(match.source)
                 if original is None:
                     raise EvidenceError("source.unregistered")
-                validate_match(match, original)
+                commit_failure = validation_error(match, original)
+                original = None
+                if commit_failure is not None:
+                    # `match` is this frame's loop variable; release it too.
+                    match = None  # noqa: F841 - deliberately released before raising
+                    raise EvidenceError(commit_failure)
             if len(self._matches) + len(staged._staged) > MAX_MATCHES_COLLECTED:
                 raise EvidenceError("collector.too_many_matches")
             self._matches.extend(staged._staged)
         finally:
+            # Clear the staged list on every path. A commit-time failure
+            # otherwise left the whole populated batch in this generator frame,
+            # which the traceback keeps.
+            staged._staged.clear()
             staged._closed = True
             self._capture_open = False
 
@@ -390,62 +409,78 @@ class MatchCollector:
     def _build_groups(self, groups: list[MatchGroup]) -> list[MatchGroup]:
         """Group, bound and order the matches.
 
-        Every sensitive local is cleared on the way out. An exception keeps its
-        traceback and a traceback keeps its frames' locals, so without this a
-        caller that catches a failure could walk ``__traceback__`` and read the
-        whole collected batch, the last match and the last original — which is
-        the content this module exists to control.
-
-        This narrows the window; it is not secrecy against code in the same
-        process, and the module docstring says so rather than implying more.
+        Every failure releases its sensitive references *before* raising. A
+        traceback keeps its frames' locals, and a frame cannot clear a callee's
+        locals — so validation returns an error code rather than raising while
+        holding the value, and this function nulls what it holds before it
+        raises. Clearing only the container was not enough: ``key`` held the
+        value in a tuple and ``existing`` held a second reference to it.
         """
         grouped: dict[tuple, list[Any]] = {}
         match: ExactMatch | None = None
         original: str | None = None
+        key: tuple | None = None
+        existing: list[Any] | None = None
+        failure: str | None = None
         try:
             for match in self._matches:
                 original = self._originals.get(match.source)
                 if original is None:
-                    raise EvidenceError("source.unregistered")
-                validate_match(match, original)
+                    failure = "source.unregistered"
+                    break
+                failure = validation_error(match, original)
+                if failure is not None:
+                    break
 
                 key = (match.detector, match.match_type, match.rule_id, match.source, match.value)
                 existing = grouped.get(key)
                 if existing is None:
                     if len(grouped) >= MAX_MATCH_GROUPS:
-                        raise EvidenceError("capture.too_many_groups")
+                        failure = "capture.too_many_groups"
+                        break
                     grouped[key] = [match, 1]
                 else:
                     if existing[1] >= MAX_OCCURRENCES_PER_GROUP:
-                        raise EvidenceError("capture.too_many_occurrences")
+                        failure = "capture.too_many_occurrences"
+                        break
                     existing[1] += 1
 
-            groups.extend(
-                MatchGroup(
-                    detector=m.detector,
-                    match_type=m.match_type,
-                    source=m.source,
-                    value=m.value,
-                    rule_id=m.rule_id,
-                    occurrences=count,
+            if failure is None:
+                groups.extend(
+                    MatchGroup(
+                        detector=m.detector,
+                        match_type=m.match_type,
+                        source=m.source,
+                        value=m.value,
+                        rule_id=m.rule_id,
+                        occurrences=count,
+                    )
+                    for m, count in grouped.values()
                 )
-                for m, count in grouped.values()
-            )
-            groups.sort(key=_sort_key)
+                groups.sort(key=_sort_key)
+                if len(canonical_json(groups)) > MAX_MATCHES_JSON_BYTES:
+                    failure = "capture.serialized_too_large"
 
-            if len(canonical_json(groups).encode("utf-8")) > MAX_MATCHES_JSON_BYTES:
-                # Empty the list before raising: otherwise this frame hands
-                # back through the traceback exactly the oversized result it is
-                # refusing to return.
+            if failure is not None:
+                # Release everything this frame holds, then raise. The raise
+                # itself must be the last statement, so the frame captured in
+                # the traceback holds only Nones and empty containers.
+                grouped.clear()
                 groups.clear()
-                raise EvidenceError("capture.serialized_too_large")
+                match = None
+                original = None
+                key = None
+                existing = None
+                raise EvidenceError(failure)
 
             return groups
         finally:
             grouped.clear()
             match = None
             original = None
-            del match, original
+            key = None
+            existing = None
+            del match, original, key, existing
 
 
 @dataclass
@@ -469,7 +504,16 @@ class _DetectorCapture:
         original = self._collector._originals.get(match.source)
         if original is None:
             raise EvidenceError("source.unregistered")
-        validate_match(match, original)
+
+        failure = validation_error(match, original)
+        if failure is not None:
+            # Release before raising: this frame is what the traceback keeps,
+            # and `match` is an argument, so it is bound here too.
+            original = None
+            match = None  # noqa: F841 - deliberately released before raising
+            raise EvidenceError(failure)
+        original = None
+
         if len(self._staged) >= MAX_MATCHES_COLLECTED:
             raise EvidenceError("collector.too_many_matches")
         self._staged.append(match)

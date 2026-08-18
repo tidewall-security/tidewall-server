@@ -18,6 +18,7 @@ import unicodedata
 
 import pytest
 
+from app.services import audit_evidence
 from app.services.audit_evidence import (
     MAX_MATCH_GROUPS,
     MAX_MATCHES_JSON_BYTES,
@@ -266,7 +267,7 @@ def canonical_json_for(collector: MatchCollector) -> bytes:
         )
         for m in collector._matches
     ]
-    return canonical_json(groups).encode("utf-8")
+    return canonical_json(groups)
 
 
 def test_exactly_at_the_group_limit_succeeds():
@@ -490,55 +491,137 @@ def test_a_failed_finalize_still_destroys_state_and_is_terminal():
     assert exc.value.code == "collector.finalized"
 
 
-def test_the_overflow_path_does_not_leave_the_batch_in_its_own_frames():
-    """My first version of this test was vacuous.
+CANARY = "CANARY-9f3a2b7c-secret-value"
 
-    It collected only locals that were lists, so it saw the already-emptied
-    `groups` and missed `grouped`, which is a dict, and missed bare
-    ExactMatch/str locals entirely. This walks every local recursively.
 
-    Note what is being asserted: the containers this module owns are emptied on
-    the way out. It is NOT a secrecy guarantee against code in the same
-    process — Python tracebacks keep their frames' locals and there is no way
-    to prevent that from inside a library.
+def _reachable_from(exc: BaseException) -> list[object]:
+    """Everything reachable from the exception's own frames.
+
+    Two earlier versions of this were too narrow. The first collected only
+    locals that were lists, so it missed the grouping dict entirely. The second
+    detected only ExactMatch/MatchGroup, so it passed while `key` held the
+    planted value inside a tuple. This one is cycle-safe, unbounded in depth,
+    walks object attributes and dataclasses, and looks for the value itself as
+    well as the match types.
+
+    Scope is deliberately module frames — tb_next plus chained context/cause.
+    Caller frames (f_back) hold caller state this module cannot sanitise, and
+    promising otherwise would be the same overclaiming the module docstring
+    now avoids.
     """
-    collector = MatchCollector()
-    value = "v" * (MAX_VALUE_BYTES - 1)
-    for i in range(MAX_MATCH_GROUPS):
-        src = SourceRef(kind="message", index=i, field="content", role="user")
-        collector.register_source(src, value)
-        _capture(collector, _m(value, 0, len(value), source=src))
+    found: list[object] = []
+    seen: set[int] = set()
 
-    with pytest.raises(EvidenceError) as exc:
-        collector.finalize()
-    assert exc.value.code == "capture.serialized_too_large"
-
-    def walk(obj, depth=0, seen=None):
-        """Every container reachable from a traceback frame."""
-        seen = seen if seen is not None else set()
-        if depth > 6 or id(obj) in seen:
-            return []
+    def walk(obj: object) -> None:
+        if id(obj) in seen:
+            return
         seen.add(id(obj))
-        found = []
-        if isinstance(obj, MatchGroup | ExactMatch):
+        if isinstance(obj, MatchCollector):
+            # Live working state, not retention: the collector holds originals
+            # by design until finalize(), and that lifecycle has its own test.
+            # A batch is NOT exempt — it is closed by the time these failures
+            # propagate, so anything still in it is retention.
+            return
+        if isinstance(obj, ExactMatch | MatchGroup):
             found.append(obj)
-            return found
+            return
+        if isinstance(obj, str):
+            if CANARY in obj:
+                found.append(obj)
+            return
         if isinstance(obj, dict):
             for k, v in obj.items():
-                found += walk(k, depth + 1, seen) + walk(v, depth + 1, seen)
-        elif isinstance(obj, list | tuple | set):
+                walk(k)
+                walk(v)
+        elif isinstance(obj, list | tuple | set | frozenset):
             for v in obj:
-                found += walk(v, depth + 1, seen)
-        return found
+                walk(v)
+        elif hasattr(obj, "__dict__"):
+            for v in vars(obj).values():
+                walk(v)
 
-    retained = []
-    tb = exc.tb
-    while tb is not None:
-        for local in tb.tb_frame.f_locals.values():
-            retained += walk(local)
-        tb = tb.tb_next
+    exceptions = [exc]
+    while exceptions:
+        current = exceptions.pop()
+        for chained in (current.__context__, current.__cause__):
+            if chained is not None and id(chained) not in seen:
+                exceptions.append(chained)
+        tb = current.__traceback__
+        while tb is not None:
+            # Only this module's frames. The test's own frame holds the canary
+            # by construction, and caller frames hold caller state that the
+            # module cannot sanitise — claiming otherwise would be the same
+            # overclaiming the module docstring now avoids.
+            if tb.tb_frame.f_code.co_filename == audit_evidence.__file__:
+                for local in tb.tb_frame.f_locals.values():
+                    walk(local)
+            tb = tb.tb_next
+    return found
 
-    assert not retained, f"{len(retained)} match objects still reachable through the traceback frames"
+
+@pytest.mark.parametrize(
+    "build,expected",
+    [
+        pytest.param("stale", "match.span.stale", id="stale-span"),
+        pytest.param("out_of_range", "match.span.out_of_range", id="out-of-range"),
+        pytest.param("too_many_groups", "capture.too_many_groups", id="too-many-groups"),
+        pytest.param("too_many_occurrences", "capture.too_many_occurrences", id="too-many-occurrences"),
+        pytest.param("overflow", "capture.serialized_too_large", id="serialized-overflow"),
+        pytest.param("commit_smuggle", "match.span.stale", id="commit-revalidation"),
+    ],
+)
+def test_no_failure_path_leaves_the_content_in_this_modules_frames(build, expected):
+    """Every failure code, not just the one I happened to test.
+
+    A frame cannot clear a callee's locals, so validation returns a code
+    instead of raising while holding the value, and each frame releases what it
+    holds before raising.
+    """
+    collector = MatchCollector()
+
+    if build == "stale":
+        collector.register_source(MSG, f"x {CANARY} y")
+        with pytest.raises(EvidenceError) as exc:
+            _capture(collector, _m(CANARY, 0, len(CANARY)))
+    elif build == "out_of_range":
+        collector.register_source(MSG, CANARY)
+        with pytest.raises(EvidenceError) as exc:
+            _capture(collector, _m(CANARY, 0, 9999))
+    elif build == "too_many_groups":
+        for i in range(MAX_MATCH_GROUPS + 1):
+            src = SourceRef(kind="message", index=i, field="content", role="user")
+            collector.register_source(src, CANARY)
+            _capture(collector, _m(CANARY, 0, len(CANARY), source=src))
+        with pytest.raises(EvidenceError) as exc:
+            collector.finalize()
+    elif build == "too_many_occurrences":
+        text = " ".join([CANARY] * (MAX_OCCURRENCES_PER_GROUP + 2))
+        collector.register_source(MSG, text)
+        with collector.capture("pii") as batch:
+            pos = 0
+            for _ in range(MAX_OCCURRENCES_PER_GROUP + 2):
+                st = text.index(CANARY, pos)
+                batch.add(_m(CANARY, st, st + len(CANARY)))
+                pos = st + len(CANARY)
+        with pytest.raises(EvidenceError) as exc:
+            collector.finalize()
+    elif build == "overflow":
+        big = CANARY + "v" * (MAX_VALUE_BYTES - len(CANARY) - 1)
+        for i in range(MAX_MATCH_GROUPS):
+            src = SourceRef(kind="message", index=i, field="content", role="user")
+            collector.register_source(src, big)
+            _capture(collector, _m(big, 0, len(big), source=src))
+        with pytest.raises(EvidenceError) as exc:
+            collector.finalize()
+    else:  # commit_smuggle
+        collector.register_source(MSG, f"x {CANARY} y")
+        with pytest.raises(EvidenceError) as exc:
+            with collector.capture("pii") as batch:
+                batch._staged.append(_m(CANARY, 0, len(CANARY)))
+
+    assert exc.value.code == expected
+    leaked = _reachable_from(exc.value)
+    assert not leaked, f"{len(leaked)} sensitive objects reachable from this module's frames on {expected}"
 
 
 def test_a_directly_mutated_batch_cannot_smuggle_a_match_past_validation():
@@ -617,7 +700,7 @@ def test_the_stored_form_carries_a_schema_version():
     collector = _collector("alice@example.com")
     _capture(collector, _m("alice@example.com", 0, 17))
 
-    payload = json.loads(canonical_json(collector.finalize()))
+    payload = json.loads(canonical_json(collector.finalize()).decode("utf-8"))
 
     assert payload["schema_version"] == 1
     assert payload["matches"][0]["value"] == "alice@example.com"
