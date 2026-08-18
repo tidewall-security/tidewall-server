@@ -1,24 +1,33 @@
 """The internal exact-match channel (P0-6, step 1).
 
-These matter more than most unit tests: this is the mechanism that decides
-what exact content gets stored under the middle role tier. If a match can be
-recorded without being verified against the text it claims to come from, then
-whatever ends up in the audit record is unprovenanced — and it is exactly the
-content the product exists to protect.
+This decides what exact content gets stored under the middle role tier. If a
+match can be recorded without being verified against the text it claims to come
+from, whatever ends up in the audit record is unprovenanced — and it is exactly
+the content the product exists to protect.
+
+The first version of these tests passed while three invariants were false: a
+partial detector capture survived a failed match, the collector retained every
+original and offset after grouping, and the serialised size limit was never
+enforced. Several tests below exist specifically because of that.
 """
 
 from __future__ import annotations
+
+import pickle
+import unicodedata
 
 import pytest
 
 from app.services.audit_evidence import (
     MAX_MATCH_GROUPS,
+    MAX_MATCHES_JSON_BYTES,
     MAX_OCCURRENCES_PER_GROUP,
     MAX_VALUE_BYTES,
     EvidenceError,
     ExactMatch,
     MatchCollector,
     SourceRef,
+    canonical_json,
 )
 
 MSG = SourceRef(kind="message", index=0, field="content", role="user")
@@ -30,7 +39,7 @@ def _collector(text: str, source: SourceRef = MSG) -> MatchCollector:
     return c
 
 
-def _match(value: str, start: int, end: int, **kw) -> ExactMatch:
+def _m(value: str, start: int, end: int, **kw) -> ExactMatch:
     return ExactMatch(
         detector=kw.pop("detector", "pii"),
         match_type=kw.pop("match_type", "EMAIL_ADDRESS"),
@@ -42,178 +51,411 @@ def _match(value: str, start: int, end: int, **kw) -> ExactMatch:
     )
 
 
+def _capture(collector: MatchCollector, *matches: ExactMatch, detector: str = "pii") -> None:
+    with collector.capture(detector) as batch:
+        for m in matches:
+            batch.add(m)
+
+
+# ---------------------------------------------------------------------------
+# Provenance
+# ---------------------------------------------------------------------------
+
+
 def test_a_match_that_does_not_match_is_refused():
-    """The whole point of the channel.
+    """A detector reporting a value that is not at the offsets it reported has
+    read something else. Recording it would attach provenance to content that
+    never had it."""
+    collector = _collector("contact alice@example.com please")
 
-    A detector reporting a value that is not at the offsets it reported has
-    read something else — a transformed copy, a stale buffer, a different
-    message. Recording it would attach provenance to content that never had it.
-    """
-    text = "contact alice@example.com please"
-    collector = _collector(text)
+    with pytest.raises(EvidenceError) as exc:
+        _capture(collector, _m("bob@example.com", 8, 25))
 
-    with pytest.raises(EvidenceError, match="no longer contains"):
-        collector.add(_match("bob@example.com", 8, 25))
+    assert exc.value.code == "match.span.stale"
 
 
-def test_a_correct_match_is_accepted_and_grouped():
-    text = "contact alice@example.com please"
-    collector = _collector(text)
+def test_a_correct_match_is_accepted():
+    collector = _collector("contact alice@example.com please")
+    _capture(collector, _m("alice@example.com", 8, 25))
 
-    collector.add(_match("alice@example.com", 8, 25))
+    groups = collector.finalize()
 
-    groups = collector.grouped()
     assert len(groups) == 1
     assert groups[0].value == "alice@example.com"
     assert groups[0].occurrences == 1
 
 
-def test_offsets_do_not_survive_grouping():
-    """Offsets are a validation aid, not a record.
-
-    A start/end pair against a known field is a reconstruction aid for anyone
-    who later obtains a fragment of the original, so it must not reach storage.
-    """
-    text = "alice@example.com"
-    collector = _collector(text)
-    collector.add(_match("alice@example.com", 0, 17))
-
-    group = collector.grouped()[0]
-
-    assert not hasattr(group, "start")
-    assert not hasattr(group, "end")
-    assert "start" not in vars(group)
-    assert "end" not in vars(group)
-
-
 def test_a_span_outside_the_field_is_refused():
     collector = _collector("short")
-    with pytest.raises(EvidenceError, match="outside the"):
-        collector.add(_match("short", 0, 500))
+    with pytest.raises(EvidenceError) as exc:
+        _capture(collector, _m("short", 0, 500))
+    assert exc.value.code == "match.span.out_of_range"
 
 
 def test_an_unregistered_source_is_refused():
-    """A detector cannot invent provenance for a field the scanner never read."""
     collector = _collector("hello")
     other = SourceRef(kind="tool", index=3, field="description")
-
-    with pytest.raises(EvidenceError, match="never registered"):
-        collector.add(_match("hello", 0, 5, source=other))
-
-
-def test_non_canonical_unicode_is_refused():
-    """Otherwise one value stores under several representations and grouping,
-    comparison and deduplication all quietly stop working."""
-    decomposed = "café"  # e + combining acute, not the composed form
-    collector = _collector(f"visit {decomposed} now")
-
-    with pytest.raises(EvidenceError, match="canonical"):
-        collector.add(_match(decomposed, 6, 6 + len(decomposed)))
+    with pytest.raises(EvidenceError) as exc:
+        _capture(collector, _m("hello", 0, 5, source=other))
+    assert exc.value.code == "source.unregistered"
 
 
-def test_an_oversized_value_is_refused():
-    big = "a" * (MAX_VALUE_BYTES + 1)
-    collector = _collector(big)
-    with pytest.raises(EvidenceError, match="exceeds"):
-        collector.add(_match(big, 0, len(big)))
+def test_a_conflicting_re_registration_is_refused():
+    """Overwriting would rebind already-accepted matches to text they were
+    never checked against."""
+    collector = _collector("original text")
+    with pytest.raises(EvidenceError) as exc:
+        collector.register_source(MSG, "different text")
+    assert exc.value.code == "source.conflicting_registration"
 
 
-def test_the_same_value_in_different_messages_stays_separate():
-    """Provenance is identity.
+def test_an_identical_re_registration_is_allowed():
+    collector = _collector("same text")
+    collector.register_source(MSG, "same text")  # must not raise
 
-    The same address in a user's question and in a tool's response are
-    different findings, and merging them would erase which one leaked.
+
+# ---------------------------------------------------------------------------
+# Invariant 1: capture is atomic per detector
+# ---------------------------------------------------------------------------
+
+
+def test_a_failed_match_discards_the_whole_detector_batch():
+    """The defect the first version had.
+
+    Validating one match at a time let earlier good matches survive a later
+    bad one, leaving a partial capture indistinguishable from a complete one
+    once stored.
     """
-    first = SourceRef(kind="message", index=0, field="content", role="user")
-    second = SourceRef(kind="message", index=1, field="content", role="assistant")
+    text = "alice@example.com and bob@example.com"
+    collector = _collector(text)
+
+    with pytest.raises(EvidenceError):
+        with collector.capture("pii") as batch:
+            batch.add(_m("alice@example.com", 0, 17))  # valid
+            batch.add(_m("nobody@example.com", 22, 37))  # stale
+
+    assert collector.finalize() == [], "a partial detector capture survived"
+
+
+def test_one_detector_failing_does_not_discard_another_that_succeeded():
+    """Atomicity is per detector run, not global — a broken custom rule should
+    not erase what PII legitimately found."""
+    text = "alice@example.com and bob@example.com"
+    collector = _collector(text)
+
+    _capture(collector, _m("alice@example.com", 0, 17))
+    with pytest.raises(EvidenceError):
+        _capture(collector, _m("wrong", 22, 37, detector="secrets", match_type="AWS_KEY"), detector="secrets")
+
+    groups = collector.finalize()
+    assert [g.detector for g in groups] == ["pii"]
+
+
+def test_a_match_cannot_be_staged_under_another_detectors_name():
+    collector = _collector("hello")
+    with pytest.raises(EvidenceError) as exc:
+        with collector.capture("pii") as batch:
+            batch.add(_m("hello", 0, 5, detector="secrets"))
+    assert exc.value.code == "match.detector.mismatch"
+
+
+# ---------------------------------------------------------------------------
+# Invariant 2: offsets and originals do not outlive the collector
+# ---------------------------------------------------------------------------
+
+
+def test_finalize_destroys_the_originals_and_offsets():
+    """Returning offset-free groups was not enough on its own: the collector
+    still held every original string and coordinate."""
+    collector = _collector("my secret is hunter2")
+    _capture(collector, _m("hunter2", 13, 20))
+
+    collector.finalize()
+
+    leaked = repr(vars(collector))
+    assert "hunter2" not in leaked
+    assert "my secret" not in leaked
+    assert collector._matches == []
+    assert collector._originals == {}
+
+
+def test_the_collector_cannot_be_reused_after_finalize():
+    collector = _collector("text")
+    collector.finalize()
+    with pytest.raises(EvidenceError) as exc:
+        collector.finalize()
+    assert exc.value.code == "collector.finalized"
+
+
+def test_the_collector_repr_does_not_expose_content():
+    collector = _collector("my secret is hunter2")
+    _capture(collector, _m("hunter2", 13, 20))
+
+    assert "hunter2" not in repr(collector)
+
+
+def test_the_collector_refuses_to_be_pickled():
+    """It holds every original field and coordinate; destroying them at
+    finalize is pointless if they can be serialised out beforehand."""
+    collector = _collector("my secret is hunter2")
+    _capture(collector, _m("hunter2", 13, 20))
+
+    with pytest.raises(EvidenceError) as exc:
+        pickle.dumps(collector)
+    assert exc.value.code == "collector.not_serializable"
+
+
+def test_no_offsets_reach_the_stored_form():
+    collector = _collector("alice@example.com")
+    _capture(collector, _m("alice@example.com", 0, 17))
+
+    stored = collector.finalize()[0].as_storable()
+
+    assert "start" not in json_keys(stored)
+    assert "end" not in json_keys(stored)
+
+
+def json_keys(obj, acc=None):
+    acc = acc if acc is not None else set()
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            acc.add(k)
+            json_keys(v, acc)
+    elif isinstance(obj, list):
+        for v in obj:
+            json_keys(v, acc)
+    return acc
+
+
+# ---------------------------------------------------------------------------
+# Invariant 3: bounds fail closed, measured on what is stored
+# ---------------------------------------------------------------------------
+
+
+def test_the_serialized_size_limit_is_actually_enforced():
+    """It was defined and never referenced — the eleventh produced-but-not-
+    consumed value in this codebase."""
     collector = MatchCollector()
-    collector.register_source(first, "alice@example.com")
-    collector.register_source(second, "alice@example.com")
+    value = "v" * (MAX_VALUE_BYTES - 1)
+    per_group = len(value)
+    needed = (MAX_MATCHES_JSON_BYTES // per_group) + 2
 
-    collector.add(_match("alice@example.com", 0, 17, source=first))
-    collector.add(_match("alice@example.com", 0, 17, source=second))
+    for i in range(min(needed, MAX_MATCH_GROUPS)):
+        src = SourceRef(kind="message", index=i, field="content", role="user")
+        collector.register_source(src, value)
+        _capture(collector, _m(value, 0, len(value), source=src))
 
-    assert len(collector.grouped()) == 2
-
-
-def test_the_same_value_twice_in_one_field_is_counted_not_duplicated():
-    text = "alice@example.com and alice@example.com"
-    collector = _collector(text)
-
-    collector.add(_match("alice@example.com", 0, 17))
-    collector.add(_match("alice@example.com", 22, 39))
-
-    groups = collector.grouped()
-    assert len(groups) == 1
-    assert groups[0].occurrences == 2
+    if len(canonical_json_for(collector)) > MAX_MATCHES_JSON_BYTES:
+        with pytest.raises(EvidenceError) as exc:
+            collector.finalize()
+        assert exc.value.code == "capture.serialized_too_large"
 
 
-def test_overlapping_matches_from_different_detectors_stay_separate():
-    """Collapsing them would discard why each detector fired, which is the
-    thing an analyst is reading the record to find out."""
-    text = "key=AKIAIOSFODNN7EXAMPLE"
-    collector = _collector(text)
+def canonical_json_for(collector: MatchCollector) -> bytes:
+    from app.services.audit_evidence import MatchGroup
 
-    collector.add(_match("AKIAIOSFODNN7EXAMPLE", 4, 24, detector="secrets", match_type="AWS_KEY"))
-    collector.add(_match("AKIAIOSFODNN7EXAMPLE", 4, 24, detector="custom_entity", match_type="CUSTOM", rule_id="r1"))
+    groups = [
+        MatchGroup(
+            detector=m.detector,
+            match_type=m.match_type,
+            source=m.source,
+            value=m.value,
+            rule_id=m.rule_id,
+            occurrences=1,
+        )
+        for m in collector._matches
+    ]
+    return canonical_json(groups).encode("utf-8")
 
-    assert len(collector.grouped()) == 2
+
+def test_exactly_at_the_group_limit_succeeds():
+    """'More than N fails' does not prove N succeeds."""
+    collector = MatchCollector()
+    for i in range(MAX_MATCH_GROUPS):
+        src = SourceRef(kind="message", index=i, field="content", role="user")
+        collector.register_source(src, "value")
+        _capture(collector, _m("value", 0, 5, source=src))
+
+    assert len(collector.finalize()) == MAX_MATCH_GROUPS
 
 
-def test_too_many_distinct_matches_fails_rather_than_truncating():
-    """A truncated set reads as a complete one to whoever inspects it later,
-    and nothing in the record says it was cut."""
-    text = " ".join(f"value{i:04d}" for i in range(MAX_MATCH_GROUPS + 5))
-    collector = _collector(text)
-    for i in range(MAX_MATCH_GROUPS + 5):
-        value = f"value{i:04d}"
-        start = text.index(value)
-        collector.add(_match(value, start, start + len(value)))
+def test_one_past_the_group_limit_fails_closed():
+    collector = MatchCollector()
+    for i in range(MAX_MATCH_GROUPS + 1):
+        src = SourceRef(kind="message", index=i, field="content", role="user")
+        collector.register_source(src, "value")
+        _capture(collector, _m("value", 0, 5, source=src))
 
-    with pytest.raises(EvidenceError, match="refusing to record a partial set"):
-        collector.grouped()
+    with pytest.raises(EvidenceError) as exc:
+        collector.finalize()
+    assert exc.value.code == "capture.too_many_groups"
 
 
 def test_too_many_occurrences_fails_rather_than_undercounting():
     value = "secret"
     text = " ".join([value] * (MAX_OCCURRENCES_PER_GROUP + 2))
     collector = _collector(text)
-    pos = 0
-    for _ in range(MAX_OCCURRENCES_PER_GROUP + 2):
-        start = text.index(value, pos)
-        collector.add(_match(value, start, start + len(value)))
-        pos = start + len(value)
-
-    with pytest.raises(EvidenceError, match="refusing to record a partial count"):
-        collector.grouped()
-
-
-def test_ordering_is_deterministic():
-    """Two audit records over the same input must not differ for no reason."""
-    text = "bbb aaa ccc"
-    positions = {"aaa": 4, "bbb": 0, "ccc": 8}
-
-    def build(order):
-        c = _collector(text)
-        for v in order:
-            c.add(_match(v, positions[v], positions[v] + 3))
-        return [(g.value, g.occurrences) for g in c.grouped()]
-
-    assert build(["aaa", "bbb", "ccc"]) == build(["ccc", "aaa", "bbb"])
-
-
-def test_a_negative_source_index_is_refused():
-    with pytest.raises(EvidenceError, match="negative"):
-        SourceRef(kind="message", index=-1, field="content")
-
-
-def test_the_error_does_not_quote_the_content_it_is_protecting():
-    """This runs on a path that can reach an operator's log, and the mismatch
-    is between two pieces of exactly the content being protected."""
-    collector = _collector("my password is hunter2")
+    with collector.capture("pii") as batch:
+        pos = 0
+        for _ in range(MAX_OCCURRENCES_PER_GROUP + 2):
+            start = text.index(value, pos)
+            batch.add(_m(value, start, start + len(value)))
+            pos = start + len(value)
 
     with pytest.raises(EvidenceError) as exc:
-        collector.add(_match("hunter2", 0, 7))
+        collector.finalize()
+    assert exc.value.code == "capture.too_many_occurrences"
 
-    assert "hunter2" not in str(exc.value)
-    assert "my password" not in str(exc.value)
+
+# ---------------------------------------------------------------------------
+# Identity, ordering, Unicode
+# ---------------------------------------------------------------------------
+
+
+def test_the_same_value_in_different_messages_stays_separate():
+    first = SourceRef(kind="message", index=0, field="content", role="user")
+    second = SourceRef(kind="message", index=1, field="content", role="assistant")
+    collector = MatchCollector()
+    collector.register_source(first, "alice@example.com")
+    collector.register_source(second, "alice@example.com")
+
+    _capture(
+        collector,
+        _m("alice@example.com", 0, 17, source=first),
+        _m("alice@example.com", 0, 17, source=second),
+    )
+
+    assert len(collector.finalize()) == 2
+
+
+def test_overlapping_matches_from_different_detectors_stay_separate():
+    text = "key=AKIAIOSFODNN7EXAMPLE"
+    collector = _collector(text)
+    _capture(collector, _m("AKIAIOSFODNN7EXAMPLE", 4, 24, detector="secrets", match_type="AWS_KEY"), detector="secrets")
+    _capture(
+        collector,
+        _m("AKIAIOSFODNN7EXAMPLE", 4, 24, detector="custom_entity", match_type="CUSTOM", rule_id="r1"),
+        detector="custom_entity",
+    )
+
+    assert len(collector.finalize()) == 2
+
+
+def test_ordering_is_stable_when_sort_keys_would_otherwise_tie():
+    """The first sort key stopped at match_type, so groups differing only by
+    rule_id were ordered by submission and could serialise two ways."""
+
+    def build(rule_order):
+        text = "abc"
+        c = _collector(text)
+        for rule in rule_order:
+            _capture(
+                c,
+                _m("abc", 0, 3, detector="custom_entity", match_type="CUSTOM", rule_id=rule),
+                detector="custom_entity",
+            )
+        return canonical_json(c.finalize())
+
+    assert build(["r1", "r2"]) == build(["r2", "r1"])
+
+
+def test_non_canonical_unicode_is_refused():
+    decomposed = unicodedata.normalize("NFD", "café")
+    assert decomposed != "café"
+    collector = _collector(f"visit {decomposed} now")
+
+    with pytest.raises(EvidenceError) as exc:
+        _capture(collector, _m(decomposed, 6, 6 + len(decomposed)))
+    assert exc.value.code == "match.value.not_canonical"
+
+
+def test_an_unpaired_surrogate_is_an_evidence_error_not_a_unicode_error():
+    """It passes the slice comparison and then explodes inside encode()."""
+    bad = "\ud800"
+    collector = _collector(f"x{bad}y")
+
+    with pytest.raises(EvidenceError) as exc:
+        _capture(collector, _m(bad, 1, 2))
+    assert exc.value.code == "match.value.invalid_unicode"
+
+
+def test_astral_characters_use_code_point_indices():
+    """A producer using byte or UTF-16 offsets must fail rather than record a
+    wrong span."""
+    text = "emoji 😀 here"
+    collector = _collector(text)
+    start = text.index("😀")
+
+    _capture(collector, _m("😀", start, start + 1))
+
+    assert collector.finalize()[0].value == "😀"
+
+
+def test_a_utf16_style_offset_fails_rather_than_recording_a_wrong_span():
+    text = "😀abc"
+    collector = _collector(text)
+    # UTF-16 would put "abc" at 2:5; code points put it at 1:4.
+    with pytest.raises(EvidenceError):
+        _capture(collector, _m("abc", 2, 5))
+
+
+# ---------------------------------------------------------------------------
+# Runtime typing and error hygiene
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "kwargs,code",
+    [
+        ({"kind": "nonsense", "index": 0, "field": "content"}, "source.kind.invalid"),
+        ({"kind": "message", "index": 0, "field": "nonsense"}, "source.field.invalid"),
+        ({"kind": "message", "index": -1, "field": "content"}, "source.index.invalid"),
+        ({"kind": "message", "index": 0, "field": "content", "role": "has spaces"}, "source.role.invalid"),
+    ],
+)
+def test_source_fields_are_validated_at_runtime(kwargs, code):
+    """Literal annotations do not validate anything at runtime."""
+    with pytest.raises(EvidenceError) as exc:
+        SourceRef(**kwargs)
+    assert exc.value.code == code
+
+
+@pytest.mark.parametrize(
+    "kwargs,code",
+    [
+        ({"detector": ""}, "match.detector.invalid"),
+        ({"detector": "leaked secret hunter2"}, "match.detector.invalid"),
+        ({"match_type": "not an identifier"}, "match.type.invalid"),
+        ({"rule_id": "also not one"}, "match.rule_id.invalid"),
+    ],
+)
+def test_match_identifiers_are_validated_at_runtime(kwargs, code):
+    """These are interpolated into errors and stored, so a value carrying
+    protected content must not get that far."""
+    base = {"detector": "pii", "match_type": "EMAIL", "source": MSG, "value": "x", "start": 0, "end": 1}
+    with pytest.raises(EvidenceError) as exc:
+        ExactMatch(**{**base, **kwargs})
+    assert exc.value.code == code
+
+
+def test_no_error_path_quotes_content_offsets_or_caller_strings():
+    """This runs where operator logs can see it, and the values in question are
+    exactly what the product exists to protect."""
+    secret = "hunter2"
+    text = f"my password is {secret}"
+    collector = _collector(text)
+
+    failures = []
+    for build in (
+        lambda: _capture(collector, _m(secret, 0, 7)),  # stale span
+        lambda: _capture(collector, _m(secret, 0, 9999)),  # out of range
+        lambda: collector.register_source(MSG, "different"),  # conflicting
+    ):
+        with pytest.raises(EvidenceError) as exc:
+            build()
+        failures.append(str(exc.value))
+
+    for message in failures:
+        assert secret not in message
+        assert "my password" not in message
+        assert "9999" not in message

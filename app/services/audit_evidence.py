@@ -6,41 +6,68 @@ exact matched values behind a separate grant, whole prompts behind another.
 
 The middle tier is why this module exists, and it cannot be built from what a
 detector already publishes. ``DetectorResult.data`` is an unrestricted dict
-shaped for the API response; deriving stored evidence from it would mean
-inheriting whatever any detector happens to put there, now and in future. It
-also cannot be rebuilt from offsets against the guard's flattened text, because
-redaction rewrites that text as detectors run, so an offset captured at one
-stage does not mean the same thing at the next.
+shaped for the API response, so deriving stored evidence from it would inherit
+whatever any detector happens to put there, now and in future. It also cannot
+be rebuilt from offsets against the guard's flattened text, because redaction
+rewrites that text as detectors run, so an offset captured at one stage does
+not mean the same thing at the next.
 
 So a detector reports its matches explicitly, bound to the original field it
-read, at the moment it reads it. Every match is validated against that original
-string at collection time: if the recorded span does not still contain exactly
-the recorded value, the capture fails rather than guessing.
+read, at the moment it reads it, and every match is verified against that
+original before it is accepted.
 
-Two rules hold everywhere below:
+## The three rules this module actually enforces
 
-- **Offsets never leave this process.** They exist to prove provenance during
-  validation and are discarded once matches are grouped. They are not stored,
-  returned, exported or logged — a start/end pair against a known field is a
-  reconstruction aid for anyone who later obtains a fragment.
-- **Nothing falls back to public payloads.** A failed validation drops that
-  detector's exact-match capture. It never reaches for ``data`` instead, which
-  would reintroduce exactly the uncontrolled surface this replaces.
+**Capture is atomic per detector run.** A detector submits its matches inside
+``collector.capture(...)``; if any one of them fails validation, the whole
+batch is discarded. Validating match-by-match was not enough — earlier good
+matches survived a later bad one, leaving a partial capture that reads as a
+complete one.
+
+**Offsets and originals do not outlive the collector.** They exist to prove
+provenance and are destroyed by ``finalize()``, which also prevents reuse.
+Returning offset-free groups was not enough on its own: the collector still
+held every original string and coordinate, reachable through ``repr`` and
+pickling.
+
+**Bounds fail closed, measured on what will actually be stored.** The size
+limit is checked against canonical JSON bytes, because a limit that cannot
+measure the thing it bounds is decoration. Overflow invalidates the entire
+capture rather than truncating — a truncated set reads as complete, and
+nothing in the record would say it was cut.
+
+## Conventions
+
+``start``/``end`` are **Python code-point indices** into the original field.
+A producer using byte or UTF-16 offsets will fail validation rather than
+record a wrong span, which is the intended outcome.
+
+Errors never interpolate caller-controlled strings, coordinates, or content.
+This code runs where an operator's logs can see it, and the values in question
+are exactly what the product exists to protect.
 """
 
 from __future__ import annotations
 
+import json
 import unicodedata
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
-# Bounds. Overflow fails capture closed rather than truncating, because a
-# truncated set of exact matches reads as a complete one to whoever later
-# inspects it, and there is no way to tell from the record that it was cut.
+# Overflow fails capture closed rather than truncating.
 MAX_MATCH_GROUPS = 100
 MAX_OCCURRENCES_PER_GROUP = 100
 MAX_VALUE_BYTES = 8 * 1024
 MAX_MATCHES_JSON_BYTES = 256 * 1024
+# Collection-time ceiling. Without it a buggy or hostile detector can retain
+# unbounded values and originals before any aggregate limit is reached.
+MAX_MATCHES_COLLECTED = MAX_MATCH_GROUPS * MAX_OCCURRENCES_PER_GROUP
+
+SOURCE_KINDS = ("message", "tool")
+SOURCE_FIELDS = ("content", "name", "description", "parameters")
+_MAX_IDENTIFIER_LENGTH = 64
 
 SourceKind = Literal["message", "tool"]
 SourceField = Literal["content", "name", "description", "parameters"]
@@ -49,20 +76,51 @@ SourceField = Literal["content", "name", "description", "parameters"]
 class EvidenceError(ValueError):
     """A match that cannot be trusted as provenance.
 
-    Raised at collection, never swallowed into a partial result: a match whose
-    span no longer contains its value means the detector and the text have
-    diverged, and the safe response is to record nothing for that detector
-    rather than something plausible.
+    Carries a stable ``code`` and deliberately no content, no coordinates and
+    no caller-supplied strings.
     """
+
+    def __init__(self, code: str, detail: str = "") -> None:
+        self.code = code
+        super().__init__(f"{code}: {detail}" if detail else code)
+
+
+def _check_identifier(value: object, code: str) -> str:
+    """Reject anything that is not a plain internal identifier.
+
+    Detector names, match types and rule IDs are interpolated into errors and
+    stored, so a value carrying protected content or arbitrary text must not
+    get that far. ``Literal`` annotations do not validate at runtime.
+    """
+    if not isinstance(value, str) or not value:
+        raise EvidenceError(code, "must be a non-empty string")
+    if len(value) > _MAX_IDENTIFIER_LENGTH:
+        raise EvidenceError(code, "is too long")
+    if not all(c.isalnum() or c in "_-." for c in value):
+        raise EvidenceError(code, "contains characters that are not allowed in an identifier")
+    return value
+
+
+def _utf8_length(value: str, code: str) -> int:
+    """Byte length, refusing strings that are not valid Unicode scalars.
+
+    An unpaired surrogate passes a slice comparison and then explodes inside
+    ``encode``. That must be a fail-closed EvidenceError, not an incidental
+    UnicodeEncodeError escaping the contract.
+    """
+    try:
+        return len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        raise EvidenceError(code, "is not valid Unicode (unpaired surrogate)") from None
 
 
 @dataclass(frozen=True)
 class SourceRef:
     """Which original field a match came from.
 
-    Identical values found in different messages are different findings — the
-    same address in the user's own question and in a tool's response mean
-    different things — so provenance is part of identity, not decoration.
+    Provenance is part of identity: the same address in a user's question and
+    in a tool's response are different findings, and merging them would erase
+    which one leaked.
     """
 
     kind: SourceKind
@@ -71,17 +129,23 @@ class SourceRef:
     role: str | None = None
 
     def __post_init__(self) -> None:
-        if self.index < 0:
-            raise EvidenceError(f"source index must not be negative, got {self.index}")
+        if self.kind not in SOURCE_KINDS:
+            raise EvidenceError("source.kind.invalid")
+        if self.field not in SOURCE_FIELDS:
+            raise EvidenceError("source.field.invalid")
+        if not isinstance(self.index, int) or isinstance(self.index, bool) or self.index < 0:
+            raise EvidenceError("source.index.invalid")
+        if self.role is not None:
+            _check_identifier(self.role, "source.role.invalid")
 
 
 @dataclass(frozen=True)
 class ExactMatch:
     """One value a detector matched, bound to where it read it.
 
-    ``start``/``end`` are relative to the original, unmodified field — not to
-    the guard's concatenated text, and not to any partially redacted version.
-    They are used to verify the match and then discarded.
+    ``start``/``end`` are code-point indices into the original, unmodified
+    field — never the guard's concatenated text and never a partially redacted
+    version. They are used to verify the match and then destroyed.
     """
 
     detector: str
@@ -92,130 +156,225 @@ class ExactMatch:
     end: int
     rule_id: str | None = None
 
+    def __post_init__(self) -> None:
+        _check_identifier(self.detector, "match.detector.invalid")
+        _check_identifier(self.match_type, "match.type.invalid")
+        if self.rule_id is not None:
+            _check_identifier(self.rule_id, "match.rule_id.invalid")
+        for coord in (self.start, self.end):
+            if not isinstance(coord, int) or isinstance(coord, bool):
+                raise EvidenceError("match.offset.invalid")
+        if not isinstance(self.source, SourceRef):
+            raise EvidenceError("match.source.invalid")
 
-@dataclass
+
+@dataclass(frozen=True)
 class MatchGroup:
     """Exact duplicates of one value in one place, counted.
 
-    Grouping is deliberately narrow. Two matches merge only when detector,
-    type, rule, provenance *and* value are all identical. Overlapping matches
-    — from one detector or several — stay separate, because collapsing them
-    would discard why each detector fired, which is the thing an analyst is
-    reading this to find out.
+    Frozen and offset-free. Grouping is deliberately narrow: two matches merge
+    only when detector, type, rule, provenance *and* value are all identical.
+    Overlapping matches stay separate, because collapsing them would discard
+    why each detector fired, which is what an analyst reads this to find out.
     """
 
     detector: str
     match_type: str
     source: SourceRef
     value: str
-    rule_id: str | None = None
-    occurrences: int = 1
+    rule_id: str | None
+    occurrences: int
+
+    def as_storable(self) -> dict[str, Any]:
+        """The canonical form that will be persisted. Never includes offsets."""
+        return {
+            "detector": self.detector,
+            "match_type": self.match_type,
+            "rule_id": self.rule_id,
+            "source": {
+                "kind": self.source.kind,
+                "index": self.source.index,
+                "field": self.source.field,
+                "role": self.source.role,
+            },
+            "value": self.value,
+            "occurrences": self.occurrences,
+        }
+
+
+def canonical_json(groups: list[MatchGroup]) -> str:
+    """The exact representation that gets stored, so the limit can measure it."""
+    return json.dumps([g.as_storable() for g in groups], sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def validate_match(match: ExactMatch, original: str) -> None:
     """Check a match against the field it claims to come from.
 
-    The byte-for-byte comparison is the point. A detector that reports a value
-    which is no longer at the offsets it reported has read something else — a
-    transformed copy, a different message, a stale buffer — and its matches
-    cannot be trusted as provenance for any of them.
+    The byte-for-byte comparison is the point. A detector reporting a value
+    that is no longer at the offsets it reported has read something else — a
+    transformed copy, a stale buffer, a different message — and cannot be
+    trusted as provenance for any of them.
     """
     if not isinstance(match.value, str) or not match.value:
-        raise EvidenceError(f"{match.detector}: match value must be a non-empty string")
+        raise EvidenceError("match.value.empty")
     if not (0 <= match.start < match.end <= len(original)):
-        raise EvidenceError(
-            f"{match.detector}: span {match.start}:{match.end} is outside the "
-            f"{len(original)}-character source field"
-        )
+        # No coordinates in the message: they are a reconstruction aid.
+        raise EvidenceError("match.span.out_of_range")
     if original[match.start : match.end] != match.value:
-        # Deliberately does not report either string: this runs on a path that
-        # may end up in an operator's log, and the mismatch is between two
-        # pieces of exactly the content being protected.
-        raise EvidenceError(
-            f"{match.detector}: the recorded span no longer contains the recorded value; "
-            f"refusing to record it as provenance"
-        )
-    if len(match.value.encode("utf-8")) > MAX_VALUE_BYTES:
-        raise EvidenceError(f"{match.detector}: match value exceeds {MAX_VALUE_BYTES} bytes")
+        raise EvidenceError("match.span.stale", "the recorded span no longer contains the recorded value")
+    if _utf8_length(match.value, "match.value.invalid_unicode") > MAX_VALUE_BYTES:
+        raise EvidenceError("match.value.too_large")
     if unicodedata.normalize("NFC", match.value) != match.value:
-        # Non-canonical forms let the same value be stored under several
-        # representations, which defeats grouping and comparison later.
-        raise EvidenceError(f"{match.detector}: match value is not canonical (NFC) Unicode")
+        # Non-canonical forms let one value be stored under several
+        # representations, which silently defeats grouping and comparison.
+        # NFC, not NFKC: NFKC would collapse compatibility-distinct source
+        # text and claim an equality the proven slice does not have.
+        raise EvidenceError("match.value.not_canonical")
 
 
-def group_matches(matches: list[ExactMatch], originals: dict[SourceRef, str]) -> list[MatchGroup]:
-    """Validate, group and order matches, discarding offsets.
+def _sort_key(group: MatchGroup) -> tuple:
+    """Total order over everything that distinguishes a group.
 
-    Ordering is deterministic — by provenance, then position, then detector —
-    so the stored record does not vary between runs over the same input, which
-    would make two audit records look different for no reason.
+    An incomplete key leaves ties broken by submission order, so the same
+    input could serialise two different ways for no reason.
     """
-    for match in matches:
-        original = originals.get(match.source)
-        if original is None:
-            raise EvidenceError(f"{match.detector}: no original field recorded for {match.source}")
-        validate_match(match, original)
-
-    ordered = sorted(
-        matches,
-        key=lambda m: (m.source.kind, m.source.index, m.source.field, m.start, m.end, m.detector, m.match_type),
+    return (
+        group.source.kind,
+        group.source.index,
+        group.source.field,
+        group.source.role is not None,
+        group.source.role or "",
+        group.detector,
+        group.match_type,
+        group.rule_id is not None,
+        group.rule_id or "",
+        group.value,
     )
-
-    grouped: dict[tuple, MatchGroup] = {}
-    for match in ordered:
-        key = (
-            match.detector,
-            match.match_type,
-            match.rule_id,
-            match.source.kind,
-            match.source.index,
-            match.source.field,
-            match.source.role,
-            match.value,
-        )
-        existing = grouped.get(key)
-        if existing is None:
-            if len(grouped) >= MAX_MATCH_GROUPS:
-                raise EvidenceError(f"more than {MAX_MATCH_GROUPS} distinct matches; refusing to record a partial set")
-            grouped[key] = MatchGroup(
-                detector=match.detector,
-                match_type=match.match_type,
-                source=match.source,
-                value=match.value,
-                rule_id=match.rule_id,
-            )
-        else:
-            if existing.occurrences >= MAX_OCCURRENCES_PER_GROUP:
-                raise EvidenceError(
-                    f"{match.detector}: more than {MAX_OCCURRENCES_PER_GROUP} occurrences of one value; "
-                    f"refusing to record a partial count"
-                )
-            existing.occurrences += 1
-
-    return list(grouped.values())
 
 
 @dataclass
 class MatchCollector:
     """Gathers matches during a scan, holding the originals to validate against.
 
-    The scanner registers each original field before any detector runs, so
-    validation always compares against the text as it arrived rather than as it
-    currently is.
+    Sensitive state is excluded from ``repr`` and pickling is refused: the
+    collector holds every original field and every coordinate, and the point of
+    destroying them at ``finalize()`` is lost if they can be serialised out.
     """
 
-    _originals: dict[SourceRef, str] = field(default_factory=dict)
-    _matches: list[ExactMatch] = field(default_factory=list)
+    _originals: dict[SourceRef, str] = field(default_factory=dict, repr=False)
+    _matches: list[ExactMatch] = field(default_factory=list, repr=False)
+    _finalized: bool = field(default=False, repr=False)
+
+    def __getstate__(self) -> None:
+        raise EvidenceError("collector.not_serializable", "the collector holds original content and offsets")
 
     def register_source(self, source: SourceRef, original: str) -> None:
+        """Record a field as it arrived, before any detector runs."""
+        if self._finalized:
+            raise EvidenceError("collector.finalized")
+        if not isinstance(original, str):
+            raise EvidenceError("source.original.invalid")
+        existing = self._originals.get(source)
+        if existing is not None and existing != original:
+            # Overwriting would rebind already-accepted matches to text they
+            # were never checked against.
+            raise EvidenceError("source.conflicting_registration")
         self._originals[source] = original
 
-    def add(self, match: ExactMatch) -> None:
-        original = self._originals.get(match.source)
-        if original is None:
-            raise EvidenceError(f"{match.detector}: {match.source} was never registered as a source")
-        validate_match(match, original)
-        self._matches.append(match)
+    @contextmanager
+    def capture(self, detector: str) -> Iterator[_DetectorCapture]:
+        """Stage one detector's matches, committing only if all of them pass.
 
-    def grouped(self) -> list[MatchGroup]:
-        return group_matches(self._matches, self._originals)
+        Validating one at a time let earlier good matches survive a later bad
+        one, so a detector that went wrong part-way still contributed a partial
+        set — indistinguishable, once stored, from a complete one.
+        """
+        if self._finalized:
+            raise EvidenceError("collector.finalized")
+        _check_identifier(detector, "match.detector.invalid")
+        staged = _DetectorCapture(detector, self)
+        try:
+            yield staged
+        except EvidenceError:
+            raise
+        else:
+            if len(self._matches) + len(staged.staged) > MAX_MATCHES_COLLECTED:
+                raise EvidenceError("collector.too_many_matches")
+            self._matches.extend(staged.staged)
+
+    def finalize(self) -> list[MatchGroup]:
+        """Group the matches and destroy the originals and offsets.
+
+        Destructive by design: after this the collector holds no content, and
+        cannot be reused to produce a second, differently-bounded result.
+        """
+        if self._finalized:
+            raise EvidenceError("collector.finalized")
+
+        grouped: dict[tuple, list[Any]] = {}
+        for match in self._matches:
+            original = self._originals.get(match.source)
+            if original is None:
+                raise EvidenceError("source.unregistered")
+            validate_match(match, original)
+
+            key = (
+                match.detector,
+                match.match_type,
+                match.rule_id,
+                match.source,
+                match.value,
+            )
+            existing = grouped.get(key)
+            if existing is None:
+                if len(grouped) >= MAX_MATCH_GROUPS:
+                    raise EvidenceError("capture.too_many_groups")
+                grouped[key] = [match, 1]
+            else:
+                if existing[1] >= MAX_OCCURRENCES_PER_GROUP:
+                    raise EvidenceError("capture.too_many_occurrences")
+                existing[1] += 1
+
+        groups = [
+            MatchGroup(
+                detector=m.detector,
+                match_type=m.match_type,
+                source=m.source,
+                value=m.value,
+                rule_id=m.rule_id,
+                occurrences=count,
+            )
+            for m, count in grouped.values()
+        ]
+        groups.sort(key=_sort_key)
+
+        if len(canonical_json(groups).encode("utf-8")) > MAX_MATCHES_JSON_BYTES:
+            raise EvidenceError("capture.serialized_too_large")
+
+        # Destroy the sensitive state. This is the offset-lifetime guarantee;
+        # returning offset-free groups while retaining every original was not.
+        self._originals.clear()
+        self._matches.clear()
+        self._finalized = True
+        return groups
+
+
+@dataclass
+class _DetectorCapture:
+    """One detector's staged matches. Nothing here is committed until the
+    surrounding ``capture()`` block exits without error."""
+
+    detector: str
+    _collector: MatchCollector = field(repr=False)
+    staged: list[ExactMatch] = field(default_factory=list, repr=False)
+
+    def add(self, match: ExactMatch) -> None:
+        if match.detector != self.detector:
+            raise EvidenceError("match.detector.mismatch")
+        original = self._collector._originals.get(match.source)
+        if original is None:
+            raise EvidenceError("source.unregistered")
+        validate_match(match, original)
+        if len(self.staged) >= MAX_MATCHES_COLLECTED:
+            raise EvidenceError("collector.too_many_matches")
+        self.staged.append(match)
