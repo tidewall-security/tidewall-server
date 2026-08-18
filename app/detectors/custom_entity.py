@@ -13,8 +13,9 @@ pay no cost beyond a dict lookup.
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any
+
+from app.services.safe_regex import MAX_MATCHES_PER_SCAN, MAX_PATTERNS, UnsafePatternError, compile_pattern
 
 from .base import BaseDetector, DetectorResult, FailureCode
 
@@ -26,11 +27,29 @@ class CustomEntityDetector(BaseDetector):
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
-        self._patterns: list[re.Pattern[str]] = []
-        for raw in config.get("patterns", []) or []:
+        self._patterns: list[Any] = []
+        configured = config.get("patterns", []) or []
+        if len(configured) > MAX_PATTERNS:
+            # Write validation rejects this too, but a policy row can reach the
+            # database another way, and N patterns cost N passes over every
+            # scanned message however linear each one is. Refusing to enforce
+            # is correct here: silently matching the first MAX_PATTERNS would
+            # drop rules the administrator wrote, from a detector that redacts.
+            logger.error(
+                "custom_entity configured with %d patterns, over the %d limit",
+                len(configured),
+                MAX_PATTERNS,
+            )
+            self.mark_unavailable(FailureCode.CONFIG_INVALID)
+            configured = []
+        for raw in configured:
             try:
-                self._patterns.append(re.compile(raw))
-            except re.error:
+                # The linear engine, never `re`: these patterns are supplied by
+                # an administrator and run against caller-supplied text, which
+                # with a backtracking engine is a denial of service waiting to
+                # be configured (P0-12).
+                self._patterns.append(compile_pattern(raw))
+            except UnsafePatternError:
                 # A bad pattern is operator error, but skipping it silently
                 # removes the rule it expressed — the policy says an entity is
                 # detected and it never will be. Validation rejects these at
@@ -61,6 +80,18 @@ class CustomEntityDetector(BaseDetector):
         for pattern in self._patterns:
             for match in pattern.finditer(text):
                 spans.append((match.start(), match.end(), match.group(0)))
+                if len(spans) > MAX_MATCHES_PER_SCAN:
+                    # Linear is not free. A legal pattern like `.?` matches once
+                    # per character, so retaining every span is its own
+                    # exhaustion path. Stopping is necessary — but returning the
+                    # spans collected so far would be a partial scan reported as
+                    # a complete one, and this detector redacts, so a caller
+                    # would receive text it believes was fully sanitised.
+                    logger.error(
+                        "custom_entity exceeded %d matches in one scan; refusing to report a partial result",
+                        MAX_MATCHES_PER_SCAN,
+                    )
+                    return DetectorResult.failed(FailureCode.SCAN_FAILED)
 
         if not spans:
             return DetectorResult(detected=False)

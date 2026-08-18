@@ -15,6 +15,7 @@ import logging
 from typing import Any
 
 from app.model_registry import INJECTION as _INJECTION_REF
+from app.services.prompt_list_service import PromptListConfigError
 
 from .base import BaseDetector, ComponentStatus, DetectorResult, DetectorStatus, FailureCode, SkipReason
 
@@ -206,6 +207,30 @@ class MaliciousPromptDetector(BaseDetector):
                     from app.services.prompt_list_service import PromptListService
 
                     self._prompt_list_svc = PromptListService(session_factory())
+
+                    # Compile the stored rows now, not on whichever request
+                    # first scans this list. Without this the engine reports no
+                    # construction failure at all, and an unenforceable row
+                    # surfaces only once some caller's text happens to exercise
+                    # that list — which for a malicious list means an attacker
+                    # picks the moment.
+                    #
+                    # This makes the failure visible in construction_failures
+                    # and in scan results. It does NOT refuse to serve: nothing
+                    # in this repository reads is_enforcement_complete to reject
+                    # an engine, so an unservable policy is still served. That
+                    # activation gate is separate, unbuilt work.
+                    for list_type, enabled in (
+                        ("malicious", self._custom_malicious_enabled),
+                        ("benign", self._custom_benign_enabled),
+                    ):
+                        if not enabled:
+                            continue
+                        try:
+                            self._prompt_list_svc.preflight(list_type)
+                        except PromptListConfigError:
+                            logger.error("Stored %s prompt list cannot be enforced as written", list_type)
+                            self._load_failures[f"custom_{list_type}"] = FailureCode.CONFIG_INVALID
                 except Exception:
                     logger.warning("Failed to initialize PromptListService", exc_info=True)
                     self._load_failures["custom_lists"] = FailureCode.CONSTRUCT_FAILED
@@ -301,6 +326,15 @@ class MaliciousPromptDetector(BaseDetector):
             try:
                 matched = self._prompt_list_svc.check_match(text, "malicious")
                 components["custom_malicious"] = ComponentStatus()
+            except PromptListConfigError:
+                # Configuration that cannot be enforced as written, not an
+                # operational failure. The distinction matters to whoever has to
+                # fix it: retrying will never help, the row must be corrected.
+                logger.error("Custom malicious list has unenforceable configuration", exc_info=True)
+                components["custom_malicious"] = ComponentStatus(
+                    status=DetectorStatus.FAILED, failure_code=FailureCode.CONFIG_INVALID
+                )
+                matched = False
             except Exception:
                 logger.warning("Custom malicious list check failed", exc_info=True)
                 components["custom_malicious"] = ComponentStatus(
@@ -317,6 +351,15 @@ class MaliciousPromptDetector(BaseDetector):
             try:
                 matched = self._prompt_list_svc.check_match(text, "benign")
                 components["custom_benign"] = ComponentStatus()
+            except PromptListConfigError:
+                # Configuration that cannot be enforced as written, not an
+                # operational failure. The distinction matters to whoever has to
+                # fix it: retrying will never help, the row must be corrected.
+                logger.error("Custom benign list has unenforceable configuration", exc_info=True)
+                components["custom_benign"] = ComponentStatus(
+                    status=DetectorStatus.FAILED, failure_code=FailureCode.CONFIG_INVALID
+                )
+                matched = False
             except Exception:
                 logger.warning("Custom benign list check failed", exc_info=True)
                 components["custom_benign"] = ComponentStatus(

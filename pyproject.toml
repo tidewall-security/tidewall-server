@@ -38,6 +38,17 @@ dependencies = [
     "presidio-analyzer>=2.2",
     "presidio-anonymizer>=2.2",
     "detect-secrets>=1.5",
+    # Linear-time regex engine. Administrator-supplied patterns are matched
+    # against attacker-controlled prompt text, and Python's `re` backtracks:
+    # `(a+)+$` against 41 characters runs for over three seconds and does not
+    # stop, which takes the guard offline (P0-12). RE2 answers the same input
+    # in 0.1ms because it cannot backtrack. Wheels exist for manylinux
+    # x86_64/aarch64, macOS and Windows on CPython 3.12/3.13, so this needs no
+    # C++ toolchain — but a source build must be treated as a failure, not an
+    # undocumented requirement.
+    # Bounded deliberately: an unbounded minimum lets a future incompatible
+    # release into a plain `pip install .` even while uv.lock stays pinned.
+    "google-re2>=1.1,<2",
     "spacy>=3.7",
     # Presidio's NER backbone — pinned to a wheel URL because spaCy models
     # are distributed as Python packages, not via PyPI. Without this, fresh

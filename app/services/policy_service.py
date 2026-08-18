@@ -267,6 +267,20 @@ class PolicyService:
         if stale:
             logger.info("Invalidated %d cached engine(s) for policy=%s", len(stale), policy_id)
 
+    def invalidate_all_engines(self) -> None:
+        """Drop every cached engine.
+
+        Global prompt lists are not owned by a policy, so a change to one can
+        affect any cached engine. Detectors compile those lists at construction
+        and hold the result, which means correcting a bad row would otherwise
+        leave every cached engine reporting a construction failure that is no
+        longer true — until an unrelated policy edit or a restart.
+        """
+        count = len(self._engine_cache)
+        self._engine_cache.clear()
+        if count:
+            logger.info("Invalidated all %d cached engine(s) after a global list change", count)
+
     def get_engine(self, policy_id: str, event_type: str) -> ScannerEngine:
         """Get or build a ScannerEngine for the given policy and event type."""
         cache_key = (policy_id, event_type)

@@ -22,8 +22,10 @@ applied and finding nothing.
 from __future__ import annotations
 
 import ipaddress
-import re
 from typing import Any
+
+from app.services import safe_regex
+from app.services.safe_regex import UnsafePatternError, compile_pattern
 
 # Operators understood by :mod:`app.services.rule_evaluator`. Kept here so the
 # write path and the evaluator cannot drift apart: an operator accepted at write
@@ -55,25 +57,25 @@ REMOVED_ACTIONS: dict[str, str] = {
 
 # An upper bound on pattern length. Not a safety analysis — that is RE2's job —
 # but a cheap guard against pathological input reaching the engine at all.
-MAX_PATTERN_LENGTH = 1000
+# Kept as a re-export: the limit belongs with the compiler that enforces it.
+MAX_PATTERN_LENGTH = safe_regex.MAX_PATTERN_LENGTH
 
 
 class PolicyValidationError(ValueError):
     """Raised when policy content cannot be enforced as written."""
 
 
-def validate_regex(pattern: str, *, where: str) -> None:
-    """Reject a regex that will not compile, or that is implausibly long."""
-    if not isinstance(pattern, str):
-        raise PolicyValidationError(f"{where}: pattern must be a string, got {type(pattern).__name__}")
-    if len(pattern) > MAX_PATTERN_LENGTH:
-        raise PolicyValidationError(
-            f"{where}: pattern is {len(pattern)} characters, over the {MAX_PATTERN_LENGTH} limit"
-        )
+def validate_regex(pattern: str, *, where: str, case_insensitive: bool = False) -> None:
+    """Reject a regex the safe engine will not run.
+
+    Compiles with the *same* engine and options the runtime uses. Validating
+    with one engine and matching with another is how a pattern gets accepted at
+    write time and then refused — or worse, behaves differently — at scan time.
+    """
     try:
-        re.compile(pattern)
-    except re.error as exc:
-        raise PolicyValidationError(f"{where}: invalid regex ({exc})") from None
+        compile_pattern(pattern, case_insensitive=case_insensitive)
+    except UnsafePatternError as exc:
+        raise PolicyValidationError(f"{where}: {exc}") from None
 
 
 def validate_operator(operator: str, *, where: str) -> None:
@@ -123,8 +125,24 @@ def validate_detectors(detectors: dict[str, Any]) -> None:
         action = cfg.get("action", "report")
         validate_action(action, where=f"detectors.{name}.action")
 
-        for i, pattern in enumerate(cfg.get("patterns", []) or []):
-            validate_regex(pattern, where=f"detectors.{name}.patterns[{i}]")
+        # Only custom_entity consumes arbitrary patterns. Validating a
+        # "patterns" key on every detector by name convention is a validator
+        # that can pass over inert configuration while missing a live field
+        # that happens to be called something else.
+        if name == "custom_entity":
+            patterns = cfg.get("patterns", []) or []
+            # RE2 makes each match linear in the input, not free: every
+            # configured pattern is another full pass over the text, so N
+            # patterns cost N x len(text). Linear-per-pattern with unbounded N
+            # is still an exhaustion path.
+            if len(patterns) > safe_regex.MAX_PATTERNS:
+                raise PolicyValidationError(
+                    f"detectors.{name}.patterns: {len(patterns)} patterns configured, "
+                    f"over the {safe_regex.MAX_PATTERNS} limit. Each pattern is a "
+                    f"separate pass over every scanned message."
+                )
+            for i, pattern in enumerate(patterns):
+                validate_regex(pattern, where=f"detectors.{name}.patterns[{i}]")
 
         # Nested threat-intel blocklists, validated against the shape
         # ThreatIntelService actually reads: cfg["intel"]["local_blocklists"]["ips"].
