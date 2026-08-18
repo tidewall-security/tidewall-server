@@ -12,6 +12,7 @@ import logging
 from typing import Any
 
 from app.model_registry import LANGUAGE as _REF
+from app.services.safe_logging import describe
 
 from .base import BaseDetector, DetectorResult, FailureCode
 
@@ -59,8 +60,8 @@ class LanguageDetector(BaseDetector):
 
         try:
             results = self._pipeline(text)
-        except Exception:
-            logger.warning("Language classifier inference failed", exc_info=True)
+        except Exception as exc:
+            logger.warning("Language classifier inference failed: %s", describe(exc))
             return DetectorResult.failed(FailureCode.SCAN_FAILED)
 
         top = results[0] if isinstance(results, list) and results else {}
