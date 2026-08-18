@@ -442,3 +442,45 @@ def test_the_early_branch_passes_the_fixed_summary_to_emit():
     args = source[first_emit : source.index(")", first_emit)]
 
     assert "summary=export_summary" in args, "the early-branch export still receives the rule-bearing summary"
+
+
+def test_the_installed_presidio_registry_types_are_in_the_vocabulary():
+    """Drift against the other producer.
+
+    The first drift test covered entity_extractor only. PII types come from
+    whatever Presidio recognisers are installed, so a dependency upgrade can
+    silently start collapsing real detections to OTHER.
+    """
+    pytest.importorskip("presidio_analyzer")
+    from presidio_analyzer import AnalyzerEngine
+
+    try:
+        supported = set(AnalyzerEngine().get_supported_entities())
+    except Exception as exc:  # pragma: no cover - model not installed locally
+        pytest.skip(f"Presidio unavailable: {exc}")
+
+    missing = supported - KNOWN_ENTITY_TYPES
+    assert not missing, f"installed Presidio emits {sorted(missing)}, which would export as OTHER"
+
+
+@pytest.mark.parametrize(
+    "count",
+    [0, -1, 10**9, "5", True, None, 1.5],
+)
+def test_a_fabricated_count_cannot_be_smuggled_through_the_idempotent_path(count):
+    """Recognising a shape is not the same as trusting its contents.
+
+    An untyped dict carrying `entities` without `data` looks already-projected,
+    which would otherwise make it an unbounded integer channel into every
+    export format.
+    """
+    projected = project_detectors(
+        {"custom_entity": {"detected": True, "entities": [{"type": "CUSTOM", "count": count}]}}
+    )
+
+    assert "entities" not in projected["custom_entity"], f"count {count!r} was accepted"
+
+
+def test_a_legitimate_count_survives_the_idempotent_path():
+    projected = project_detectors({"custom_entity": {"detected": True, "entities": [{"type": "CUSTOM", "count": 3}]}})
+    assert projected["custom_entity"]["entities"] == [{"type": "CUSTOM", "count": 3}]

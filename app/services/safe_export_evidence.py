@@ -41,6 +41,8 @@ _MAX_TYPE_LENGTH = 64
 _MAX_TYPES_PER_DETECTOR = 50
 _MAX_DETECTORS = 50
 _MAX_COMPONENTS = 50
+# A count is a count, not an arbitrary integer crossing to a SIEM.
+_MAX_COUNT = 1_000_000
 
 
 # A closed vocabulary. A character check is not an allowlist: sixty-four
@@ -211,26 +213,36 @@ def project_detectors(detectors: Any) -> dict[str, Any]:
 
         entry: dict[str, Any] = {"detected": bool(payload.get("detected"))}
 
-        # Already-projected input keeps its counts. emit() projects
-        # unconditionally, so without this a caller passing a safe structure
-        # would silently lose its analytics — a quiet wrong answer rather than
-        # a loud one.
-        if isinstance(payload.get("entities"), list) and "data" not in payload:
-            preserved = [
-                {"type": _safe_type_name(e.get("type")), "count": int(e.get("count", 1))}
-                for e in payload["entities"][:_MAX_TYPES_PER_DETECTOR]
-                if isinstance(e, dict) and isinstance(e.get("count"), int)
-            ]
-            if preserved:
-                entry["entities"] = preserved
-            if payload.get("unclassified_types"):
-                entry["unclassified_types"] = True
-
         status = _safe_identifier(payload.get("status"))
         if status is not None:
             entry["status"] = status
         if payload.get("degraded"):
             entry["degraded"] = True
+
+        # Already-projected input keeps its counts. emit() projects
+        # unconditionally, so without this a caller passing a safe structure
+        # would silently lose its analytics — a quiet wrong answer rather than
+        # a loud one.
+        #
+        # The counts are re-validated rather than trusted. Recognising a shape
+        # is not the same as trusting its contents: an untyped dict carrying
+        # `entities` without `data` would otherwise be an unbounded integer
+        # channel into every export format.
+        if isinstance(payload.get("entities"), list) and "data" not in payload:
+            preserved: list[dict[str, Any]] = []
+            for candidate in payload["entities"][:_MAX_TYPES_PER_DETECTOR]:
+                if not isinstance(candidate, dict):
+                    continue
+                count = candidate.get("count")
+                if not isinstance(count, int) or isinstance(count, bool):
+                    continue
+                if not (1 <= count <= _MAX_COUNT):
+                    continue
+                preserved.append({"type": _safe_type_name(candidate.get("type")), "count": count})
+            if preserved:
+                entry["entities"] = preserved
+            if payload.get("unclassified_types") is True:
+                entry["unclassified_types"] = True
 
         counts = _entity_counts(payload.get("data"))
         if counts:
