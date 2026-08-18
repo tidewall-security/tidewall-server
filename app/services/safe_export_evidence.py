@@ -40,15 +40,70 @@ EVIDENCE_SCHEMA_VERSION = 1
 _MAX_TYPE_LENGTH = 64
 _MAX_TYPES_PER_DETECTOR = 50
 _MAX_DETECTORS = 50
+_MAX_COMPONENTS = 50
 
 
-def _safe_type_name(value: Any) -> str | None:
-    """A type label, or nothing.
+# A closed vocabulary. A character check is not an allowlist: sixty-four
+# characters of [A-Za-z0-9_.-] is room for an API key, a token, an account ID
+# or an email-like identifier without the @. No current detector puts a matched
+# value in `type`, but "no detector does this today" is not a property this
+# module can enforce, and echoing an arbitrary string is exactly the shape of
+# leak it exists to stop.
+KNOWN_ENTITY_TYPES = frozenset(
+    {
+        # Presidio / PII taxonomy
+        "PERSON",
+        "EMAIL_ADDRESS",
+        "PHONE_NUMBER",
+        "CREDIT_CARD",
+        "IBAN_CODE",
+        "IP_ADDRESS",
+        "US_SSN",
+        "US_PASSPORT",
+        "US_DRIVER_LICENSE",
+        "US_BANK_NUMBER",
+        "US_ITIN",
+        "UK_NHS",
+        "UK_NINO",
+        "LOCATION",
+        "DATE_TIME",
+        "NRP",
+        "URL",
+        "CRYPTO",
+        "MEDICAL_LICENSE",
+        "AU_ABN",
+        "AU_ACN",
+        "AU_TFN",
+        "AU_MEDICARE",
+        "SG_NRIC_FIN",
+        "IN_PAN",
+        "IN_AADHAAR",
+        "IN_VEHICLE_REGISTRATION",
+        # Tidewall detector categories
+        "API_KEY",
+        "SECRET",
+        "CUSTOM",
+        "COMPETITOR",
+        "DOMAIN",
+        "IPV4",
+        "IPV6",
+        "EMOJI",
+        "CODE",
+        "TOPIC",
+        "LANGUAGE",
+        "TOOL",
+    }
+)
+# What an unrecognised label becomes. The count still tells an analyst that
+# something fired; the label does not tell them anything the label might be.
+UNKNOWN_TYPE = "OTHER"
 
-    Labels come from detector taxonomies and policy configuration, so they are
-    not attacker-controlled in the ordinary case — but they reach a SIEM, and a
-    label is not worth trusting unconditionally when the cost of being wrong is
-    the thing this module exists to prevent.
+
+def _safe_identifier(value: Any) -> str | None:
+    """A bounded identifier for names and status codes.
+
+    Used for detector names, component names and status/failure codes, which
+    are produced by this codebase rather than by matched content.
     """
     if not isinstance(value, str) or not value:
         return None
@@ -57,6 +112,13 @@ def _safe_type_name(value: Any) -> str | None:
     if not all(c.isalnum() or c in "_-." for c in value):
         return None
     return value
+
+
+def _safe_type_name(value: Any) -> str:
+    """Map a label onto the closed vocabulary, or to UNKNOWN_TYPE."""
+    if not isinstance(value, str):
+        return UNKNOWN_TYPE
+    return value if value in KNOWN_ENTITY_TYPES else UNKNOWN_TYPE
 
 
 def _entity_counts(data: Any) -> list[dict[str, Any]]:
@@ -76,9 +138,10 @@ def _entity_counts(data: Any) -> list[dict[str, Any]]:
         if not isinstance(entity, dict):
             continue
         name = _safe_type_name(entity.get("type"))
-        if name is None:
-            continue
         counts[name] = counts.get(name, 0) + 1
+        if len(counts) > _MAX_TYPES_PER_DETECTOR:
+            # Bound the working set, not just the output slice.
+            break
 
     ordered = sorted(counts.items())[:_MAX_TYPES_PER_DETECTOR]
     return [{"type": name, "count": count} for name, count in ordered]
@@ -90,38 +153,44 @@ def _components(raw: Any) -> dict[str, Any]:
         return {}
     out: dict[str, Any] = {}
     for name, value in raw.items():
-        safe_name = _safe_type_name(name)
+        safe_name = _safe_identifier(name)
         if safe_name is None or not isinstance(value, dict):
             continue
         entry: dict[str, Any] = {}
         for key in ("status", "failure_code", "skip_reason"):
-            candidate = _safe_type_name(value.get(key))
+            candidate = _safe_identifier(value.get(key))
             if candidate is not None:
                 entry[key] = candidate
         out[safe_name] = entry
+        if len(out) >= _MAX_COMPONENTS:
+            break
     return out
 
 
 def project_detectors(detectors: Any) -> dict[str, Any]:
     """Reduce a scan's detector payloads to what may leave the boundary.
 
-    Accepts the raw structure and returns the only shape exports are allowed to
-    carry. Callers cannot opt out: the export functions take this and nothing
-    else, so there is no parameter left through which raw detectors can be
-    passed.
+    Returns a detector map with the same *shape* as the input, because the
+    export builders derive their finding types and MITRE mappings by iterating
+    it. Returning a versioned envelope here instead silently emptied
+    ``finding_info.types`` and ``attacks`` in both OCSF and AIDR — the safe
+    payload was present but every derived field was false.
+
+    ``ExportService.emit`` applies this, so no caller can opt out by passing
+    the raw structure.
     """
     projected: dict[str, Any] = {}
     if not isinstance(detectors, dict):
-        return {"schema_version": EVIDENCE_SCHEMA_VERSION, "detectors": {}}
+        return projected
 
     for name, payload in list(detectors.items())[:_MAX_DETECTORS]:
-        safe_name = _safe_type_name(name)
+        safe_name = _safe_identifier(name)
         if safe_name is None or not isinstance(payload, dict):
             continue
 
         entry: dict[str, Any] = {"detected": bool(payload.get("detected"))}
 
-        status = _safe_type_name(payload.get("status"))
+        status = _safe_identifier(payload.get("status"))
         if status is not None:
             entry["status"] = status
         if payload.get("degraded"):
@@ -137,4 +206,4 @@ def project_detectors(detectors: Any) -> dict[str, Any]:
 
         projected[safe_name] = entry
 
-    return {"schema_version": EVIDENCE_SCHEMA_VERSION, "detectors": projected}
+    return projected

@@ -34,7 +34,6 @@ from app.auth.dependencies import require_role
 from app.config import OnDetectorFailure
 from app.detectors.base import FailureCode
 from app.models import GuardRequest, GuardResponse, GuardResult
-from app.services.safe_export_evidence import project_detectors
 from app.utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
@@ -430,7 +429,7 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             summary=summary,
             policy_name=policy_name,
             event_type=event_type,
-            detectors=project_detectors(scan_result.detectors),
+            detectors=scan_result.detectors,
             user_id=body.user_id,
             app_id=body.app_id,
             model=body.model,

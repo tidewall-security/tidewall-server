@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import ExportTarget
 from app.services.ocsf_builder import build_aidr_compat_event, build_ocsf_event
+from app.services.safe_export_evidence import project_detectors
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,14 @@ class ExportService:
             }
 
     async def emit(self, **kwargs: Any) -> None:
-        """Build and dispatch events to all matching targets. Fire-and-forget."""
+        """Build and dispatch events to all matching targets. Fire-and-forget.
+
+        Detector payloads are projected here rather than by the caller. Doing
+        it at the call site left the invariant one edit away from being lost:
+        any future caller could pass the raw structure and nothing would fail.
+        The service owns what may cross this boundary (P0-6).
+        """
+        kwargs["detectors"] = project_detectors(kwargs.get("detectors"))
         status = kwargs.get("status", "allowed")
         targets = self._get_matching_targets(status)
 

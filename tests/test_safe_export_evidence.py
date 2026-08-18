@@ -16,7 +16,7 @@ import json
 
 import pytest
 
-from app.services.safe_export_evidence import EVIDENCE_SCHEMA_VERSION, project_detectors
+from app.services.safe_export_evidence import UNKNOWN_TYPE, project_detectors
 
 CANARY = "CANARY-4f81-secret"
 
@@ -81,14 +81,14 @@ def test_types_and_counts_do_survive():
     """The record still has to be worth reading."""
     projected = project_detectors(RAW_DETECTORS)
 
-    custom = projected["detectors"]["custom_entity"]
+    custom = projected["custom_entity"]
     assert custom["detected"] is True
     assert custom["entities"] == [{"type": "CUSTOM", "count": 2}]
 
 
 def test_diagnostic_status_survives():
     """A degraded verdict without its component detail is not actionable."""
-    projected = project_detectors(RAW_DETECTORS)["detectors"]["malicious_prompt"]
+    projected = project_detectors(RAW_DETECTORS)["malicious_prompt"]
 
     assert projected["status"] == "failed"
     assert projected["degraded"] is True
@@ -107,23 +107,43 @@ def test_an_unknown_field_is_dropped_rather_than_passed_through():
     )
 
     assert CANARY not in _flatten(projected)
-    assert projected["detectors"]["future_detector"]["detected"] is True
+    assert projected["future_detector"]["detected"] is True
 
 
 @pytest.mark.parametrize("garbage", [None, "string", 42, [], {"d": "not-a-dict"}])
 def test_malformed_input_does_not_raise(garbage):
     """This runs inside a fire-and-forget export path; raising here would turn
     a logging concern into a request failure."""
-    result = project_detectors(garbage)
-    assert result["schema_version"] == EVIDENCE_SCHEMA_VERSION
+    assert project_detectors(garbage) == {}
 
 
-def test_a_hostile_type_label_is_dropped():
-    """Labels come from policy configuration and reach a SIEM."""
-    projected = project_detectors(
-        {"custom_entity": {"detected": True, "data": {"entities": [{"type": f"x{CANARY} <script>"}]}}}
-    )
+@pytest.mark.parametrize(
+    "label",
+    [
+        f"x{CANARY} <script>",
+        CANARY,  # passes a character check: only [A-Za-z0-9-]
+        "sk-live-abcdefghijklmnopqrstuvwxyz012345",
+        "user.name-at-example.com",
+    ],
+)
+def test_an_unrecognised_type_label_becomes_OTHER(label):
+    """A character check is not an allowlist.
+
+    Sixty-four characters of [A-Za-z0-9_.-] is room for an API key, a token or
+    an account ID. My first version of this test only passed because its sample
+    contained a space and angle brackets; the canary alone sailed through.
+    """
+    projected = project_detectors({"custom_entity": {"detected": True, "data": {"entities": [{"type": label}]}}})
+
     assert CANARY not in _flatten(projected)
+    assert label not in _flatten(projected)
+    assert projected["custom_entity"]["entities"] == [{"type": UNKNOWN_TYPE, "count": 1}]
+
+
+def test_a_recognised_type_label_survives():
+    """The record still has to say what kind of thing fired."""
+    projected = project_detectors({"pii": {"detected": True, "data": {"entities": [{"type": "EMAIL_ADDRESS"}]}}})
+    assert projected["pii"]["entities"] == [{"type": "EMAIL_ADDRESS", "count": 1}]
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +175,28 @@ def test_no_export_format_carries_the_canary():
     for fmt in ("ocsf", "aidr_compat", "raw"):
         event = svc._build_event(fmt, **common)
         assert CANARY not in _flatten(event), f"{fmt} carried the canary"
+
+
+def test_projection_does_not_empty_the_derived_ocsf_fields():
+    """My first projection returned a versioned envelope, and the builders
+    iterate the detector map — so findings types and MITRE attacks silently
+    became empty while the safe payload looked fine."""
+    from app.services.export_service import ExportService
+
+    svc = ExportService(session_factory=lambda: None)
+    event = svc._build_event(
+        "ocsf",
+        status="blocked",
+        request_id="r",
+        timestamp="2026-08-18T00:00:00Z",
+        summary="blocked",
+        policy_name="default",
+        event_type="input",
+        detectors=project_detectors(RAW_DETECTORS),
+    )
+
+    assert event["finding_info"]["types"], "detected types were lost by projection"
+    assert "custom_entity" in event["finding_info"]["types"]
 
 
 def test_the_raw_payload_would_have_carried_it():
@@ -217,3 +259,58 @@ def test_a_webhook_error_body_is_not_logged(caplog):
         httpx.AsyncClient = original  # type: ignore[misc]
 
     assert CANARY not in caplog.text, "the echoed response body reached the logs"
+
+
+# ---------------------------------------------------------------------------
+# The production path
+#
+# The earlier tests projected the fixture themselves and then called the
+# builder. Mutating guard.py back to passing the raw structure left all of them
+# green, which means they proved the projector worked and nothing about whether
+# production used it. These capture what emit() actually receives.
+# ---------------------------------------------------------------------------
+
+
+def test_emit_projects_even_when_handed_the_raw_structure():
+    """Enforcement lives in the service, so a caller cannot opt out.
+
+    Doing it at the call site left the invariant one edit away from being lost:
+    I verified that mutating guard.py back to the raw structure left every
+    earlier test in this file green.
+    """
+    import asyncio
+
+    from app.services.export_service import ExportService
+
+    class _FakeTarget:
+        id = "t"
+        name = "t"
+        type = "webhook"
+        format = "raw"
+        config = {"url": "https://x.test"}
+        events = ["blocked"]
+        enabled = True
+
+    captured: list = []
+
+    class _CapturingService(ExportService):
+        def _get_matching_targets(self, status):  # type: ignore[override]
+            return [_FakeTarget()]
+
+        def _build_event(self, format, **kwargs):  # type: ignore[override]
+            captured.append(kwargs.get("detectors"))
+            return {"noop": True}
+
+        async def _dispatch(self, target, event):  # type: ignore[override]
+            return None
+
+    svc = _CapturingService(session_factory=lambda: None)
+    try:
+        asyncio.run(svc.emit(status="blocked", request_id="r", detectors=RAW_DETECTORS))
+    except Exception:
+        pass
+
+    assert captured, "emit did not reach the builder"
+    for detectors in captured:
+        assert CANARY not in _flatten(detectors), "emit passed the raw structure through"
+        assert "start_pos" not in _flatten(detectors)
