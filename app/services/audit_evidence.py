@@ -370,7 +370,7 @@ class MatchCollector:
                 original = None
                 if commit_failure is not None:
                     # `match` is this frame's loop variable; release it too.
-                    match = None  # noqa: F841 - deliberately released before raising
+                    del match
                     raise EvidenceError(commit_failure)
             if len(self._matches) + len(staged._staged) > MAX_MATCHES_COLLECTED:
                 raise EvidenceError("collector.too_many_matches")
@@ -510,7 +510,7 @@ class _DetectorCapture:
             # Release before raising: this frame is what the traceback keeps,
             # and `match` is an argument, so it is bound here too.
             original = None
-            match = None  # noqa: F841 - deliberately released before raising
+            del match
             raise EvidenceError(failure)
         original = None
 
