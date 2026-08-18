@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.auth.key_utils import generate_key, hash_key, key_prefix
 from app.auth.middleware import AuthMiddleware
-import uuid
-
 from app.db.models import APIKey, Base, Policy
 
 
@@ -49,7 +49,7 @@ def _make_app_and_client():
     async def health():
         return {"status": "ok"}
 
-    from app.routes import registration, devices, keys, guard
+    from app.routes import devices, keys, registration
 
     app.include_router(registration.router)
     app.include_router(devices.router)
@@ -469,9 +469,29 @@ def test_enrolling_an_already_enrolled_installation_is_a_conflict(setup):
     assert resp.status_code == 409
 
 
-@pytest.mark.parametrize("bad", ["", "short", "has spaces in it here", "x" * 129, "semi;colons;here!!"])
-def test_a_weak_installation_id_is_rejected(setup, bad):
-    """A guessable installation ID lets a token holder squat it and deny enrolment."""
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "short",
+        "has spaces in it here",
+        "x" * 129,
+        "semi;colons;here!!",
+        "alice-laptop-2026",  # plausible, memorable, entirely predictable
+        "aaaaaaaaaaaaaaaa",  # long enough to pass a length floor, no entropy
+        "00000000-0000-0000-0000-000000000000",  # the nil UUID
+        "6ba7b810-9dad-11d1-80b4-00c04fd430",  # UUID-ish but malformed
+    ],
+)
+def test_a_non_uuid_installation_id_is_rejected(setup, bad):
+    """The server checks the form of the identifier, not its randomness.
+
+    It cannot do the latter — it sees only the result. Requiring a UUID rules
+    out the obviously weak values a free-text field allowed and gives clients
+    one unambiguous contract. Enrolment is first-claim and never reassigns, so
+    anyone able to predict an installation ID can enrol it first and lock the
+    genuine client out; that residual risk lives in the client's generator.
+    """
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
 

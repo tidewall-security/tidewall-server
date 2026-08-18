@@ -8,11 +8,15 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.config import OnDetectorFailure
-from app.db.models import Policy, RuleSet
+from app.db.models import Device, Policy, RegistrationToken, RuleSet
 from app.scanner_engine import ScannerEngine
 from app.services.policy_validation import validate_detectors
 
 logger = logging.getLogger(__name__)
+
+
+class PolicyInUseError(Exception):
+    """Raised when deleting a policy would silently rebind devices to the default."""
 
 
 class PolicyService:
@@ -213,6 +217,21 @@ class PolicyService:
                 raise ValueError(f"Policy {policy_id} not found")
             if policy.is_default:
                 raise ValueError("Cannot delete the default policy")
+
+            # Both foreign keys to a policy are ON DELETE SET NULL, and a null
+            # binding is read as "use the default" at guard time. Deleting a
+            # policy in use would therefore silently move its devices onto the
+            # default one — quietly widening or narrowing what they are allowed
+            # to do, with nothing in the request to say so. A device's scope is
+            # meant to be fixed at enrolment, so the reassignment has to be an
+            # explicit act: move the devices first, then delete.
+            devices = session.query(Device).filter_by(policy_id=policy_id).count()
+            tokens = session.query(RegistrationToken).filter_by(policy_id=policy_id).count()
+            if devices or tokens:
+                raise PolicyInUseError(
+                    f"Policy {policy_id} is still bound to {devices} device(s) and "
+                    f"{tokens} registration token(s). Reassign or remove them first."
+                )
 
             # Invalidate all cached engines for this policy
             keys_to_remove = [k for k in self._engine_cache if k[0] == policy_id]

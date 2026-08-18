@@ -153,3 +153,61 @@ def test_engine_invalidated_on_update(seeded_session):
     )
     engine2 = svc.get_engine(policy.id, "input")
     assert engine1 is not engine2  # Rebuilt — different object
+
+
+def test_deleting_a_policy_bound_to_a_device_is_refused(seeded_session):
+    """Deletion must not silently rebind devices to the default policy.
+
+    Both foreign keys to a policy are ON DELETE SET NULL, and guard reads a
+    null binding as "use the default". Deleting a policy in use would therefore
+    quietly move its devices onto different rules with nothing in the request
+    saying so — and a device's scope is meant to be fixed at enrolment.
+    """
+    from app.db.models import Device
+    from app.services.policy_service import PolicyInUseError, PolicyService
+
+    svc = PolicyService(seeded_session)
+    scoped = svc.create_policy(name="engineering", type="application")
+    seeded_session.add(
+        Device(
+            installation_id="6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+            device_name="Laptop",
+            user_name="alice",
+            user_email="alice@example.com",
+            policy_id=scoped.id,
+            status="active",
+        )
+    )
+    seeded_session.commit()
+
+    with pytest.raises(PolicyInUseError, match="still bound"):
+        svc.delete_policy(scoped.id)
+
+    assert svc.get_policy(scoped.id) is not None
+
+
+def test_deleting_a_policy_bound_to_a_registration_token_is_refused(seeded_session):
+    """Same for a token: devices enrolled later would inherit a dead policy."""
+    from app.db.models import RegistrationToken
+    from app.services.policy_service import PolicyInUseError, PolicyService
+
+    svc = PolicyService(seeded_session)
+    scoped = svc.create_policy(name="contractors", type="application")
+    seeded_session.add(
+        RegistrationToken(name="onboarding", token_hash="h", token_prefix="rt_ab...", policy_id=scoped.id)
+    )
+    seeded_session.commit()
+
+    with pytest.raises(PolicyInUseError, match="still bound"):
+        svc.delete_policy(scoped.id)
+
+
+def test_an_unused_policy_still_deletes(seeded_session):
+    from app.services.policy_service import PolicyService
+
+    svc = PolicyService(seeded_session)
+    unused = svc.create_policy(name="unused", type="application")
+
+    svc.delete_policy(unused.id)
+
+    assert svc.get_policy(unused.id) is None

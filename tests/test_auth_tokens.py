@@ -1,6 +1,14 @@
 """Tests for multi-prefix token generation and hashing."""
 
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
 from app.auth.key_utils import generate_key, hash_key, key_prefix
+from app.auth.middleware import AuthMiddleware
+from app.db.models import APIKey, Base, RegistrationToken
 
 
 def test_generate_key_default_ak_prefix():
@@ -40,16 +48,6 @@ def test_key_prefix_extracts_display_prefix():
 # Auth middleware prefix-dispatch tests
 # ------------------------------------------------------------------
 
-import pytest
-from fastapi import FastAPI, Request
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-
-from app.auth.middleware import AuthMiddleware
-from app.db.models import APIKey, Base, RegistrationToken
-
 
 def _make_test_app():
     """Minimal app with auth middleware for unit-level middleware tests."""
@@ -77,6 +75,7 @@ def _make_test_app():
         }
 
     from app.routes import devices
+
     app.include_router(devices.router)
 
     return app, SessionLocal
@@ -143,7 +142,7 @@ def test_middleware_rt_prefix_routes_to_enrol_only():
     resp2 = client.post(
         "/v1/devices/enrol",
         json={
-            "installation_id": "inst-mw-test-0123456789abcdef",
+            "installation_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
             "fingerprint": "fp-mw-test",
             "device_name": "MWTest",
             "user_name": "bob",

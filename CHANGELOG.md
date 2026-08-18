@@ -30,10 +30,14 @@ shim.
 
 Client contract:
 
-1. Generate a high-entropy `installation_id` once — `crypto.randomUUID()` —
-   and store it. This is the device's identity. The server requires 16–128
-   characters of `[A-Za-z0-9_.:-]` and rejects anything else with 422, so a
-   short or guessable value cannot be squatted to deny someone enrolment.
+1. Generate an `installation_id` once with `crypto.randomUUID()` and store it.
+   This is the device's identity. The server requires UUID form and rejects
+   anything else — including the nil UUID — with 422. That check is on the
+   *form* only: the server sees a finished value and cannot tell whether it
+   came from a CSPRNG, so generating it properly is the client's
+   responsibility. It matters because enrolment is first-claim and never
+   reassigns, so anyone holding a registration token who can predict your
+   installation ID can enrol it first and lock you out.
 2. Enrol at `POST /v1/devices/enrol` with the `rt_` token. Store the returned
    `device_id` and access token. A registration token is accepted at this
    path and no other.
@@ -44,9 +48,17 @@ Client contract:
    after a 60-second overlap, which exists so a request already in flight
    still succeeds — it is not a window in which to refresh again. Presenting
    an already-replaced token returns 403.
-5. `409` from enrol means that `installation_id` is already enrolled. Do not
+5. **Retain the registration token.** A refresh response carries the only copy
+   of the new secret, so if that response is lost the client is left holding a
+   token it can no longer use to refresh, which expires 60 seconds later. Treat
+   403 with `"already been rotated"` as credential loss: enrol again under a
+   **new** `installation_id`. Re-issuing on a replayed token is deliberately
+   not offered — it would let a stolen predecessor be traded for a fresh
+   full-lifetime token and simultaneously cut off the legitimate client, which
+   is a worse failure than re-enrolling.
+6. `409` from enrol means that `installation_id` is already enrolled. Do not
    retry: refresh instead, or enrol as a new installation.
-6. **After losing local storage, generate a new `installation_id` and enrol
+7. **After losing local storage, generate a new `installation_id` and enrol
    as a new device.** Recovery by fingerprint is exactly the takeover and is
    not offered. The abandoned row remains for an administrator to remove.
 
@@ -57,6 +69,12 @@ reporting the same fingerprint both enrol normally.
 Every device enrolled with the token inherits it as an immutable scope. The
 field previously existed only in the schema — nothing wrote it — so every
 device enrolled unscoped and silently fell back to the default policy.
+
+`DELETE /v1/policies/{id}` now returns **409** when devices or registration
+tokens are still bound to that policy. Both foreign keys are `ON DELETE SET
+NULL` and guard reads a null binding as "use the default policy", so deleting
+a policy in use used to move its devices silently onto the default rules.
+Reassign or remove them first.
 
 Existing `devices` and `access_tokens` rows are deleted by migration
 `d5a71f3c8e02`. They have no installation ID and no way to prove ownership,

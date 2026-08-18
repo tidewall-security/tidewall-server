@@ -3,22 +3,33 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.auth.dependencies import require_role
 
 router = APIRouter(prefix="/v1/devices", tags=["devices"])
 
+_UUID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+_NIL_UUID = "00000000-0000-0000-0000-000000000000"
+
 
 class DeviceEnrolRequest(BaseModel):
-    # Client-generated, high-entropy, stored by the extension. This is the
-    # device's identity; `fingerprint` is advisory metadata only.
+    # Client-generated, stored by the extension. This is the device's identity;
+    # `fingerprint` is advisory metadata only.
     #
-    # The length floor is enforceable entropy, not decoration: a short or
-    # guessable installation ID lets a registration-token holder pre-enrol
-    # someone else's value and deny them enrolment, because the first claim
-    # wins and enrolment never reassigns. `crypto.randomUUID()` satisfies it.
-    installation_id: str = Field(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
+    # This checks the *form* — a UUID, as produced by `crypto.randomUUID()` —
+    # and nothing more. It cannot establish that the value is random: the
+    # server sees only the result, so a client that derives its ID predictably
+    # produces something indistinguishable from a good one. Requiring the shape
+    # rules out the obviously weak values a free-text field allowed ("", "1",
+    # a username) and gives the client an unambiguous contract; generating it
+    # from a CSPRNG is the client's responsibility.
+    #
+    # It matters because enrolment is first-claim and never reassigns: anyone
+    # holding a registration token who can predict an installation ID can
+    # enrol it first and deny the genuine client. That residual risk belongs to
+    # the client's generator, and is not something this check removes.
+    installation_id: str = Field(pattern=_UUID_PATTERN)
     device_name: str
     user_name: str
     user_email: str
@@ -26,6 +37,14 @@ class DeviceEnrolRequest(BaseModel):
     os: str = ""
     extension_version: str = ""
     fingerprint: str | None = None
+
+    @field_validator("installation_id")
+    @classmethod
+    def _reject_nil_uuid(cls, value: str) -> str:
+        # The one constant value a broken generator reliably produces.
+        if value.lower() == _NIL_UUID:
+            raise ValueError("installation_id must not be the nil UUID")
+        return value
 
 
 class DeviceRefreshRequest(BaseModel):

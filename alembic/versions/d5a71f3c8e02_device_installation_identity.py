@@ -32,6 +32,7 @@ Create Date: 2026-08-18
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "d5a71f3c8e02"
@@ -45,6 +46,22 @@ depends_on: str | Sequence[str] | None = None
 # carried into the rebuilt table instead. Supplying the convention lets the
 # reflected constraint be addressed as `uq_devices_fingerprint`.
 _NAMING = {"uq": "uq_%(table_name)s_%(column_0_name)s"}
+
+
+def _fingerprint_unique_name() -> str | None:
+    """The real name of the UNIQUE constraint on devices.fingerprint.
+
+    Only SQLite leaves it unnamed for the convention above to supply; other
+    backends generate their own (PostgreSQL uses `devices_fingerprint_key`),
+    and reflection returns that generated name rather than ours. Hard-coding
+    `uq_devices_fingerprint` would therefore fail everywhere except the backend
+    it was tested on, so ask the database what it actually called it.
+    """
+    inspector = sa.inspect(op.get_bind())
+    for constraint in inspector.get_unique_constraints("devices"):
+        if constraint["column_names"] == ["fingerprint"]:
+            return constraint["name"] or "uq_devices_fingerprint"
+    return None
 
 
 def upgrade() -> None:
@@ -65,6 +82,9 @@ def upgrade() -> None:
             "fk_registration_tokens_policy_id", "policies", ["policy_id"], ["id"], ondelete="SET NULL"
         )
 
+    # Discover the name before batch mode rebuilds the table under us.
+    fingerprint_unique = _fingerprint_unique_name()
+
     # SQLite cannot drop a unique constraint in place, so the table is rebuilt.
     with op.batch_alter_table("devices", schema=None, naming_convention=_NAMING) as batch:
         batch.add_column(sa.Column("installation_id", sa.String(), nullable=False))
@@ -73,7 +93,8 @@ def upgrade() -> None:
         # the constraint would keep the denial-of-enrolment half of P0-11: two
         # installations reporting the same fingerprint — explicitly allowed now
         # — could not both enrol, and the loser would get an IntegrityError.
-        batch.drop_constraint("uq_devices_fingerprint", type_="unique")
+        if fingerprint_unique:
+            batch.drop_constraint(fingerprint_unique, type_="unique")
         batch.create_unique_constraint("uq_devices_installation_id", ["installation_id"])
         batch.create_index("ix_devices_fingerprint", ["fingerprint"])
 
