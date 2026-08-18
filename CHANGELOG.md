@@ -70,15 +70,26 @@ Every device enrolled with the token inherits it as an immutable scope. The
 field previously existed only in the schema — nothing wrote it — so every
 device enrolled unscoped and silently fell back to the default policy.
 
-`DELETE /v1/policies/{id}` now returns **409** when devices or registration
-tokens are still bound to that policy. Both foreign keys are `ON DELETE SET
-NULL` and guard reads a null binding as "use the default policy", so deleting
-a policy in use used to move its devices silently onto the default rules.
-Reassign or remove them first.
+`DELETE /v1/policies/{id}` now returns **409** while devices or registration
+tokens are still bound to that policy. Both scope foreign keys were
+`ON DELETE SET NULL`, and guard reads a null binding as "use the default
+policy", so deleting a policy in use moved everything scoped to it silently
+onto the default rules. They are now `ON DELETE RESTRICT`, which is what
+enforces this — the API also counts the references first, but only to return a
+message worth reading.
 
-Existing `devices` and `access_tokens` rows are deleted by migration
-`d5a71f3c8e02`. They have no installation ID and no way to prove ownership,
-which is the defect. All clients re-enrol.
+To delete a policy, first remove what is bound to it: `DELETE /v1/devices/{id}`
+and `DELETE /v1/registration-tokens/{id}`. There is deliberately no reassignment
+API — a device's scope is fixed at enrolment — so the affected devices re-enrol
+against a token for the policy you want them on.
+
+Migration `d5a71f3c8e02` deletes all existing `devices`, `access_tokens` **and
+`registration_tokens`** rows. Devices have no installation ID and no way to
+prove ownership, which is the defect. Registration tokens go too because
+`policy_id` is nullable — a surviving token would carry NULL and keep enrolling
+unscoped devices onto the default policy, which is what this change exists to
+stop. Every client re-enrols, and administrators mint new registration tokens
+against a chosen policy.
 
 ## [0.1.0] - 2026-05-02
 
