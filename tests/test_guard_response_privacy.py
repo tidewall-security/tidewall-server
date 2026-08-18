@@ -134,31 +134,51 @@ def test_the_caller_still_gets_the_sanitised_text(client_and_key):
 # ---------------------------------------------------------------------------
 
 
+# Shapes taken from the detectors themselves, not invented. My first version
+# used `secrets` (the class name) rather than `secret_and_key_entity` (the
+# policy key that actually appears in scan_result.detectors), and gave topic
+# and malicious_prompt fields they do not emit — so it proved the projector
+# drops an arbitrary object, not that it handles the real contracts.
 RAW_SHAPES = {
     "malicious_entity": {
         "detected": True,
         "status": "ok",
-        "data": {"entities": [{"type": "URL", "value": f"hxxps://x.test/{CANARY}", "raw": f"https://x.test/{CANARY}"}]},
+        "data": {
+            "entities": [
+                {
+                    "type": "URL",
+                    "value": f"hxxps://x.test/{CANARY}",
+                    "raw": f"https://x.test/{CANARY}",
+                    "action": "defanged",
+                    "start_pos": 9,
+                }
+            ]
+        },
     },
     "confidential_and_pii_entity": {
         "detected": True,
         "status": "ok",
-        "data": {"entities": [{"type": "US_SSN", "value": CANARY, "start_pos": 4}]},
+        "data": {"entities": [{"type": "US_SSN", "value": CANARY, "action": "redacted:replaced", "start_pos": 4}]},
     },
-    "secrets": {
+    "secret_and_key_entity": {
         "detected": True,
         "status": "ok",
-        "data": {"entities": [{"type": "API_KEY", "value": CANARY, "start_pos": 0}]},
+        "data": {"entities": [{"type": "API_KEY", "value": CANARY, "action": "redacted:replaced", "start_pos": 0}]},
     },
     "malicious_prompt": {
         "detected": True,
         "status": "ok",
-        "data": {"analyzer_responses": [{"analyzer": "Model", "raw_text": CANARY, "confidence": 0.99}]},
+        "data": {"analyzer_responses": [{"analyzer": f"model-{CANARY}", "confidence": 0.99}]},
     },
-    "topic": {"detected": True, "status": "ok", "data": {"topics": [{"label": "violence", "score": 0.8}]}},
+    "topic": {
+        "detected": True,
+        "status": "ok",
+        "data": {"topics": [{"topic": CANARY, "confidence": 0.8}], "action": "block"},
+    },
     "failed_detector": {"detected": False, "status": "failed", "failure_code": "dependency_missing"},
     "skipped_detector": {"detected": False, "status": "skipped", "skip_reason": "short_circuited"},
 }
+
 
 
 @pytest.mark.parametrize("name", sorted(RAW_SHAPES))
@@ -192,3 +212,41 @@ def test_a_skipped_detector_keeps_its_reason():
     projected = project_detectors({"d": RAW_SHAPES["skipped_detector"]})
 
     assert projected["d"]["skip_reason"] == "short_circuited"
+
+
+@pytest.mark.parametrize("field", ["failure_code", "skip_reason", "status"])
+def test_an_identifier_shaped_string_is_not_a_valid_code(field):
+    """I wrote a comment saying these are fixed enum values, then accepted any
+    64-character identifier. 'sk_live_SECRET' is identifier-shaped."""
+    from app.services.safe_export_evidence import project_detectors
+
+    projected = project_detectors({"d": {"detected": False, field: "sk_live_SECRET"}})
+
+    assert field not in projected["d"], f"{field} accepted an arbitrary identifier"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("failure_code", "dependency_missing"),
+        ("skip_reason", "short_circuited"),
+        ("status", "failed"),
+    ],
+)
+def test_a_real_enum_value_survives(field, value):
+    """Guards against the check being so strict it drops the real thing."""
+    from app.services.safe_export_evidence import project_detectors
+
+    projected = project_detectors({"d": {"detected": False, field: value}})
+
+    assert projected["d"][field] == value
+
+
+def test_the_vocabularies_come_from_the_enums_not_a_restated_list():
+    """A code added to the enum must not become silently unexportable."""
+    from app.detectors.base import FailureCode
+    from app.services.safe_export_evidence import project_detectors
+
+    for code in FailureCode:
+        projected = project_detectors({"d": {"detected": False, "failure_code": code.value}})
+        assert projected["d"]["failure_code"] == code.value, f"{code.value} would be dropped"
