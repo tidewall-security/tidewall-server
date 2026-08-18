@@ -12,6 +12,27 @@ from app.auth.dependencies import require_role
 router = APIRouter()
 
 
+def _read_scope(request: Request) -> tuple[bool, str | None]:
+    """Which rows this caller may see.
+
+    Returns (allowed, policy_id). An administrator sees everything, including
+    when its key has no binding — the dashboard has to work. A viewer sees only
+    its bound policy, and a viewer with **no** binding sees nothing.
+
+    That last case is the important one: treating a null binding as a wildcard
+    is exactly how one credential becomes an organisation-wide disclosure
+    credential, which is half of why this finding is a P0. Refusing the read is
+    the safe direction; the fix for the operator is to bind the key.
+    """
+    role = getattr(request.state, "role", None)
+    if role == "admin":
+        return True, getattr(request.state, "policy_id", None)
+    bound = getattr(request.state, "policy_id", None)
+    if not bound:
+        return False, None
+    return True, bound
+
+
 @router.get("/v1/logs", dependencies=[Depends(require_role("viewer"))])
 async def get_logs(
     request: Request,
@@ -20,17 +41,21 @@ async def get_logs(
     action: str | None = None,
     device_id: str | None = None,
 ) -> list[dict]:
-    log = request.app.state.interaction_log
-    events = log.get_recent(limit=limit)
+    allowed, scope = _read_scope(request)
+    if not allowed:
+        # An unbound viewer, which is not the same as an empty database.
+        return []
 
-    # Optional client-side filtering (simpler than SQL for POC)
+    log = request.app.state.interaction_log
+    events = log.get_recent(limit=limit, policy_id=scope)
+
     if detector:
         events = [
             e
             for e in events
-            if isinstance(e.get("detectors_json"), dict)
-            and detector in e["detectors_json"]
-            and e["detectors_json"][detector].get("detected")
+            if isinstance(e.get("evidence"), dict)
+            and detector in e["evidence"]
+            and e["evidence"][detector].get("detected")
         ]
 
     if action:
@@ -63,15 +88,21 @@ async def clear_logs(request: Request):
 
 @router.get("/v1/logs/stats", dependencies=[Depends(require_role("viewer"))])
 async def get_stats(request: Request) -> dict:
+    allowed, scope = _read_scope(request)
+    if not allowed:
+        return {"total": 0, "blocked": 0, "transformed": 0, "clean": 0, "avg_latency_ms": 0, "detector_counts": {}}
     log = request.app.state.interaction_log
-    return log.get_stats()  # type: ignore[no-any-return]
+    return log.get_stats(policy_id=scope)  # type: ignore[no-any-return]
 
 
 @router.get("/v1/logs/flows", dependencies=[Depends(require_role("viewer"))])
 async def get_flows(request: Request):
     """Return aggregated flow data for the Sankey diagram."""
+    allowed, scope = _read_scope(request)
+    if not allowed:
+        return {"nodes": [], "links": []}
     log = request.app.state.interaction_log
-    events = log.get_recent(limit=500)
+    events = log.get_recent(limit=500, policy_id=scope)
 
     # Aggregate actor -> app -> model flows
     nodes: dict[str, dict[str, str]] = {}

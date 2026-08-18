@@ -37,6 +37,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     String,
@@ -82,6 +83,17 @@ class Policy(Base):
     # is unreachable from a normally constructed engine.
     on_detector_failure: Mapped[str] = mapped_column(String, nullable=False, default="report")
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Raw content capture. Off by default, so a fresh install retains no
+    # prompts until an operator turns it on — the insecure state is never the
+    # one you get by not reading the documentation.
+    #
+    # Inert until step 5: nothing writes interaction_contents yet, and the
+    # setting is not writable through the API until the code that honours it
+    # lands, so no state can claim capture is on while nothing captures.
+    raw_content_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Null means no time expiry, which is the configured default. There is
+    # deliberately no size cap.
+    raw_content_retention_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
@@ -143,6 +155,13 @@ class APIKey(Base):
     key_hash: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     key_prefix: Mapped[str] = mapped_column(String, nullable=False)
     role: Mapped[str] = mapped_column(String, nullable=False, default="api")
+    # Content grants, deliberately ORTHOGONAL to the role rather than implied
+    # by it. An admin administers policies; that is not the same question as
+    # whether they may read the prompts, and every product researched separates
+    # the two. Empty means no content access, including for admin.
+    #
+    # Inert until step 6: nothing reads this yet.
+    grants: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     policy_id: Mapped[str | None] = mapped_column(String, ForeignKey("policies.id", ondelete="SET NULL"), nullable=True)
     collector_type: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -164,23 +183,95 @@ class Interaction(Base):
     request_id: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     timestamp: Mapped[str] = mapped_column(String, nullable=False, index=True)
     event_type: Mapped[str] = mapped_column(String, nullable=False)
-    policy_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # NOT NULL: reads are scoped by this, so a null would make the row
+    # invisible to every viewer — a silent audit gap rather than a loud one.
+    # The writer stores the policy actually used to evaluate, not the caller's
+    # binding, which may be null.
+    policy_id: Mapped[str] = mapped_column(String, nullable=False)
     policy_name: Mapped[str] = mapped_column(String, nullable=False)
     api_key_id: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str | None] = mapped_column(String, nullable=True, default="allowed")
     blocked: Mapped[bool] = mapped_column(Boolean, default=False)
     transformed: Mapped[bool] = mapped_column(Boolean, default=False)
     latency_ms: Mapped[float] = mapped_column(Float, nullable=False)
-    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    input_messages: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
-    output_messages: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
-    detectors_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Safe evidence only: detector, verdict, entity type and count. Never the
+    # prompt, the reply, a matched value, a raw URL or an offset.
+    #
+    # Four columns were removed here rather than nulled. `summary` is one of
+    # them and was the easiest to miss: it carried the matched access-rule name
+    # and detector-derived strings, and was displayed *and searched* in the UI.
+    # A nullable legacy column is an attractive sink that keeps stale code
+    # compiling and makes schema inspection advertise retention that no longer
+    # happens.
+    evidence_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    evidence_schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # Set by step 5 when raw content is captured for this event. False here,
+    # so the reader can distinguish "not retained" from "withheld from you".
+    content_available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     app_id: Mapped[str | None] = mapped_column(String, nullable=True)
     user_id: Mapped[str | None] = mapped_column(String, nullable=True)
     llm_provider: Mapped[str | None] = mapped_column(String, nullable=True)
     model: Mapped[str | None] = mapped_column(String, nullable=True)
     source_ip: Mapped[str | None] = mapped_column(String, nullable=True)
     device_id: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    __table_args__ = (
+        Index("ix_interactions_policy_timestamp", "policy_id", "timestamp"),
+        Index("ix_interactions_policy_status_timestamp", "policy_id", "status", "timestamp"),
+        Index("ix_interactions_device_id", "device_id"),
+    )
+
+
+class InteractionContent(Base):
+    """Raw prompt content, in a separate table behind a separate grant.
+
+    Created inert by the same destructive migration that removed the content
+    columns from ``interactions``, rather than by a second one over the same
+    table. Nothing writes it until step 5 and nothing reads it until step 6.
+
+    Separate rather than more columns, deliberately. Every product researched
+    that retains this content separates it — Forcepoint keeps incident metadata
+    in SQL Server and raw transactions in a filesystem repository reached with
+    a distinct credential; Sentinel marks the table protected and denies by
+    default. A separate table makes "who may read prompts" a different question
+    from "who may read findings", which is the whole point of the tiering.
+    """
+
+    __tablename__ = "interaction_contents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    interaction_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("interactions.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    # The prompt and the reply, and the exact matched values from the step 1
+    # channel. Written only when the policy explicitly enables capture.
+    input_json: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
+    output_json: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
+    matches_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    captured_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    # Null means no time expiry, which is the configured default.
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+
+
+class ContentAccessAudit(Base):
+    """Every read of raw content, recorded synchronously.
+
+    Reading a prompt is the privileged act this design exists to gate, so it is
+    audited where the read happens rather than inferred from request logs. It
+    records who and what, never the content itself.
+    """
+
+    __tablename__ = "content_access_audit"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    interaction_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    # Not a foreign key: the audit must outlive the row it describes, or
+    # deleting the content would erase the record of who read it.
+    api_key_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    tier: Mapped[str] = mapped_column(String, nullable=False)
+    policy_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    accessed_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 
 class Vault(Base):
