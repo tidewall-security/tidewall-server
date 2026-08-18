@@ -16,7 +16,7 @@ import json
 
 import pytest
 
-from app.services.safe_export_evidence import UNKNOWN_TYPE, project_detectors
+from app.services.safe_export_evidence import KNOWN_ENTITY_TYPES, UNKNOWN_TYPE, project_detectors
 
 CANARY = "CANARY-4f81-secret"
 
@@ -314,3 +314,131 @@ def test_emit_projects_even_when_handed_the_raw_structure():
     for detectors in captured:
         assert CANARY not in _flatten(detectors), "emit passed the raw structure through"
         assert "start_pos" not in _flatten(detectors)
+
+
+# ---------------------------------------------------------------------------
+# Round 2
+# ---------------------------------------------------------------------------
+
+
+def test_every_type_the_extractor_emits_is_in_the_vocabulary():
+    """Drift test.
+
+    I invented IPV4/IPV6 and omitted IP, which nothing emits and everything
+    emits respectively — so a real malicious-IP finding exported as OTHER.
+    A collapsed real type is a silent loss of analytic value, so make the
+    vocabulary answerable to the producers rather than to my memory of them.
+    """
+    from app.services.entity_extractor import extract_entities
+
+    sample = "visit https://evil.test/x from 203.0.113.7 or evil.test"
+    emitted = {e["type"] for e in extract_entities(sample)}
+
+    missing = emitted - KNOWN_ENTITY_TYPES
+    assert not missing, f"entity_extractor emits {missing}, which would export as OTHER"
+
+
+def test_an_unclassified_label_is_flagged_not_silently_bucketed():
+    """OTHER is a fail-closed bucket, not a taxonomy entry.
+
+    Without the flag an analyst cannot tell an unrecognised label from a
+    detector that genuinely reports OTHER, nor that the vocabulary is stale.
+    """
+    projected = project_detectors(
+        {"custom_entity": {"detected": True, "data": {"entities": [{"type": "SOME_NEW_THING"}]}}}
+    )
+
+    assert projected["custom_entity"]["unclassified_types"] is True
+
+
+def test_a_fully_known_payload_is_not_flagged():
+    projected = project_detectors({"pii": {"detected": True, "data": {"entities": [{"type": "US_SSN"}]}}})
+
+    assert "unclassified_types" not in projected["pii"]
+
+
+def test_projection_is_idempotent():
+    """emit() projects unconditionally, so a caller handing it an already-safe
+    structure must not silently lose its counts — a quiet wrong answer."""
+    once = project_detectors(RAW_DETECTORS)
+    twice = project_detectors(once)
+
+    assert twice == once
+
+
+def test_the_derived_ocsf_and_aidr_fields_are_correct_not_merely_non_empty():
+    """My first version asserted only that types was non-empty and contained
+    one name, so a mutation removing _build_attacks entirely would have passed."""
+    from app.services.export_service import ExportService
+
+    svc = ExportService(session_factory=lambda: None)
+    common = {
+        "status": "blocked",
+        "request_id": "r",
+        "timestamp": "2026-08-18T00:00:00Z",
+        "summary": "blocked",
+        "policy_name": "default",
+        "event_type": "input",
+        "detectors": project_detectors(RAW_DETECTORS),
+    }
+
+    ocsf = svc._build_event("ocsf", **common)
+    detected = {name for name, p in RAW_DETECTORS.items() if p.get("detected")}
+    assert set(ocsf["finding_info"]["types"]) == detected
+    assert ocsf["attacks"], "MITRE attacks were lost"
+
+    aidr = svc._build_event("aidr_compat", **common)
+    assert _flatten(aidr).count("AML.T") >= 1, "AIDR MITRE mappings were lost"
+
+
+def test_an_access_rule_name_does_not_cross_the_export_boundary():
+    """A rule name is an arbitrary control-plane string.
+
+    Operators put tenant names, customer identifiers and incident references in
+    them, and it crossed webhook and syslog verbatim, plus OCSF message and
+    AIDR Vendor.summary. Projecting `detectors` does nothing for that channel.
+
+    Asserted through the real builders: whatever summary the early branch
+    exports must not be able to carry a rule name.
+    """
+    from app.services.export_service import ExportService
+
+    svc = ExportService(session_factory=lambda: None)
+    rule_name = f"tenant-{CANARY}-rule"
+
+    # What the early branch now exports.
+    exported = svc._build_event(
+        "ocsf",
+        status="blocked",
+        request_id="r",
+        timestamp="2026-08-18T00:00:00Z",
+        summary="Blocked by access rule",
+        policy_name="default",
+        event_type="input",
+        detectors={},
+    )
+    assert CANARY not in _flatten(exported)
+
+    # And what it would have exported before, to show the channel is real.
+    leaky = svc._build_event(
+        "ocsf",
+        status="blocked",
+        request_id="r",
+        timestamp="2026-08-18T00:00:00Z",
+        summary=f"Blocked by access rule: {rule_name}",
+        policy_name="default",
+        event_type="input",
+        detectors={},
+    )
+    assert CANARY in _flatten(leaky), "summary is not actually an export channel; this test proves nothing"
+
+
+def test_the_early_branch_passes_the_fixed_summary_to_emit():
+    """Guards the wiring, since the builder test above only proves the shape."""
+    import pathlib as _p
+
+    source = _p.Path("app/routes/guard.py").read_text()
+    first_emit = source.index("await export_svc.emit(")
+    args = source[first_emit : source.index(")", first_emit)]
+
+    assert "summary=export_summary" in args, "the early-branch export still receives the rule-bearing summary"

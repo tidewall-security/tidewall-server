@@ -79,14 +79,18 @@ KNOWN_ENTITY_TYPES = frozenset(
         "IN_PAN",
         "IN_AADHAAR",
         "IN_VEHICLE_REGISTRATION",
-        # Tidewall detector categories
+        "IN_PASSPORT",
+        "IN_VOTER",
+        # Tidewall detector categories. "IP" is what entity_extractor actually
+        # emits; I had invented IPV4/IPV6, which nothing produces — so a real
+        # malicious-IP finding was collapsed to OTHER until a drift test caught
+        # it.
         "API_KEY",
         "SECRET",
         "CUSTOM",
         "COMPETITOR",
         "DOMAIN",
-        "IPV4",
-        "IPV6",
+        "IP",
         "EMOJI",
         "CODE",
         "TOPIC",
@@ -147,6 +151,23 @@ def _entity_counts(data: Any) -> list[dict[str, Any]]:
     return [{"type": name, "count": count} for name, count in ordered]
 
 
+def _has_unclassified(data: Any) -> bool:
+    """Whether any label fell outside the known vocabulary.
+
+    OTHER is a fail-closed bucket, not a taxonomy entry. Without saying so, an
+    analyst cannot tell an unrecognised label from a detector that genuinely
+    reports OTHER, and cannot tell that the vocabulary needs updating.
+    """
+    if not isinstance(data, dict):
+        return False
+    entities = data.get("entities")
+    if not isinstance(entities, list):
+        return False
+    return any(
+        isinstance(e, dict) and isinstance(e.get("type"), str) and e["type"] not in KNOWN_ENTITY_TYPES for e in entities
+    )
+
+
 def _components(raw: Any) -> dict[str, Any]:
     """Per-component status only — the diagnostic half, never the content."""
     if not isinstance(raw, dict):
@@ -190,6 +211,21 @@ def project_detectors(detectors: Any) -> dict[str, Any]:
 
         entry: dict[str, Any] = {"detected": bool(payload.get("detected"))}
 
+        # Already-projected input keeps its counts. emit() projects
+        # unconditionally, so without this a caller passing a safe structure
+        # would silently lose its analytics — a quiet wrong answer rather than
+        # a loud one.
+        if isinstance(payload.get("entities"), list) and "data" not in payload:
+            preserved = [
+                {"type": _safe_type_name(e.get("type")), "count": int(e.get("count", 1))}
+                for e in payload["entities"][:_MAX_TYPES_PER_DETECTOR]
+                if isinstance(e, dict) and isinstance(e.get("count"), int)
+            ]
+            if preserved:
+                entry["entities"] = preserved
+            if payload.get("unclassified_types"):
+                entry["unclassified_types"] = True
+
         status = _safe_identifier(payload.get("status"))
         if status is not None:
             entry["status"] = status
@@ -199,6 +235,8 @@ def project_detectors(detectors: Any) -> dict[str, Any]:
         counts = _entity_counts(payload.get("data"))
         if counts:
             entry["entities"] = counts
+        if _has_unclassified(payload.get("data")):
+            entry["unclassified_types"] = True
 
         components = _components(payload.get("components"))
         if components:
