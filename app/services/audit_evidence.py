@@ -25,10 +25,21 @@ matches survived a later bad one, leaving a partial capture that reads as a
 complete one.
 
 **Offsets and originals do not outlive the collector.** They exist to prove
-provenance and are destroyed by ``finalize()``, which also prevents reuse.
+provenance and are destroyed by ``finalize()`` — on failure as well as success,
+since clearing only on success left a populated collector behind every error.
 Returning offset-free groups was not enough on its own: the collector still
 held every original string and coordinate, reachable through ``repr`` and
 pickling.
+
+The honest limit: this is not secrecy against code running in the same
+process. Python keeps a traceback for every exception and a traceback keeps its
+frames' locals, so a caller that catches an error and walks
+``__traceback__`` can still reach values that were live when it was raised.
+The sensitive containers are emptied on the way out to shrink that window, and
+``_staged`` is re-validated at commit so direct mutation cannot smuggle
+anything past ``add()`` — but a determined caller inside this process is not a
+threat this module can exclude. The boundary it does enforce is what leaves the
+process: what gets stored, returned, exported and logged.
 
 **Bounds fail closed, measured on what will actually be stored.** The size
 limit is checked against canonical JSON bytes, because a limit that cannot
@@ -339,6 +350,13 @@ class MatchCollector:
             for match in staged._staged:
                 if match.detector != detector:
                     raise EvidenceError("match.detector.mismatch")
+                # Re-validate rather than trust that add() saw every match.
+                # Python offers no real privacy for _staged, so the commit
+                # cannot assume the list only contains what add() put there.
+                original = self._originals.get(match.source)
+                if original is None:
+                    raise EvidenceError("source.unregistered")
+                validate_match(match, original)
             if len(self._matches) + len(staged._staged) > MAX_MATCHES_COLLECTED:
                 raise EvidenceError("collector.too_many_matches")
             self._matches.extend(staged._staged)
@@ -370,52 +388,64 @@ class MatchCollector:
             self._matches.clear()
 
     def _build_groups(self, groups: list[MatchGroup]) -> list[MatchGroup]:
+        """Group, bound and order the matches.
+
+        Every sensitive local is cleared on the way out. An exception keeps its
+        traceback and a traceback keeps its frames' locals, so without this a
+        caller that catches a failure could walk ``__traceback__`` and read the
+        whole collected batch, the last match and the last original — which is
+        the content this module exists to control.
+
+        This narrows the window; it is not secrecy against code in the same
+        process, and the module docstring says so rather than implying more.
+        """
         grouped: dict[tuple, list[Any]] = {}
-        for match in self._matches:
-            original = self._originals.get(match.source)
-            if original is None:
-                raise EvidenceError("source.unregistered")
-            validate_match(match, original)
+        match: ExactMatch | None = None
+        original: str | None = None
+        try:
+            for match in self._matches:
+                original = self._originals.get(match.source)
+                if original is None:
+                    raise EvidenceError("source.unregistered")
+                validate_match(match, original)
 
-            key = (
-                match.detector,
-                match.match_type,
-                match.rule_id,
-                match.source,
-                match.value,
+                key = (match.detector, match.match_type, match.rule_id, match.source, match.value)
+                existing = grouped.get(key)
+                if existing is None:
+                    if len(grouped) >= MAX_MATCH_GROUPS:
+                        raise EvidenceError("capture.too_many_groups")
+                    grouped[key] = [match, 1]
+                else:
+                    if existing[1] >= MAX_OCCURRENCES_PER_GROUP:
+                        raise EvidenceError("capture.too_many_occurrences")
+                    existing[1] += 1
+
+            groups.extend(
+                MatchGroup(
+                    detector=m.detector,
+                    match_type=m.match_type,
+                    source=m.source,
+                    value=m.value,
+                    rule_id=m.rule_id,
+                    occurrences=count,
+                )
+                for m, count in grouped.values()
             )
-            existing = grouped.get(key)
-            if existing is None:
-                if len(grouped) >= MAX_MATCH_GROUPS:
-                    raise EvidenceError("capture.too_many_groups")
-                grouped[key] = [match, 1]
-            else:
-                if existing[1] >= MAX_OCCURRENCES_PER_GROUP:
-                    raise EvidenceError("capture.too_many_occurrences")
-                existing[1] += 1
+            groups.sort(key=_sort_key)
 
-        groups.extend(
-            MatchGroup(
-                detector=m.detector,
-                match_type=m.match_type,
-                source=m.source,
-                value=m.value,
-                rule_id=m.rule_id,
-                occurrences=count,
-            )
-            for m, count in grouped.values()
-        )
-        groups.sort(key=_sort_key)
+            if len(canonical_json(groups).encode("utf-8")) > MAX_MATCHES_JSON_BYTES:
+                # Empty the list before raising: otherwise this frame hands
+                # back through the traceback exactly the oversized result it is
+                # refusing to return.
+                groups.clear()
+                raise EvidenceError("capture.serialized_too_large")
 
-        if len(canonical_json(groups).encode("utf-8")) > MAX_MATCHES_JSON_BYTES:
-            # Empty the list the caller would otherwise reach through this
-            # frame: an exception keeps its traceback, and the traceback keeps
-            # the locals, so simply raising would hand back the oversized
-            # result it is refusing to return.
-            groups.clear()
-            raise EvidenceError("capture.serialized_too_large")
-
-        return groups
+            return groups
+        finally:
+            grouped.clear()
+            match = None
+            original = None
+            del match, original
 
 
 @dataclass

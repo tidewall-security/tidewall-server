@@ -26,6 +26,7 @@ from app.services.audit_evidence import (
     EvidenceError,
     ExactMatch,
     MatchCollector,
+    MatchGroup,
     SourceRef,
     canonical_json,
 )
@@ -489,9 +490,18 @@ def test_a_failed_finalize_still_destroys_state_and_is_terminal():
     assert exc.value.code == "collector.finalized"
 
 
-def test_an_overflowing_result_is_not_reachable_through_the_traceback():
-    """An exception keeps its traceback and the traceback keeps the locals, so
-    raising alone would hand back the oversized result it is refusing."""
+def test_the_overflow_path_does_not_leave_the_batch_in_its_own_frames():
+    """My first version of this test was vacuous.
+
+    It collected only locals that were lists, so it saw the already-emptied
+    `groups` and missed `grouped`, which is a dict, and missed bare
+    ExactMatch/str locals entirely. This walks every local recursively.
+
+    Note what is being asserted: the containers this module owns are emptied on
+    the way out. It is NOT a secrecy guarantee against code in the same
+    process — Python tracebacks keep their frames' locals and there is no way
+    to prevent that from inside a library.
+    """
     collector = MatchCollector()
     value = "v" * (MAX_VALUE_BYTES - 1)
     for i in range(MAX_MATCH_GROUPS):
@@ -503,15 +513,46 @@ def test_an_overflowing_result_is_not_reachable_through_the_traceback():
         collector.finalize()
     assert exc.value.code == "capture.serialized_too_large"
 
+    def walk(obj, depth=0, seen=None):
+        """Every container reachable from a traceback frame."""
+        seen = seen if seen is not None else set()
+        if depth > 6 or id(obj) in seen:
+            return []
+        seen.add(id(obj))
+        found = []
+        if isinstance(obj, MatchGroup | ExactMatch):
+            found.append(obj)
+            return found
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                found += walk(k, depth + 1, seen) + walk(v, depth + 1, seen)
+        elif isinstance(obj, list | tuple | set):
+            for v in obj:
+                found += walk(v, depth + 1, seen)
+        return found
+
+    retained = []
     tb = exc.tb
-    seen = []
     while tb is not None:
-        seen.extend(v for v in tb.tb_frame.f_locals.values() if isinstance(v, list))
+        for local in tb.tb_frame.f_locals.values():
+            retained += walk(local)
         tb = tb.tb_next
-    for candidate in seen:
-        assert not any(
-            hasattr(item, "value") and item.value == value for item in candidate
-        ), "the oversized result is reachable through the traceback"
+
+    assert not retained, f"{len(retained)} match objects still reachable through the traceback frames"
+
+
+def test_a_directly_mutated_batch_cannot_smuggle_a_match_past_validation():
+    """Python gives no real privacy for `_staged`, so the commit cannot assume
+    the list holds only what add() put there."""
+    collector = _collector("alice@example.com")
+
+    with pytest.raises(EvidenceError) as exc:
+        with collector.capture("pii") as batch:
+            batch.add(_m("alice@example.com", 0, 17))
+            batch._staged.append(_m("nobody@example.com", 0, 17))  # never went through add()
+
+    assert exc.value.code == "match.span.stale"
+    assert collector.finalize() == []
 
 
 def test_captures_cannot_nest():
