@@ -22,8 +22,10 @@ applied and finding nothing.
 from __future__ import annotations
 
 import ipaddress
-import re
 from typing import Any
+
+from app.services import safe_regex
+from app.services.safe_regex import UnsafePatternError, compile_pattern
 
 # Operators understood by :mod:`app.services.rule_evaluator`. Kept here so the
 # write path and the evaluator cannot drift apart: an operator accepted at write
@@ -55,25 +57,25 @@ REMOVED_ACTIONS: dict[str, str] = {
 
 # An upper bound on pattern length. Not a safety analysis — that is RE2's job —
 # but a cheap guard against pathological input reaching the engine at all.
-MAX_PATTERN_LENGTH = 1000
+# Kept as a re-export: the limit belongs with the compiler that enforces it.
+MAX_PATTERN_LENGTH = safe_regex.MAX_PATTERN_LENGTH
 
 
 class PolicyValidationError(ValueError):
     """Raised when policy content cannot be enforced as written."""
 
 
-def validate_regex(pattern: str, *, where: str) -> None:
-    """Reject a regex that will not compile, or that is implausibly long."""
-    if not isinstance(pattern, str):
-        raise PolicyValidationError(f"{where}: pattern must be a string, got {type(pattern).__name__}")
-    if len(pattern) > MAX_PATTERN_LENGTH:
-        raise PolicyValidationError(
-            f"{where}: pattern is {len(pattern)} characters, over the {MAX_PATTERN_LENGTH} limit"
-        )
+def validate_regex(pattern: str, *, where: str, case_insensitive: bool = False) -> None:
+    """Reject a regex the safe engine will not run.
+
+    Compiles with the *same* engine and options the runtime uses. Validating
+    with one engine and matching with another is how a pattern gets accepted at
+    write time and then refused — or worse, behaves differently — at scan time.
+    """
     try:
-        re.compile(pattern)
-    except re.error as exc:
-        raise PolicyValidationError(f"{where}: invalid regex ({exc})") from None
+        compile_pattern(pattern, case_insensitive=case_insensitive)
+    except UnsafePatternError as exc:
+        raise PolicyValidationError(f"{where}: {exc}") from None
 
 
 def validate_operator(operator: str, *, where: str) -> None:

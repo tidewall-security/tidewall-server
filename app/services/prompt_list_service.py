@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
-import re
 
 from sqlalchemy.orm import Session
 
 from app.db.models import GlobalPromptList
 from app.services.policy_validation import validate_prompt_list_entry
+from app.services.safe_regex import UnsafePatternError, compile_pattern
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,17 @@ class PromptListService:
         entry = self._session.get(GlobalPromptList, entry_id)
         if entry is None:
             raise ValueError(f"Prompt list entry {entry_id} not found")
+
+        # Creation validates, this did not — so any pattern rejected at create
+        # time could simply be introduced by a follow-up update. Validate the
+        # *effective* pair, because either half may be unchanged: a new pattern
+        # has to be checked against the stored match_type, and switching
+        # match_type to "regex" has to re-check the stored pattern.
+        effective_pattern = pattern if pattern is not None else entry.pattern
+        effective_match_type = match_type if match_type is not None else entry.match_type
+        if pattern is not None or match_type is not None:
+            validate_prompt_list_entry(effective_pattern, effective_match_type)
+
         if pattern is not None:
             entry.pattern = pattern
         if match_type is not None:
@@ -95,9 +106,13 @@ class PromptListService:
                     return True
             elif entry.match_type == "regex":
                 try:
-                    if re.search(entry.pattern, text, re.IGNORECASE):
+                    # Compiled per read rather than cached: list rows are
+                    # mutable independently of the engine cache, so a cache
+                    # without invalidation would keep matching a pattern the
+                    # administrator has already changed.
+                    if compile_pattern(entry.pattern, case_insensitive=True).search(text):
                         return True
-                except re.error as exc:
+                except UnsafePatternError as exc:
                     # Skipping meant a malicious-list entry simply never
                     # matched. Raise so the calling detector records a failure
                     # instead of reporting a confident "no match".
