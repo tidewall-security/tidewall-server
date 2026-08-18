@@ -328,8 +328,8 @@ def test_the_writer_has_no_parameter_for_content():
 def test_a_bound_admin_deletes_only_its_own_policy(scoped_app):
     """Unscoped, an admin bound to policy A destroyed policy B's audit trail —
     worse than disclosure, because the evidence that it happened goes too."""
-    from app.db.models import APIKey, Interaction
     from app.auth.key_utils import generate_key, hash_key, key_prefix
+    from app.db.models import APIKey, Interaction
 
     client, keys = scoped_app
     factory = client.app.state.session_factory
