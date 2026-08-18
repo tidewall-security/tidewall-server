@@ -268,15 +268,22 @@ class RegistrationToken(Base):
     # Scope an enrolling device inherits. Without this a registration token
     # conferred no policy at all — the middleware set policy_id = None — so
     # enrolled devices had no binding to constrain them.
-    policy_id: Mapped[str | None] = mapped_column(String, ForeignKey("policies.id", ondelete="SET NULL"), nullable=True)
+    #
+    # RESTRICT, not SET NULL: guard reads a null binding as "use the default
+    # policy", so nulling this on delete would silently move the token's future
+    # devices onto rules nobody chose for them. The service refuses the delete
+    # for a readable message, but the count-then-delete it does is not atomic —
+    # this is what actually holds.
+    policy_id: Mapped[str | None] = mapped_column(String, ForeignKey("policies.id", ondelete="RESTRICT"), nullable=True)
 
 
 class Device(Base):
     __tablename__ = "devices"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    # High-entropy value the client generates once and stores. This is the
-    # device's identity.
+    # UUID the client generates once and stores. This is the device's identity.
+    # Clients must generate it with a CSPRNG; the server validates the form and
+    # cannot establish that the value was actually random.
     installation_id: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     # Advisory metadata only, deliberately NOT unique. It was previously the
     # unique key AND the lookup used to authorise a refresh, which is what made
@@ -293,7 +300,10 @@ class Device(Base):
     reg_token_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("registration_tokens.id", ondelete="SET NULL"), nullable=True
     )
-    policy_id: Mapped[str | None] = mapped_column(String, ForeignKey("policies.id", ondelete="SET NULL"), nullable=True)
+    # RESTRICT for the same reason as the registration token's: a device's scope
+    # is fixed at enrolment, and deleting its policy must not quietly reassign
+    # it to the default one.
+    policy_id: Mapped[str | None] = mapped_column(String, ForeignKey("policies.id", ondelete="RESTRICT"), nullable=True)
     status: Mapped[str] = mapped_column(String, nullable=False, default="active")
     last_seen: Mapped[datetime] = mapped_column(DateTime, default=_now)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

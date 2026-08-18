@@ -112,3 +112,52 @@ def test_the_migration_round_trips(tmp_path):
     finally:
         engine.dispose()
     assert "installation_id" in columns
+
+
+def test_legacy_registration_tokens_do_not_survive_the_migration(tmp_path):
+    """A surviving pre-migration token would enrol unscoped devices.
+
+    `policy_id` is nullable so the column can be added to a populated table.
+    That means a token created before this migration keeps NULL, the middleware
+    still accepts it, and enrolment copies the NULL onto the new device — which
+    guard reads as "use the default policy". The scope binding this migration
+    exists to establish would be silently absent for exactly the tokens most
+    likely to still be in use.
+    """
+    db_path = tmp_path / "legacy.db"
+    _alembic(db_path, "upgrade", "c8f31b0d7a45")
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO registration_tokens (id, name, token_hash, token_prefix, created_at) "
+                    "VALUES (:id, 'legacy', 'hash', 'rt_ab...', datetime('now'))"
+                ),
+                {"id": str(uuid.uuid4())},
+            )
+    finally:
+        engine.dispose()
+
+    _alembic(db_path, "upgrade", "head")
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with engine.begin() as conn:
+            remaining = conn.execute(text("SELECT COUNT(*) FROM registration_tokens")).scalar()
+    finally:
+        engine.dispose()
+    assert remaining == 0, "a legacy token survived and can still enrol unscoped devices"
+
+
+def test_the_policy_bindings_restrict_deletion_in_a_migrated_database(migrated_db):
+    """Guard reads a null policy as 'use the default', so SET NULL on delete
+    would silently rebind. Both scope foreign keys must be RESTRICT."""
+    fks = {
+        table: {fk["name"]: fk for fk in inspect(migrated_db).get_foreign_keys(table)}
+        for table in ("devices", "registration_tokens")
+    }
+
+    assert fks["devices"]["fk_devices_policy_id"]["options"]["ondelete"] == "RESTRICT"
+    assert fks["registration_tokens"]["fk_registration_tokens_policy_id"]["options"]["ondelete"] == "RESTRICT"

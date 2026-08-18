@@ -1,7 +1,6 @@
 """Tests for PolicyService — CRUD and engine cache."""
+
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
 from app.db.engine import get_engine, get_session_factory
 from app.db.models import Base, Policy, RuleSet
@@ -211,3 +210,38 @@ def test_an_unused_policy_still_deletes(seeded_session):
     svc.delete_policy(unused.id)
 
     assert svc.get_policy(unused.id) is None
+
+
+def test_the_database_refuses_the_delete_even_if_the_count_is_bypassed(seeded_session):
+    """The count is a message; ON DELETE RESTRICT is the guarantee.
+
+    The service counts references and then deletes, which is not atomic — an
+    enrolment landing between the two would otherwise null the new device's
+    scope and drop it onto the default policy. Deleting the row directly skips
+    the count entirely, which is what that race amounts to.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from app.db.models import Device, Policy
+    from app.services.policy_service import PolicyService
+
+    svc = PolicyService(seeded_session)
+    scoped = svc.create_policy(name="engineering", type="application")
+    seeded_session.add(
+        Device(
+            installation_id="6ba7b811-9dad-11d1-80b4-00c04fd430c8",
+            device_name="Laptop",
+            user_name="alice",
+            user_email="alice@example.com",
+            policy_id=scoped.id,
+            status="active",
+        )
+    )
+    seeded_session.commit()
+
+    with pytest.raises(IntegrityError):
+        seeded_session.delete(seeded_session.get(Policy, scoped.id))
+        seeded_session.commit()
+    seeded_session.rollback()
+
+    assert seeded_session.get(Policy, scoped.id) is not None

@@ -39,10 +39,13 @@ demo: demo-stop
 		-d '{"name":"demo-sdk","role":"api"}'); \
 	API_KEY=$$(echo "$$API_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['key'])"); \
 	echo "==> Creating registration token..."; \
+	POLICY_ID=$$(curl -sf http://localhost:8080/v1/policies \
+		-H "Authorization: Bearer $$ADMIN_KEY" \
+		| python3 -c "import sys,json; p=json.load(sys.stdin); print(next(x['id'] for x in p if x.get('is_default')))"); \
 	REG_RESP=$$(curl -sf http://localhost:8080/v1/registration-tokens \
 		-H "Authorization: Bearer $$ADMIN_KEY" \
 		-H "Content-Type: application/json" \
-		-d '{"name":"demo-extension"}'); \
+		-d "{\"name\":\"demo-extension\",\"policy_id\":\"$$POLICY_ID\"}"); \
 	REG_TOKEN=$$(echo "$$REG_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])"); \
 	echo "==> Building browser extension..."; \
 	(cd ../tidewall-browser-extension && npm run build) || echo "WARN: Extension build failed (skipping)"; \
