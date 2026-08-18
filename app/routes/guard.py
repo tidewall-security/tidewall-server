@@ -138,6 +138,12 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
         response_time = _now_iso()
         request_id = f"tw_{uuid.uuid4().hex[:16]}"
         summary = f"Blocked by access rule: {access_rules_result['matched_rules'][-1]['name']}"
+        # Exports get a fixed string. A rule name is an arbitrary control-plane
+        # value — operators put tenant names, customer identifiers and incident
+        # references in them — and it crosses webhook and syslog verbatim, plus
+        # OCSF `message`/`finding_info.desc` and AIDR `Vendor.summary`.
+        # Projecting `detectors` does nothing for this channel.
+        export_summary = "Blocked by access rule"
 
         response = GuardResponse(
             request_id=request_id,
@@ -187,7 +193,7 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
                 status="blocked",
                 request_id=request_id,
                 timestamp=response_time,
-                summary=summary,
+                summary=export_summary,
                 policy_name=policy_name,
                 event_type=event_type,
                 detectors={},
@@ -372,6 +378,9 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             transformed=scan_result.transformed,
             guard_output=guard_output,
             policy=policy_name,
+            # NOT projected here: the public response is step 3, which needs
+            # its own contract decision and its own tests. Mixing it into the
+            # export change would make one review cover two boundaries.
             detectors=scan_result.detectors,
             access_rules={
                 r["name"]: {"matched": r["matched"], "action": r["action"]}
