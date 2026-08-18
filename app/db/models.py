@@ -249,7 +249,7 @@ class InteractionContent(Base):
     output_json: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
     matches_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     byte_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    captured_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now, index=True)
     # Null means no time expiry, which is the configured default.
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
@@ -271,7 +271,7 @@ class ContentAccessAudit(Base):
     api_key_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     tier: Mapped[str] = mapped_column(String, nullable=False)
     policy_id: Mapped[str | None] = mapped_column(String, nullable=True)
-    accessed_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    accessed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now, index=True)
 
 
 class Vault(Base):

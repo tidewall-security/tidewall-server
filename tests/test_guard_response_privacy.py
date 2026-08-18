@@ -180,7 +180,6 @@ RAW_SHAPES = {
 }
 
 
-
 @pytest.mark.parametrize("name", sorted(RAW_SHAPES))
 def test_no_representative_payload_leaks_through_projection(name):
     """The route test used custom_entity, whose payload is only one shape."""

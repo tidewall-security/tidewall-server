@@ -1,4 +1,5 @@
 """E2E tests for auth flow."""
+
 import pytest
 
 pytestmark = pytest.mark.e2e
@@ -32,9 +33,7 @@ def test_auth_no_console_errors_before_key_entered(page, server_url, console_err
     page.wait_for_timeout(2000)  # Wait for any async errors to surface
 
     # Filter out expected 401s (auth check + favicon) and resource loading errors
-    js_errors = [e for e in console_errors
-                 if "favicon" not in e
-                 and "Failed to load resource" not in e]
+    js_errors = [e for e in console_errors if "favicon" not in e and "Failed to load resource" not in e]
     assert len(js_errors) == 0, f"Unexpected console errors before auth: {js_errors}"
 
 
@@ -61,9 +60,7 @@ def test_auth_full_flow_enter_key_then_data_loads(page, server_url, admin_key, c
     assert page.text_content("h1").strip() == "Visibility"
 
     # No unexpected JS errors (401 resource loads are expected during auth check)
-    js_errors = [e for e in console_errors
-                 if "favicon" not in e
-                 and "Failed to load resource" not in e]
+    js_errors = [e for e in console_errors if "favicon" not in e and "Failed to load resource" not in e]
     assert len(js_errors) == 0, f"Console errors after auth: {js_errors}"
 
 

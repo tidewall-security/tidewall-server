@@ -41,6 +41,13 @@ class KeyService:
             collector_type=collector_type,
             expires_at=expires_at,
         )
+        # A viewer with no policy sees nothing, because a null binding is
+        # never widened to a wildcard on the read side. Refusing the key is the
+        # honest failure: the alternative is a credential that authenticates
+        # successfully and shows an empty dashboard, which reads as a bug.
+        if role == "viewer" and not policy_id:
+            raise ValueError("a viewer key must be bound to a policy: an unbound viewer can see nothing")
+
         self._session.add(api_key)
         self._session.commit()
         logger.info("Created API key '%s' (role=%s, prefix=%s)", name, role, api_key.key_prefix)

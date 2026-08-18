@@ -89,7 +89,7 @@ def upgrade() -> None:
         sa.Column("output_json", sa.JSON(), nullable=True),
         sa.Column("matches_json", sa.JSON(), nullable=True),
         sa.Column("byte_size", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("captured_at", sa.DateTime(), nullable=True),
+        sa.Column("captured_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
         sa.Column("expires_at", sa.DateTime(), nullable=True),
         # Deleting the event deletes its content; the reverse is not true.
         sa.ForeignKeyConstraint(["interaction_id"], ["interactions.id"], ondelete="CASCADE"),
@@ -106,7 +106,7 @@ def upgrade() -> None:
         sa.Column("api_key_id", sa.String(), nullable=True),
         sa.Column("tier", sa.String(), nullable=False),
         sa.Column("policy_id", sa.String(), nullable=True),
-        sa.Column("accessed_at", sa.DateTime(), nullable=True),
+        sa.Column("accessed_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
     )
     op.create_index("ix_content_access_audit_interaction_id", "content_access_audit", ["interaction_id"])
     op.create_index("ix_content_access_audit_api_key_id", "content_access_audit", ["api_key_id"])

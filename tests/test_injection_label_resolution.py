@@ -105,9 +105,7 @@ def test_the_original_bug_would_now_fail_this_test():
 
 
 def test_unresolvable_label_is_a_config_failure_not_a_clean_scan():
-    d = MaliciousPromptDetector(
-        {"generic_injection_detection": True, "action": "block", "injection_label": "NONSENSE"}
-    )
+    d = MaliciousPromptDetector({"generic_injection_detection": True, "action": "block", "injection_label": "NONSENSE"})
     # No model/tokenizer configured, so construction records CONFIG_INVALID.
     r = d.scan("anything")
 

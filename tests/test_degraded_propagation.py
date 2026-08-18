@@ -120,9 +120,7 @@ def test_interaction_row_carries_the_degraded_marker():
     from app.db.models import Base, Interaction
     from app.interaction_log import InteractionLog
 
-    engine = create_engine(
-        "sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool
-    )
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
     SessionLocal = sessionmaker(bind=engine)
 

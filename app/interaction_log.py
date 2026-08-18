@@ -10,6 +10,8 @@ The ``get_stats()`` and ``get_recent()`` methods power the dashboard UI
 
 from __future__ import annotations
 
+import hashlib
+import ipaddress
 import logging
 from typing import Any
 
@@ -22,7 +24,69 @@ from app.services.safe_export_evidence import EVIDENCE_SCHEMA_VERSION
 # Caller-supplied metadata is bounded and normalised. Without this, content
 # just moves into a different column — an integration is free to put a prompt
 # fragment in `user_id`, and nothing would stop it being stored and served.
-_MAX_METADATA_LENGTH = 200
+# Caller-supplied metadata. The previous version truncated to 200 characters
+# and stripped control characters, which accepts the first 200 characters of a
+# prompt — the exact attack its own comment described. Identifier-shaped values
+# are kept; anything else is replaced by a stable digest, so correlation still
+# works and the content does not survive.
+_MAX_METADATA_BYTES = 128
+_IDENTIFIER_EXTRAS = "_-.@:+/"
+_EVENT_TYPES = frozenset({"input", "output", "tool_input", "tool_output", "tool_listing"})
+
+
+def _looks_like_an_identifier(value: str) -> bool:
+    """Whether this is plausibly an ID rather than prose.
+
+    Deliberately strict. A user ID, application name, model name or device ID
+    has no whitespace; a prompt fragment almost always does.
+    """
+    if not value or len(value.encode("utf-8")) > _MAX_METADATA_BYTES:
+        return False
+    return all(c.isalnum() or c in _IDENTIFIER_EXTRAS for c in value)
+
+
+def _digest(value: str) -> str:
+    """A stable stand-in for a value that is not an identifier.
+
+    Correlation across events is the reason this metadata exists — "which user,
+    which application" — and a digest keeps that while carrying nothing
+    readable. Truncated because it is a correlation key, not a commitment.
+    """
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def _validated(value: str | None, field: str) -> str | None:
+    """Keep an identifier, digest anything else, drop what is neither."""
+    if value is None or not isinstance(value, str):
+        return None
+    trimmed = value.strip()
+    if not trimmed:
+        return None
+    if _looks_like_an_identifier(trimmed):
+        return trimmed
+    logger.debug("metadata field %s was not identifier-shaped; storing a digest", field)
+    return _digest(trimmed)
+
+
+def _validated_ip(value: str | None) -> str | None:
+    """A source IP, or nothing.
+
+    Parsed rather than pattern-matched: an unparsed value is a free-text field
+    with an authoritative-sounding name, which is a good place to hide a
+    prompt.
+    """
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        return str(ipaddress.ip_address(value.strip()))
+    except ValueError:
+        return None
+
+
+def _validated_event_type(value: str) -> str:
+    if value not in _EVENT_TYPES:
+        raise ValueError(f"unknown event_type {value!r}")
+    return value
 
 
 def _scoped(query: Any, policy_id: str | None) -> Any:
@@ -33,23 +97,6 @@ def _scoped(query: Any, policy_id: str | None) -> Any:
     route turns that into an empty result instead.
     """
     return query if policy_id is None else query.filter(Interaction.policy_id == policy_id)
-
-
-def _validated(value: str | None, field: str) -> str | None:
-    """Bound a caller-supplied metadata string.
-
-    Truncates rather than rejects: these are identifiers on an audit record,
-    and failing a guard request because an integration sent a long user ID
-    would turn a logging concern into an outage.
-    """
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        return None
-    trimmed = value.strip()[:_MAX_METADATA_LENGTH]
-    # Control characters make log and dashboard output ambiguous, and are not
-    # part of any legitimate identifier.
-    return "".join(c for c in trimmed if c.isprintable()) or None
 
 
 logger = logging.getLogger(__name__)
@@ -101,7 +148,7 @@ class InteractionLog:
             row = Interaction(
                 request_id=_validated(request_id, "request_id"),
                 timestamp=timestamp,
-                event_type=_validated(event_type, "event_type"),
+                event_type=_validated_event_type(event_type),
                 policy_name=_validated(policy, "policy"),
                 policy_id=policy_id,
                 api_key_id=api_key_id,
@@ -119,13 +166,20 @@ class InteractionLog:
                 user_id=_validated(user_id, "user_id"),
                 llm_provider=_validated(llm_provider, "llm_provider"),
                 model=_validated(model, "model"),
-                source_ip=_validated(source_ip, "source_ip"),
+                source_ip=_validated_ip(source_ip),
                 device_id=_validated(device_id, "device_id"),
             )
             session.add(row)
             session.commit()
 
-    def get_recent(self, limit: int = 50, *, policy_id: str | None = None) -> list[dict]:
+    def get_recent(
+        self,
+        limit: int = 50,
+        *,
+        policy_id: str | None = None,
+        action: str | None = None,
+        device_id: str | None = None,
+    ) -> list[dict]:
         """Return recent events as safe DTOs.
 
         ``policy_id`` scopes the query in SQL rather than filtering afterwards.
@@ -158,6 +212,14 @@ class InteractionLog:
             )
             if policy_id is not None:
                 query = query.filter(Interaction.policy_id == policy_id)
+            if device_id:
+                query = query.filter(Interaction.device_id == device_id)
+            if action == "blocked":
+                query = query.filter(Interaction.blocked.is_(True))
+            elif action == "transformed":
+                query = query.filter(Interaction.blocked.is_(False), Interaction.transformed.is_(True))
+            elif action == "clean":
+                query = query.filter(Interaction.blocked.is_(False), Interaction.transformed.is_(False))
             rows = query.order_by(Interaction.timestamp.desc()).limit(limit).all()
 
             # Built field by field, not by serialising the row: a column added

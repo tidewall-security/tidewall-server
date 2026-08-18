@@ -1,9 +1,11 @@
 """Tests for OCSF Data Security Finding event builder."""
+
 import pytest
 
 
 def test_build_ocsf_blocked_event():
     from app.services.ocsf_builder import build_ocsf_event
+
     event = build_ocsf_event(
         status="blocked",
         request_id="tw_abc123",
@@ -33,6 +35,7 @@ def test_build_ocsf_blocked_event():
 
 def test_build_ocsf_transformed_event():
     from app.services.ocsf_builder import build_ocsf_event
+
     event = build_ocsf_event(
         status="transformed",
         request_id="tw_def456",
@@ -51,6 +54,7 @@ def test_build_ocsf_transformed_event():
 
 def test_build_ocsf_allowed_event():
     from app.services.ocsf_builder import build_ocsf_event
+
     event = build_ocsf_event(
         status="allowed",
         request_id="tw_ghi789",
@@ -68,6 +72,7 @@ def test_build_ocsf_allowed_event():
 
 def test_build_ocsf_alerted_event():
     from app.services.ocsf_builder import build_ocsf_event
+
     event = build_ocsf_event(
         status="alerted",
         request_id="tw_jkl012",
@@ -83,6 +88,7 @@ def test_build_ocsf_alerted_event():
 
 def test_ocsf_has_unmapped_tidewall_fields():
     from app.services.ocsf_builder import build_ocsf_event
+
     event = build_ocsf_event(
         status="blocked",
         request_id="prq_test",
@@ -105,6 +111,7 @@ def test_ocsf_has_unmapped_tidewall_fields():
 
 def test_build_aidr_compat_format():
     from app.services.ocsf_builder import build_aidr_compat_event
+
     event = build_aidr_compat_event(
         status="blocked",
         request_id="tw_abc123",

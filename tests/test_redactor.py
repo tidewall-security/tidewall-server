@@ -3,6 +3,7 @@
 
 def test_replacement():
     from app.services.redactor import Redactor
+
     r = Redactor()
     result = r.redact("234-56-7890", "US_SSN", {"action": "replacement", "replacement_value": "<US_SSN>"})
     assert result["redacted"] == "<US_SSN>"
@@ -11,6 +12,7 @@ def test_replacement():
 
 def test_replacement_default_value():
     from app.services.redactor import Redactor
+
     r = Redactor()
     result = r.redact("234-56-7890", "US_SSN", {"action": "replacement"})
     assert result["redacted"] == "<US_SSN>"  # default is <TYPE>
@@ -18,6 +20,7 @@ def test_replacement_default_value():
 
 def test_mask():
     from app.services.redactor import Redactor
+
     r = Redactor()
     result = r.redact("234-56-7890", "US_SSN", {"action": "mask"})
     assert result["redacted"] == "***********"
@@ -26,6 +29,7 @@ def test_mask():
 
 def test_partial_mask_default():
     from app.services.redactor import Redactor
+
     r = Redactor()
     result = r.redact("234-56-7890", "US_SSN", {"action": "partial_mask", "unmasked_right": 4})
     assert result["redacted"] == "*******7890"
@@ -34,29 +38,40 @@ def test_partial_mask_default():
 
 def test_partial_mask_with_ignore():
     from app.services.redactor import Redactor
+
     r = Redactor()
-    result = r.redact("234-56-7890", "US_SSN", {
-        "action": "partial_mask",
-        "mask_char": "#",
-        "unmasked_right": 4,
-        "chars_to_ignore": "-",
-    })
+    result = r.redact(
+        "234-56-7890",
+        "US_SSN",
+        {
+            "action": "partial_mask",
+            "mask_char": "#",
+            "unmasked_right": 4,
+            "chars_to_ignore": "-",
+        },
+    )
     assert result["redacted"] == "###-##-7890"
 
 
 def test_partial_mask_unmasked_left():
     from app.services.redactor import Redactor
+
     r = Redactor()
-    result = r.redact("234-56-7890", "PHONE_NUMBER", {
-        "action": "partial_mask",
-        "unmasked_left": 3,
-        "unmasked_right": 4,
-    })
+    result = r.redact(
+        "234-56-7890",
+        "PHONE_NUMBER",
+        {
+            "action": "partial_mask",
+            "unmasked_left": 3,
+            "unmasked_right": 4,
+        },
+    )
     assert result["redacted"] == "234****7890"
 
 
 def test_hash():
     from app.services.redactor import Redactor
+
     r = Redactor()
     result = r.redact("234-56-7890", "US_SSN", {"action": "hash", "salt": "mysalt"})
     assert len(result["redacted"]) == 12  # truncated hash
@@ -65,6 +80,7 @@ def test_hash():
 
 def test_hash_deterministic():
     from app.services.redactor import Redactor
+
     r = Redactor()
     r1 = r.redact("234-56-7890", "US_SSN", {"action": "hash", "salt": "mysalt"})
     r2 = r.redact("234-56-7890", "US_SSN", {"action": "hash", "salt": "mysalt"})
@@ -73,6 +89,7 @@ def test_hash_deterministic():
 
 def test_hash_different_salt():
     from app.services.redactor import Redactor
+
     r = Redactor()
     r1 = r.redact("234-56-7890", "US_SSN", {"action": "hash", "salt": "salt1"})
     r2 = r.redact("234-56-7890", "US_SSN", {"action": "hash", "salt": "salt2"})
@@ -81,6 +98,7 @@ def test_hash_different_salt():
 
 def test_defang_ip():
     from app.services.redactor import Redactor
+
     r = Redactor()
     result = r.redact("47.84.32.175", "IP", {"action": "defang"})
     assert result["redacted"] == "47[.]84[.]32[.]175"
@@ -89,6 +107,7 @@ def test_defang_ip():
 
 def test_defang_url():
     from app.services.redactor import Redactor
+
     r = Redactor()
     result = r.redact("http://evil.com/path", "URL", {"action": "defang"})
     assert result["redacted"] == "http://evil[.]com/path"
@@ -97,6 +116,7 @@ def test_defang_url():
 
 def test_defang_domain():
     from app.services.redactor import Redactor
+
     r = Redactor()
     result = r.redact("evil.example.com", "DOMAIN", {"action": "defang"})
     assert result["redacted"] == "evil[.]example[.]com"
@@ -105,6 +125,7 @@ def test_defang_domain():
 
 def test_unknown_action_falls_back_to_replacement():
     from app.services.redactor import Redactor
+
     r = Redactor()
     result = r.redact("secret", "CUSTOM", {"action": "unknown_action"})
     assert result["redacted"] == "<CUSTOM>"
@@ -113,6 +134,7 @@ def test_unknown_action_falls_back_to_replacement():
 
 def test_report_action():
     from app.services.redactor import Redactor
+
     r = Redactor()
     result = r.redact("234-56-7890", "US_SSN", {"action": "report"})
     assert result["redacted"] == "234-56-7890"  # unchanged

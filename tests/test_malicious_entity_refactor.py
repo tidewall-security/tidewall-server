@@ -1,9 +1,11 @@
 """Tests for refactored MaliciousEntityDetector with per-type rules."""
+
 import pytest
 
 
 def test_detect_ip_from_blocklist():
     from app.detectors.malicious_entity import MaliciousEntityDetector
+
     config = {
         "enabled": True,
         "action": "report",
@@ -30,6 +32,7 @@ def test_detect_ip_from_blocklist():
 
 def test_detect_url_from_blocklist():
     from app.detectors.malicious_entity import MaliciousEntityDetector
+
     config = {
         "enabled": True,
         "action": "report",
@@ -52,6 +55,7 @@ def test_detect_url_from_blocklist():
 
 def test_detect_domain_from_blocklist():
     from app.detectors.malicious_entity import MaliciousEntityDetector
+
     config = {
         "enabled": True,
         "action": "report",
@@ -72,6 +76,7 @@ def test_detect_domain_from_blocklist():
 
 def test_no_malicious_entities():
     from app.detectors.malicious_entity import MaliciousEntityDetector
+
     config = {
         "enabled": True,
         "action": "report",
@@ -88,6 +93,7 @@ def test_no_malicious_entities():
 
 def test_disabled_entity_type_skipped():
     from app.detectors.malicious_entity import MaliciousEntityDetector
+
     config = {
         "enabled": True,
         "action": "report",
@@ -107,6 +113,7 @@ def test_disabled_entity_type_skipped():
 
 def test_block_action_sets_can_block():
     from app.detectors.malicious_entity import MaliciousEntityDetector
+
     config = {
         "enabled": True,
         "action": "report",
@@ -126,6 +133,7 @@ def test_block_action_sets_can_block():
 
 def test_defanged_text_in_sanitized_text():
     from app.detectors.malicious_entity import MaliciousEntityDetector
+
     config = {
         "enabled": True,
         "action": "report",
@@ -147,6 +155,7 @@ def test_defanged_text_in_sanitized_text():
 def test_backward_compat_no_rules():
     """Default config (no rules, no intel) should still work via ML if available."""
     from app.detectors.malicious_entity import MaliciousEntityDetector
+
     config = {"enabled": True, "action": "report"}
     detector = MaliciousEntityDetector(config)
     result = detector.scan("Hello world")

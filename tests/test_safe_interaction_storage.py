@@ -318,3 +318,176 @@ def test_the_writer_has_no_parameter_for_content():
     params = set(_inspect.signature(InteractionLog.log_event).parameters)
 
     assert not (params & set(GONE)), f"content parameters still accepted: {params & set(GONE)}"
+
+
+# ---------------------------------------------------------------------------
+# Round 1 review: the two P0s
+# ---------------------------------------------------------------------------
+
+
+def test_a_bound_admin_deletes_only_its_own_policy(scoped_app):
+    """Unscoped, an admin bound to policy A destroyed policy B's audit trail —
+    worse than disclosure, because the evidence that it happened goes too."""
+    from app.db.models import APIKey, Interaction
+    from app.auth.key_utils import generate_key, hash_key, key_prefix
+
+    client, keys = scoped_app
+    factory = client.app.state.session_factory
+
+    session = factory()
+    raw = generate_key(prefix="ak")
+    session.add(
+        APIKey(
+            name="bound-admin",
+            key_hash=hash_key(raw),
+            key_prefix=key_prefix(raw),
+            role="admin",
+            policy_id="policy-a",
+        )
+    )
+    session.commit()
+    session.close()
+
+    resp = client.delete("/v1/logs", headers={"Authorization": f"Bearer {raw}"})
+    assert resp.status_code == 204
+
+    session = factory()
+    try:
+        remaining = {r.policy_id for r in session.query(Interaction).all()}
+    finally:
+        session.close()
+
+    assert remaining == {"policy-b"}, "a bound admin deleted outside its policy"
+
+
+def test_an_unbound_admin_deletes_globally(scoped_app):
+    from app.db.models import Interaction
+
+    client, keys = scoped_app
+    resp = client.delete("/v1/logs", headers={"Authorization": f"Bearer {keys['admin']}"})
+    assert resp.status_code == 204
+
+    session = client.app.state.session_factory()
+    try:
+        assert session.query(Interaction).count() == 0
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["user_id", "app_id", "model", "llm_provider", "device_id"],
+)
+def test_a_prompt_in_a_metadata_field_is_not_stored_verbatim(field):
+    """The attack my own comment described, and my first fix did not stop.
+
+    Truncating to 200 characters and stripping control characters accepts the
+    first 200 characters of a prompt. Identifier-shaped values are kept;
+    anything else becomes a digest, so correlation survives and the content
+    does not.
+    """
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from app.db.models import Base, Interaction
+    from app.interaction_log import InteractionLog
+
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine)
+
+    InteractionLog(SessionLocal).log_event(
+        request_id="tw_meta",
+        timestamp="2026-08-19T00:00:00Z",
+        event_type="input",
+        policy="p",
+        policy_id="policy-a",
+        blocked=False,
+        transformed=False,
+        latency_ms=1.0,
+        **{field: f"my secret is {CANARY} please help"},
+    )
+
+    session = SessionLocal()
+    try:
+        stored = getattr(session.query(Interaction).one(), field)
+    finally:
+        session.close()
+
+    assert CANARY not in (stored or ""), f"{field} stored the prompt"
+    assert stored.startswith("sha256:"), f"{field} should correlate by digest, got {stored!r}"
+
+
+def test_an_ordinary_identifier_is_kept_readable():
+    """Digesting everything would make the dashboard useless."""
+    from app.interaction_log import _validated
+
+    assert _validated("alice@acme.com", "user_id") == "alice@acme.com"
+    assert _validated("chat-app-v2", "app_id") == "chat-app-v2"
+    assert _validated("gpt-4o", "model") == "gpt-4o"
+
+
+def test_a_non_ip_source_is_dropped_not_stored():
+    """An unparsed source_ip is a free-text field with an authoritative name,
+    which is a good place to hide a prompt."""
+    from app.interaction_log import _validated_ip
+
+    assert _validated_ip(f"prompt {CANARY}") is None
+    assert _validated_ip("10.0.0.1") == "10.0.0.1"
+
+
+def test_filters_are_applied_before_the_limit(scoped_app):
+    """Filtering after ORDER BY LIMIT returns a false empty result whenever the
+    matches are past the first page, which reads as 'nothing happened'."""
+    from app.db.models import Interaction
+
+    client, keys = scoped_app
+    factory = client.app.state.session_factory
+
+    session = factory()
+    for i in range(30):
+        session.add(
+            Interaction(
+                request_id=f"tw_bulk_{i}",
+                timestamp=f"2026-08-20T{i:02d}:00:00Z",
+                event_type="input",
+                policy_id="policy-a",
+                policy_name="policy-a",
+                blocked=False,
+                transformed=False,
+                status="allowed",
+                latency_ms=1.0,
+                evidence_json={},
+            )
+        )
+    session.commit()
+    session.close()
+
+    # The one blocked row is the OLDEST, so it falls outside a naive first page.
+    rows = client.get("/v1/logs?action=blocked&limit=5", headers={"Authorization": f"Bearer {keys['admin']}"}).json()
+
+    assert rows == [] or all(r["blocked"] for r in rows)
+
+    session = factory()
+    try:
+        session.add(
+            Interaction(
+                request_id="tw_old_blocked",
+                timestamp="2020-01-01T00:00:00Z",
+                event_type="input",
+                policy_id="policy-a",
+                policy_name="policy-a",
+                blocked=True,
+                transformed=False,
+                status="blocked",
+                latency_ms=1.0,
+                evidence_json={},
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    rows = client.get("/v1/logs?action=blocked&limit=5", headers={"Authorization": f"Bearer {keys['admin']}"}).json()
+
+    assert any(r["request_id"] == "tw_old_blocked" for r in rows), "a match beyond the first page was filtered away"

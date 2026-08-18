@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from starlette.responses import Response
 
 from app.auth.dependencies import require_role
@@ -36,7 +36,7 @@ def _read_scope(request: Request) -> tuple[bool, str | None]:
 @router.get("/v1/logs", dependencies=[Depends(require_role("viewer"))])
 async def get_logs(
     request: Request,
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=100),
     detector: str | None = None,
     action: str | None = None,
     device_id: str | None = None,
@@ -47,7 +47,10 @@ async def get_logs(
         return []
 
     log = request.app.state.interaction_log
-    events = log.get_recent(limit=limit, policy_id=scope)
+    # Filters go to the query, not to the page. Filtering after ORDER BY LIMIT
+    # returns a false empty result whenever the matches are past the first
+    # page, which reads as "nothing happened".
+    events = log.get_recent(limit=limit, policy_id=scope, action=action, device_id=device_id)
 
     if detector:
         events = [
@@ -58,28 +61,26 @@ async def get_logs(
             and e["evidence"][detector].get("detected")
         ]
 
-    if action:
-        if action == "blocked":
-            events = [e for e in events if e.get("blocked")]
-        elif action == "transformed":
-            events = [e for e in events if e.get("transformed")]
-        elif action == "clean":
-            events = [e for e in events if not e.get("blocked") and not e.get("transformed")]
-
-    if device_id:
-        events = [e for e in events if e.get("device_id") == device_id]
-
     return events  # type: ignore[no-any-return]
 
 
 @router.delete("/v1/logs", status_code=204, dependencies=[Depends(require_role("admin"))])
 async def clear_logs(request: Request):
-    """Delete all interaction logs."""
+    """Delete interaction logs within the caller's scope.
+
+    Scoped like every other read. Unscoped, an administrator bound to policy A
+    destroyed policy B's audit trail — which is worse than disclosure, because
+    the evidence that it happened goes with it.
+    """
     from app.db.models import Interaction
 
+    bound = getattr(request.state, "policy_id", None)
     session = request.app.state.session_factory()
     try:
-        session.query(Interaction).delete()
+        query = session.query(Interaction)
+        if bound:
+            query = query.filter(Interaction.policy_id == bound)
+        query.delete(synchronize_session=False)
         session.commit()
     finally:
         session.close()

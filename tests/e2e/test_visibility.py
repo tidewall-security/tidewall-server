@@ -1,4 +1,5 @@
 """E2E tests for visibility page."""
+
 import pytest
 
 pytestmark = pytest.mark.e2e

@@ -1,9 +1,11 @@
 """Tests for access rule evaluation logic."""
+
 import pytest
 
 
 def test_no_rules_returns_continue():
     from app.services.rule_evaluator import evaluate_access_rules
+
     result = evaluate_access_rules(rules=[], metadata={})
     assert result["action"] == "continue"
     assert result["matched_rules"] == []
@@ -11,6 +13,7 @@ def test_no_rules_returns_continue():
 
 def test_simple_equals_match_blocks():
     from app.services.rule_evaluator import evaluate_access_rules
+
     rules = [
         {
             "name": "block deepseek",
@@ -27,6 +30,7 @@ def test_simple_equals_match_blocks():
 
 def test_equals_no_match_continues():
     from app.services.rule_evaluator import evaluate_access_rules
+
     rules = [
         {
             "name": "block deepseek",
@@ -41,6 +45,7 @@ def test_equals_no_match_continues():
 
 def test_not_equals_operator():
     from app.services.rule_evaluator import evaluate_access_rules
+
     rules = [
         {
             "name": "allow only gpt",
@@ -55,6 +60,7 @@ def test_not_equals_operator():
 
 def test_contains_operator():
     from app.services.rule_evaluator import evaluate_access_rules
+
     rules = [
         {
             "name": "block external users",
@@ -69,6 +75,7 @@ def test_contains_operator():
 
 def test_in_operator():
     from app.services.rule_evaluator import evaluate_access_rules
+
     rules = [
         {
             "name": "block banned models",
@@ -83,6 +90,7 @@ def test_in_operator():
 
 def test_sequential_evaluation_stops_on_block():
     from app.services.rule_evaluator import evaluate_access_rules
+
     rules = [
         {
             "name": "first rule blocks",
@@ -104,6 +112,7 @@ def test_sequential_evaluation_stops_on_block():
 
 def test_report_and_continue_collects_multiple():
     from app.services.rule_evaluator import evaluate_access_rules
+
     rules = [
         {
             "name": "report external",
@@ -118,15 +127,14 @@ def test_report_and_continue_collects_multiple():
             "else_action": "continue",
         },
     ]
-    result = evaluate_access_rules(
-        rules, metadata={"user_id": "user@external.com", "model": "deepseek"}
-    )
+    result = evaluate_access_rules(rules, metadata={"user_id": "user@external.com", "model": "deepseek"})
     assert result["action"] == "continue"  # report_and_continue doesn't stop
     assert len(result["matched_rules"]) == 2
 
 
 def test_missing_metadata_field_treated_as_no_match():
     from app.services.rule_evaluator import evaluate_access_rules
+
     rules = [
         {
             "name": "check model",

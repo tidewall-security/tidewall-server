@@ -1,4 +1,5 @@
 """Tests for KeyService — key CRUD and bootstrap."""
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -19,6 +20,17 @@ def db_session():
     session.commit()
     yield session
     session.close()
+
+
+def _policy(session, pid="p1"):
+    """A real policy: viewer keys are FK-bound to one."""
+    from app.db.models import Policy
+
+    existing = session.get(Policy, pid)
+    if existing is None:
+        session.add(Policy(id=pid, name=f"policy-{pid}", type="application"))
+        session.commit()
+    return pid
 
 
 def test_create_key(db_session):
@@ -54,7 +66,7 @@ def test_list_keys(db_session):
 
     svc = KeyService(db_session)
     svc.create_key(name="key1", role="admin")
-    svc.create_key(name="key2", role="viewer")
+    svc.create_key(name="key2", role="viewer", policy_id=_policy(db_session))
     keys = svc.list_keys()
     assert len(keys) == 2
 
@@ -72,7 +84,7 @@ def test_lookup_by_raw_key(db_session):
     from app.services.key_service import KeyService
 
     svc = KeyService(db_session)
-    raw_key, _ = svc.create_key(name="lookup-test", role="viewer")
+    raw_key, _ = svc.create_key(name="lookup-test", role="viewer", policy_id=_policy(db_session))
     found = svc.lookup_key(raw_key)
     assert found is not None
     assert found.name == "lookup-test"
@@ -128,3 +140,25 @@ def test_bootstrap_skips_when_keys_exist(db_session):
     svc.create_key(name="existing", role="admin")
     assert svc.install_bootstrap_admin_key("ak_should_be_ignored") is False
     assert svc.lookup_key("ak_should_be_ignored") is None
+
+
+def test_a_viewer_key_must_be_bound_to_a_policy(db_session):
+    """An unbound viewer authenticates successfully and sees nothing, because a
+    null binding is never widened to a wildcard on the read side. Refusing the
+    key is the honest failure; the alternative reads as a broken product."""
+    import pytest
+
+    from app.services.key_service import KeyService
+
+    with pytest.raises(ValueError, match="must be bound to a policy"):
+        KeyService(db_session).create_key(name="unbound", role="viewer")
+
+
+def test_an_admin_key_may_be_unbound(db_session):
+    """Admin is global for safe evidence; the dashboard has to work."""
+    from app.services.key_service import KeyService
+
+    raw, key = KeyService(db_session).create_key(name="global-admin", role="admin")
+
+    assert raw.startswith("ak_")
+    assert key.policy_id is None
