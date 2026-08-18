@@ -50,18 +50,9 @@ async def get_logs(
     # Filters go to the query, not to the page. Filtering after ORDER BY LIMIT
     # returns a false empty result whenever the matches are past the first
     # page, which reads as "nothing happened".
-    events = log.get_recent(limit=limit, policy_id=scope, action=action, device_id=device_id)
-
-    if detector:
-        events = [
-            e
-            for e in events
-            if isinstance(e.get("evidence"), dict)
-            and detector in e["evidence"]
-            and e["evidence"][detector].get("detected")
-        ]
-
-    return events  # type: ignore[no-any-return]
+    return log.get_recent(  # type: ignore[no-any-return]
+        limit=limit, policy_id=scope, action=action, device_id=device_id, detector=detector
+    )
 
 
 @router.delete("/v1/logs", status_code=204, dependencies=[Depends(require_role("admin"))])

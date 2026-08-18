@@ -62,7 +62,9 @@ def test_the_migration_removes_the_content_columns_and_the_rows(tmp_path):
                     "rid": str(uuid.uuid4()),
                     "summary": f"Blocked by access rule: {CANARY}",
                     "messages": json.dumps([{"role": "user", "content": f"my secret is {CANARY}"}]),
-                    "detectors": json.dumps({"pii": {"data": {"entities": [{"value": CANARY}]}}}),
+                    "detectors": json.dumps(
+                        {"confidential_and_pii_entity": {"data": {"entities": [{"value": CANARY}]}}}
+                    ),
                 },
             )
     finally:
@@ -203,7 +205,7 @@ def scoped_app():
                 transformed=False,
                 status="allowed",
                 latency_ms=1.0,
-                evidence_json={"pii": {"detected": True}},
+                evidence_json={"confidential_and_pii_entity": {"detected": True}},
             )
         )
     session.commit()
@@ -471,7 +473,12 @@ def test_the_writer_projects_evidence_rather_than_trusting_it():
         blocked=False,
         transformed=False,
         latency_ms=1.0,
-        evidence={"pii": {"detected": True, "data": {"entities": [{"type": "US_SSN", "value": CANARY}]}}},
+        evidence={
+            "confidential_and_pii_entity": {
+                "detected": True,
+                "data": {"entities": [{"type": "US_SSN", "value": CANARY}]},
+            }
+        },
     )
 
     session = SessionLocal()
@@ -481,7 +488,7 @@ def test_the_writer_projects_evidence_rather_than_trusting_it():
         session.close()
 
     assert CANARY not in json.dumps(stored), "the writer stored an unprojected payload"
-    assert stored["pii"]["entities"] == [{"type": "US_SSN", "count": 1}]
+    assert stored["confidential_and_pii_entity"]["entities"] == [{"type": "US_SSN", "count": 1}]
 
 
 def test_a_non_ip_source_is_dropped_not_stored():

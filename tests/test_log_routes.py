@@ -89,7 +89,7 @@ def _seed_interactions(session_factory):
             transformed=False,
             status="blocked",
             latency_ms=12.5,
-            evidence_json={"prompt_injection": {"detected": True}},
+            evidence_json={"malicious_prompt": {"detected": True}},
             app_id="chat-app",
             user_id="alice",
             model="gpt-4",
@@ -105,7 +105,7 @@ def _seed_interactions(session_factory):
             transformed=True,
             status="transformed",
             latency_ms=8.3,
-            evidence_json={"pii": {"detected": True}},
+            evidence_json={"confidential_and_pii_entity": {"detected": True}},
             app_id="chat-app",
             user_id="bob",
             model="gpt-4",
@@ -121,7 +121,7 @@ def _seed_interactions(session_factory):
             transformed=False,
             status="allowed",
             latency_ms=5.0,
-            evidence_json={"prompt_injection": {"detected": False}},
+            evidence_json={"malicious_prompt": {"detected": False}},
             app_id="search-app",
             user_id="alice",
             model="claude-3",
@@ -209,8 +209,8 @@ def test_get_stats_returns_aggregate_counts(setup):
     assert "avg_latency_ms" in data
     assert data["avg_latency_ms"] > 0
     # Detector counts: prompt_injection detected once, pii detected once
-    assert data["detector_counts"]["prompt_injection"] == 1
-    assert data["detector_counts"]["pii"] == 1
+    assert data["detector_counts"]["malicious_prompt"] == 1
+    assert data["detector_counts"]["confidential_and_pii_entity"] == 1
 
 
 # ------------------------------------------------------------------
