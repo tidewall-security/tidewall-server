@@ -66,6 +66,10 @@ async def create_prompt_list(body: CreatePromptListRequest, request: Request) ->
             description=body.description,
         )
         return _entry_to_dict(entry)
+    except PolicyValidationError as e:
+        # Uncaught, this surfaced as a 500: the request is well formed, the
+        # pattern is simply one the safe engine will not run.
+        raise HTTPException(status_code=400, detail=str(e)) from None
     finally:
         session.close()
 
@@ -79,6 +83,11 @@ async def update_prompt_list(entry_id: str, body: UpdatePromptListRequest, reque
         svc = PromptListService(session)
         entry = svc.update(entry_id, pattern=body.pattern, match_type=body.match_type, description=body.description)
         return _entry_to_dict(entry)
+    except PolicyValidationError as e:
+        # Must precede the ValueError arm: PolicyValidationError is a
+        # ValueError, so the broad catch below reported a rejected pattern as
+        # "entry not found" — which is both wrong and unactionable.
+        raise HTTPException(status_code=400, detail=str(e)) from None
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     finally:

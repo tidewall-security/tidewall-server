@@ -15,6 +15,7 @@ import logging
 from typing import Any
 
 from app.model_registry import INJECTION as _INJECTION_REF
+from app.services.prompt_list_service import PromptListConfigError
 
 from .base import BaseDetector, ComponentStatus, DetectorResult, DetectorStatus, FailureCode, SkipReason
 
@@ -301,6 +302,15 @@ class MaliciousPromptDetector(BaseDetector):
             try:
                 matched = self._prompt_list_svc.check_match(text, "malicious")
                 components["custom_malicious"] = ComponentStatus()
+            except PromptListConfigError:
+                # Configuration that cannot be enforced as written, not an
+                # operational failure. The distinction matters to whoever has to
+                # fix it: retrying will never help, the row must be corrected.
+                logger.error("Custom malicious list has unenforceable configuration", exc_info=True)
+                components["custom_malicious"] = ComponentStatus(
+                    status=DetectorStatus.FAILED, failure_code=FailureCode.CONFIG_INVALID
+                )
+                matched = False
             except Exception:
                 logger.warning("Custom malicious list check failed", exc_info=True)
                 components["custom_malicious"] = ComponentStatus(
@@ -317,6 +327,15 @@ class MaliciousPromptDetector(BaseDetector):
             try:
                 matched = self._prompt_list_svc.check_match(text, "benign")
                 components["custom_benign"] = ComponentStatus()
+            except PromptListConfigError:
+                # Configuration that cannot be enforced as written, not an
+                # operational failure. The distinction matters to whoever has to
+                # fix it: retrying will never help, the row must be corrected.
+                logger.error("Custom benign list has unenforceable configuration", exc_info=True)
+                components["custom_benign"] = ComponentStatus(
+                    status=DetectorStatus.FAILED, failure_code=FailureCode.CONFIG_INVALID
+                )
+                matched = False
             except Exception:
                 logger.warning("Custom benign list check failed", exc_info=True)
                 components["custom_benign"] = ComponentStatus(

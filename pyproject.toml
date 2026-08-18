@@ -46,7 +46,9 @@ dependencies = [
     # x86_64/aarch64, macOS and Windows on CPython 3.12/3.13, so this needs no
     # C++ toolchain — but a source build must be treated as a failure, not an
     # undocumented requirement.
-    "google-re2>=1.1",
+    # Bounded deliberately: an unbounded minimum lets a future incompatible
+    # release into a plain `pip install .` even while uv.lock stays pinned.
+    "google-re2>=1.1,<2",
     "spacy>=3.7",
     # Presidio's NER backbone — pinned to a wheel URL because spaCy models
     # are distributed as Python packages, not via PyPI. Without this, fresh

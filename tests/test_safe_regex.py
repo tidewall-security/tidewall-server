@@ -18,12 +18,25 @@ import time
 
 import pytest
 
+from app.db.engine import get_engine, get_session_factory
+from app.db.models import Base
 from app.services.safe_regex import (
     MAX_MATCHES_PER_SCAN,
     MAX_PATTERN_LENGTH,
+    MAX_PATTERNS,
     UnsafePatternError,
     compile_pattern,
 )
+
+
+@pytest.fixture
+def db_session():
+    engine = get_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = get_session_factory(engine)()
+    yield session
+    session.close()
+
 
 # Each of these is a classic catastrophic-backtracking pattern. RE2 compiles
 # them happily — ambiguous repetition is perfectly legal — and matches them in
@@ -175,3 +188,124 @@ def test_every_supplied_pattern_site_uses_the_safe_compiler():
             offenders.append(module)
 
     assert not offenders, f"stdlib regex calls on supplied patterns in: {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# The consumers, not just the compiler
+#
+# The tests above prove compile_pattern() is linear. They say nothing about
+# whether the detector and the prompt list actually use it, which is the part
+# that matters — the finding is about those two paths, not about the module.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("pattern,text", CATASTROPHIC)
+def test_the_custom_entity_detector_survives_a_catastrophic_pattern(pattern, text):
+    from app.detectors.custom_entity import CustomEntityDetector
+
+    detector = CustomEntityDetector({"enabled": True, "patterns": [pattern]})
+
+    started = time.monotonic()
+    detector.scan(text)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 2.0, f"custom_entity took {elapsed:.2f}s — it is not using the linear engine"
+
+
+@pytest.mark.parametrize("pattern,text", CATASTROPHIC)
+def test_the_prompt_list_survives_a_catastrophic_pattern(pattern, text, db_session):
+    from app.services.prompt_list_service import PromptListService
+
+    svc = PromptListService(db_session)
+    svc.create(list_type="malicious", pattern=pattern, match_type="regex")
+
+    started = time.monotonic()
+    svc.check_match(text, "malicious")
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 2.0, f"check_match took {elapsed:.2f}s — it is not using the linear engine"
+
+
+def test_the_match_cap_reports_failure_rather_than_a_partial_scan():
+    """A truncated result from a redactor is worse than an error.
+
+    `.?` matches once per character, so a long input blows the cap. Returning
+    the spans found so far would hand back text the caller believes was fully
+    sanitised.
+    """
+    from app.detectors.base import DetectorStatus, FailureCode
+    from app.detectors.custom_entity import CustomEntityDetector
+
+    detector = CustomEntityDetector({"enabled": True, "patterns": ["a?"]})
+
+    result = detector.scan("a" * (MAX_MATCHES_PER_SCAN * 2))
+
+    assert result.status is DetectorStatus.FAILED
+    assert result.failure_code is FailureCode.SCAN_FAILED
+    assert result.detected is False
+
+
+def test_a_scan_just_under_the_cap_still_succeeds():
+    """The cap must not fire on ordinary input."""
+    from app.detectors.base import DetectorStatus
+    from app.detectors.custom_entity import CustomEntityDetector
+
+    detector = CustomEntityDetector({"enabled": True, "patterns": ["x"]})
+
+    result = detector.scan("x" * (MAX_MATCHES_PER_SCAN - 1))
+
+    assert result.status is DetectorStatus.OK
+
+
+def test_too_many_patterns_makes_the_detector_unavailable_not_partial():
+    """Enforcing the first N would silently drop the rest of the policy."""
+    from app.detectors.base import DetectorStatus
+    from app.detectors.custom_entity import CustomEntityDetector
+
+    detector = CustomEntityDetector({"enabled": True, "patterns": [f"p{i}" for i in range(MAX_PATTERNS + 1)]})
+
+    assert not detector.available
+    assert detector.scan("p1").status is DetectorStatus.FAILED
+
+
+def test_an_unenforceable_stored_pattern_is_config_invalid_not_a_scan_failure(db_session):
+    """Retrying will never fix a bad row; the message should say so."""
+    from app.db.models import GlobalPromptList
+    from app.services.prompt_list_service import PromptListConfigError, PromptListService
+
+    # Bypass validation the way a direct database write would.
+    db_session.add(GlobalPromptList(list_type="malicious", pattern=r"(?=x)y", match_type="regex"))
+    db_session.commit()
+
+    with pytest.raises(PromptListConfigError):
+        PromptListService(db_session).check_match("anything", "malicious")
+
+
+@pytest.mark.parametrize(
+    "pattern,text",
+    [
+        ("i", "İ"),  # dotted capital I
+        ("ı", "I"),  # dotless lowercase i
+    ],
+)
+def test_the_known_unicode_case_folding_difference_is_pinned(pattern, text):
+    """RE2 case-insensitivity is not exactly `re.IGNORECASE`.
+
+    Pinned rather than fixed: it is the cost of the linear guarantee, and the
+    point is that nobody should claim exact compatibility. If a future engine
+    or option changes this, the change should be deliberate and visible.
+    """
+    import re
+
+    assert re.search(pattern, text, re.IGNORECASE) is not None
+    assert compile_pattern(pattern, case_insensitive=True).search(text) is None
+
+
+@pytest.mark.parametrize("pattern,text", [("k", "K"), ("s", "ſ")])
+def test_ordinary_unicode_folds_still_agree(pattern, text):
+    """The divergence is narrow — bound it, so the pinned test above is not read
+    as 'RE2 case folding is broadly different'."""
+    import re
+
+    assert re.search(pattern, text, re.IGNORECASE) is not None
+    assert compile_pattern(pattern, case_insensitive=True).search(text) is not None

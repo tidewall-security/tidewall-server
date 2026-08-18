@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.services.safe_regex import MAX_MATCHES_PER_SCAN, UnsafePatternError, compile_pattern
+from app.services.safe_regex import MAX_MATCHES_PER_SCAN, MAX_PATTERNS, UnsafePatternError, compile_pattern
 
 from .base import BaseDetector, DetectorResult, FailureCode
 
@@ -28,7 +28,21 @@ class CustomEntityDetector(BaseDetector):
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
         self._patterns: list[Any] = []
-        for raw in config.get("patterns", []) or []:
+        configured = config.get("patterns", []) or []
+        if len(configured) > MAX_PATTERNS:
+            # Write validation rejects this too, but a policy row can reach the
+            # database another way, and N patterns cost N passes over every
+            # scanned message however linear each one is. Refusing to enforce
+            # is correct here: silently matching the first MAX_PATTERNS would
+            # drop rules the administrator wrote, from a detector that redacts.
+            logger.error(
+                "custom_entity configured with %d patterns, over the %d limit",
+                len(configured),
+                MAX_PATTERNS,
+            )
+            self.mark_unavailable(FailureCode.CONFIG_INVALID)
+            configured = []
+        for raw in configured:
             try:
                 # The linear engine, never `re`: these patterns are supplied by
                 # an administrator and run against caller-supplied text, which

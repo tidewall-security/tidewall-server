@@ -25,6 +25,19 @@ Two consequences worth stating plainly:
   `patterns: []`), so this constrains only what an administrator writes from
   now on, and it is caught at write time with a 400 rather than at scan time.
 
+Case-insensitive matching is *close to* `re.IGNORECASE` but not identical, and
+the difference is a real behaviour change rather than a theoretical one. The
+Turkish dotted and dotless I do not fold:
+
+    pattern "i" against "\u0130"   re: matches    RE2: does not
+    pattern "\u0131" against "I"   re: matches    RE2: does not
+
+Other folds tested — Kelvin sign, long s, final sigma — agree. So a malicious
+prompt-list entry can stop matching a few Unicode I cases it used to catch.
+That is the price of the linear guarantee, not a reason to fall back; it is
+recorded here and pinned by a test so nobody claims exact `re.IGNORECASE`
+compatibility.
+
 Linear is not free: `N` patterns still cost `N × len(text)`, and a pattern like
 `.?` can produce a match per character. Hence the budgets below.
 """

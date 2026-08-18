@@ -7,10 +7,18 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.db.models import GlobalPromptList
-from app.services.policy_validation import validate_prompt_list_entry
-from app.services.safe_regex import UnsafePatternError, compile_pattern
+from app.services.policy_validation import PolicyValidationError, validate_prompt_list_entry
+from app.services.safe_regex import MAX_PATTERNS, UnsafePatternError, compile_pattern
 
 logger = logging.getLogger(__name__)
+
+
+class PromptListConfigError(ValueError):
+    """Stored prompt-list configuration that cannot be enforced as written.
+
+    Distinct from an operational failure: the calling detector records this as
+    CONFIG_INVALID, because the fix is to correct the row, not to retry.
+    """
 
 
 class PromptListService:
@@ -30,6 +38,16 @@ class PromptListService:
         # An invalid stored regex used to be skipped at match time, so a
         # malicious-list entry simply never matched. Reject it here.
         validate_prompt_list_entry(pattern, match_type, where="prompt_list.pattern")
+
+        # Per list type, because check_match scans one type at a time and every
+        # regex row is another pass over the text. A linear engine bounds the
+        # cost of each pattern, not the number of them.
+        existing = self._session.query(GlobalPromptList).filter_by(list_type=list_type).count()
+        if existing >= MAX_PATTERNS:
+            raise PolicyValidationError(
+                f"prompt_list: the {list_type} list already holds {existing} entries, "
+                f"at the {MAX_PATTERNS} limit. Each entry is scanned against every message."
+            )
         entry = GlobalPromptList(
             list_type=list_type,
             pattern=pattern,
@@ -93,6 +111,13 @@ class PromptListService:
         Matching is case-insensitive for all match types.
         """
         entries = self.list_entries(list_type=list_type)
+        if len(entries) > MAX_PATTERNS:
+            # Create-time counting is not a hard invariant — two concurrent
+            # inserts can both pass it, and rows can be written directly. The
+            # scan path has to fail closed rather than do unbounded work.
+            raise PromptListConfigError(
+                f"{list_type} prompt list holds {len(entries)} entries, over the {MAX_PATTERNS} limit"
+            )
         text_lower = text.lower()
 
         for entry in entries:
@@ -116,7 +141,12 @@ class PromptListService:
                     # Skipping meant a malicious-list entry simply never
                     # matched. Raise so the calling detector records a failure
                     # instead of reporting a confident "no match".
+                    #
+                    # A distinct type, not a bare ValueError: this is invalid
+                    # *configuration*, and the detector must record it as
+                    # CONFIG_INVALID rather than as an operational scan failure.
+                    # The two say different things to whoever has to fix it.
                     logger.error("Invalid regex in stored prompt list entry")
-                    raise ValueError("invalid regex in prompt list") from exc
+                    raise PromptListConfigError("invalid regex in prompt list") from exc
 
         return False
