@@ -112,11 +112,13 @@ class ExportService:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(url, json=event, headers=headers)
             if resp.status_code >= 400:
+                # Deliberately not the response body: a receiver can echo
+                # back what we posted, which puts the exported event into our
+                # own logs by a route nobody would think to audit.
                 logger.warning(
-                    "Webhook '%s' returned %d: %s",
+                    "Webhook '%s' returned %d",
                     target.name,
                     resp.status_code,
-                    resp.text[:200],
                 )
             else:
                 logger.debug("Exported to webhook '%s' (status=%d)", target.name, resp.status_code)

@@ -34,6 +34,7 @@ from app.auth.dependencies import require_role
 from app.config import OnDetectorFailure
 from app.detectors.base import FailureCode
 from app.models import GuardRequest, GuardResponse, GuardResult
+from app.services.safe_export_evidence import project_detectors
 from app.utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
@@ -372,6 +373,9 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             transformed=scan_result.transformed,
             guard_output=guard_output,
             policy=policy_name,
+            # NOT projected here: the public response is step 3, which needs
+            # its own contract decision and its own tests. Mixing it into the
+            # export change would make one review cover two boundaries.
             detectors=scan_result.detectors,
             access_rules={
                 r["name"]: {"matched": r["matched"], "action": r["action"]}
@@ -426,7 +430,7 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             summary=summary,
             policy_name=policy_name,
             event_type=event_type,
-            detectors=scan_result.detectors,
+            detectors=project_detectors(scan_result.detectors),
             user_id=body.user_id,
             app_id=body.app_id,
             model=body.model,
