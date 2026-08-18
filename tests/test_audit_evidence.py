@@ -497,12 +497,20 @@ CANARY = "CANARY-9f3a2b7c-secret-value"
 def _reachable_from(exc: BaseException) -> list[object]:
     """Everything reachable from the exception's own frames.
 
-    Two earlier versions of this were too narrow. The first collected only
-    locals that were lists, so it missed the grouping dict entirely. The second
-    detected only ExactMatch/MatchGroup, so it passed while `key` held the
-    planted value inside a tuple. This one is cycle-safe, unbounded in depth,
-    walks object attributes and dataclasses, and looks for the value itself as
-    well as the match types.
+    Three earlier versions were too narrow. The first collected only locals
+    that were lists, so it missed the grouping dict. The second detected only
+    ExactMatch/MatchGroup, so it passed while `key` held the planted value
+    inside a tuple. The third exempted batches as "live state" though a batch
+    is closed by the time these failures propagate.
+
+    What this covers: dicts, lists, tuples, sets, frozensets and object
+    __dict__, cycle-safe and unbounded in depth, looking for the planted string
+    as well as the match types, across tb_next and chained context/cause.
+
+    What it does NOT cover, stated rather than implied: __slots__ objects
+    without __dict__, closure cells, generator frames, weakrefs, and C-level
+    references. It is a regression guard for the ordinary shapes this module
+    creates, not proof of unreachability.
 
     Scope is deliberately module frames — tb_next plus chained context/cause.
     Caller frames (f_back) hold caller state this module cannot sanitise, and
@@ -568,6 +576,10 @@ def _reachable_from(exc: BaseException) -> list[object]:
         pytest.param("too_many_occurrences", "capture.too_many_occurrences", id="too-many-occurrences"),
         pytest.param("overflow", "capture.serialized_too_large", id="serialized-overflow"),
         pytest.param("commit_smuggle", "match.span.stale", id="commit-revalidation"),
+        pytest.param("add_unregistered", "source.unregistered", id="add-unregistered"),
+        pytest.param("add_mismatch", "match.detector.mismatch", id="add-detector-mismatch"),
+        pytest.param("commit_mismatch", "match.detector.mismatch", id="commit-detector-mismatch"),
+        pytest.param("conflicting_source", "source.conflicting_registration", id="conflicting-registration"),
     ],
 )
 def test_no_failure_path_leaves_the_content_in_this_modules_frames(build, expected):
@@ -613,6 +625,25 @@ def test_no_failure_path_leaves_the_content_in_this_modules_frames(build, expect
             _capture(collector, _m(big, 0, len(big), source=src))
         with pytest.raises(EvidenceError) as exc:
             collector.finalize()
+    elif build == "add_unregistered":
+        collector.register_source(MSG, CANARY)
+        other = SourceRef(kind="tool", index=7, field="name")
+        with pytest.raises(EvidenceError) as exc:
+            _capture(collector, _m(CANARY, 0, len(CANARY), source=other))
+    elif build == "add_mismatch":
+        collector.register_source(MSG, CANARY)
+        with pytest.raises(EvidenceError) as exc:
+            with collector.capture("pii") as batch:
+                batch.add(_m(CANARY, 0, len(CANARY), detector="secrets"))
+    elif build == "commit_mismatch":
+        collector.register_source(MSG, CANARY)
+        with pytest.raises(EvidenceError) as exc:
+            with collector.capture("pii") as batch:
+                batch._staged.append(_m(CANARY, 0, len(CANARY), detector="secrets"))
+    elif build == "conflicting_source":
+        collector.register_source(MSG, CANARY)
+        with pytest.raises(EvidenceError) as exc:
+            collector.register_source(MSG, f"different {CANARY}")
     else:  # commit_smuggle
         collector.register_source(MSG, f"x {CANARY} y")
         with pytest.raises(EvidenceError) as exc:

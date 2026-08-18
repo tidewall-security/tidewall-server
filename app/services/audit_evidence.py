@@ -266,13 +266,6 @@ def validation_error(match: ExactMatch, original: str) -> str | None:
     return None
 
 
-def validate_match(match: ExactMatch, original: str) -> None:
-    """Raising wrapper, for callers with nothing sensitive to release."""
-    code = validation_error(match, original)
-    if code is not None:
-        raise EvidenceError(code)
-
-
 def _sort_key(group: MatchGroup) -> tuple:
     """Total order over everything that distinguishes a group.
 
@@ -319,7 +312,10 @@ class MatchCollector:
         existing = self._originals.get(source)
         if existing is not None and existing != original:
             # Overwriting would rebind already-accepted matches to text they
-            # were never checked against.
+            # were never checked against. Both originals are bound in this
+            # frame, so release them before raising.
+            existing = None
+            del original
             raise EvidenceError("source.conflicting_registration")
         self._originals[source] = original
 
@@ -357,23 +353,29 @@ class MatchCollector:
             # again rather than trust what was true on entry.
             if self._finalized:
                 raise EvidenceError("collector.finalized")
+            commit_failure: str | None = None
             for match in staged._staged:
-                if match.detector != detector:
-                    raise EvidenceError("match.detector.mismatch")
                 # Re-validate rather than trust that add() saw every match.
                 # Python offers no real privacy for _staged, so the commit
                 # cannot assume the list only contains what add() put there.
+                if match.detector != detector:
+                    commit_failure = "match.detector.mismatch"
+                    break
                 original = self._originals.get(match.source)
                 if original is None:
-                    raise EvidenceError("source.unregistered")
+                    commit_failure = "source.unregistered"
+                    break
                 commit_failure = validation_error(match, original)
                 original = None
                 if commit_failure is not None:
-                    # `match` is this frame's loop variable; release it too.
-                    del match
-                    raise EvidenceError(commit_failure)
-            if len(self._matches) + len(staged._staged) > MAX_MATCHES_COLLECTED:
-                raise EvidenceError("collector.too_many_matches")
+                    break
+            if commit_failure is None and len(self._matches) + len(staged._staged) > MAX_MATCHES_COLLECTED:
+                commit_failure = "collector.too_many_matches"
+            if commit_failure is not None:
+                # `match` is this frame's loop variable and outlives the loop.
+                match = None  # type: ignore[assignment]
+                del match
+                raise EvidenceError(commit_failure)
             self._matches.extend(staged._staged)
         finally:
             # Clear the staged list on every path. A commit-time failure
@@ -499,12 +501,24 @@ class _DetectorCapture:
         # commit had already run, so they were silently never stored.
         if self._closed:
             raise EvidenceError("capture.closed")
+        failure: str | None = None
         if match.detector != self.detector:
-            raise EvidenceError("match.detector.mismatch")
-        original = self._collector._originals.get(match.source)
-        if original is None:
-            raise EvidenceError("source.unregistered")
+            failure = "match.detector.mismatch"
+        original = self._collector._originals.get(match.source) if failure is None else None
+        if failure is None and original is None:
+            failure = "source.unregistered"
+        if failure is None and len(self._staged) >= MAX_MATCHES_COLLECTED:
+            failure = "collector.too_many_matches"
+        if failure is not None:
+            # Every branch that raises here holds `match` as an argument, so
+            # they all have to release before raising, not just the validation
+            # one. A frame cannot clear a callee's locals, and this frame is
+            # what the traceback keeps.
+            original = None
+            del match
+            raise EvidenceError(failure)
 
+        assert original is not None  # narrowed by the guard above
         failure = validation_error(match, original)
         if failure is not None:
             # Release before raising: this frame is what the traceback keeps,
@@ -513,7 +527,4 @@ class _DetectorCapture:
             del match
             raise EvidenceError(failure)
         original = None
-
-        if len(self._staged) >= MAX_MATCHES_COLLECTED:
-            raise EvidenceError("collector.too_many_matches")
         self._staged.append(match)
