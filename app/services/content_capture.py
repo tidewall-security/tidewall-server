@@ -159,9 +159,15 @@ def is_expired(content: InteractionContent, *, now: datetime | None = None) -> b
     """Whether this content is past its expiry regardless of whether the purge
     has run.
 
-    There is no scheduler, so a read must not serve content that should already
-    be gone just because nothing has deleted it yet. Expiry is a promise about
-    what will be disclosed, not about when a row is removed.
+    The purge is scheduled, but it is best effort: it runs on an interval, and
+    startup continues if the scheduler cannot start at all. So a read must not
+    serve content that should already be gone merely because nothing has
+    deleted it yet. Expiry is a promise about what will be disclosed, not about
+    when a row is removed.
+
+    (This said "There is no scheduler" until step 5 added one, and stayed wrong
+    afterwards. The conclusion was right for the wrong reason: the guarantee
+    does not come from the purge's promptness either way.)
     """
     if content.expires_at is None:
         return False
