@@ -34,6 +34,7 @@ from typing import Any
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -358,6 +359,161 @@ class ExportTarget(Base):
     events: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    # Content export is off unless a destination was deliberately marked for it.
+    #
+    # NOT an independent consent, and calling it one would be theatre: the same
+    # admin can create the target, set this, and hold the export grant. It is an
+    # explicit, default-off safety interlock -- content cannot leave to a
+    # destination nobody marked for it. A real second consent would need a
+    # separate approver, a durable approval with expiry and revocation, and
+    # separation of duties; that is a product workflow, not a column, and is
+    # not in this step.
+    allow_content_export: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Scope, because a global boolean silently approves every policy and both
+    # projections. A target approved for one policy is not approved for another,
+    # and one approved for matches is not approved for full.
+    content_export_policy_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    content_export_views: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+
+
+class ContentExportAttempt(Base):
+    """One attempt to send one interaction's content to one destination.
+
+    Written as ``pending`` and committed BEFORE any I/O, so a crash is visible
+    as pending rather than misrecorded. An ``exported``-then-``export_failed``
+    pair would leave a misleading success row and a correlation that only works
+    if the process survives to write the second one -- which is exactly the case
+    that matters.
+
+    Nothing here retries. Retrying an export whose delivery is unknown is how
+    one disclosure becomes two.
+    """
+
+    __tablename__ = "content_export_attempts"
+
+    attempt_id: Mapped[str] = mapped_column(String, primary_key=True)
+    interaction_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    policy_id: Mapped[str] = mapped_column(String, nullable=False)
+    target_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    api_key_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    actor_role: Mapped[str | None] = mapped_column(String, nullable=True)
+    view: Mapped[str] = mapped_column(String, nullable=False)
+    grant_used: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    state: Mapped[str] = mapped_column(String, nullable=False)
+    # Null for anything that never got a status -- a refused connection, a DNS
+    # failure -- and an HTTP status otherwise.
+    transport_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # A size is a weak signal but a real one, and reconciling a transfer without
+    # it is guesswork. The only measurement of the content kept anywhere.
+    payload_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # The digest, never the key: a caller-supplied correlator can be
+    # credential-like. Scoped to the credential, because global uniqueness would
+    # let one admin's key collide with or probe another's.
+    idempotency_key_digest: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Everything that fixes the bytes or the authority. Target CONFIG is
+    # deliberately absent: replay means the original attempt, and rebuilding a
+    # result under current configuration would report something that never
+    # happened.
+    fingerprint: Mapped[str] = mapped_column(String, nullable=False)
+
+    # Where it went. target_id alone is not evidence: a URL can be edited or the
+    # target deleted, and then the row points at a destination that no longer
+    # describes the disclosure.
+    destination_host: Mapped[str] = mapped_column(String, nullable=False)
+    destination_port: Mapped[int] = mapped_column(Integer, nullable=False)
+    # The validated set, which is what records where this could have gone. One
+    # eventual peer does not.
+    destination_addrs: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    # Known only after I/O, and not at all when every pinned address failed.
+    destination_addr: Mapped[str | None] = mapped_column(String, nullable=True)
+    target_config_digest: Mapped[str] = mapped_column(String, nullable=False)
+
+    # The process that reserved it. The sweep abandons a pending row only when
+    # this is not the running process's, which the database lock makes sound.
+    boot_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("api_key_id", "idempotency_key_digest", name="uq_content_export_idempotency"),
+        CheckConstraint(
+            "state IN ('pending','succeeded','failed','indeterminate','abandoned_indeterminate')",
+            name="ck_content_export_state",
+        ),
+        CheckConstraint(
+            "(state = 'pending' AND settled_at IS NULL AND transport_status IS NULL) "
+            "OR (state != 'pending' AND settled_at IS NOT NULL)",
+            name="ck_content_export_settlement",
+        ),
+        CheckConstraint(
+            "transport_status IS NULL OR (transport_status >= 100 AND transport_status <= 599)",
+            name="ck_content_export_status_range",
+        ),
+    )
+
+
+class ContentExportReconciliation(Base):
+    """An operator's correction, appended.
+
+    The attempt's own state is the original observation and is never edited. The
+    EFFECTIVE state is the reconciliation with the highest id -- by monotonic
+    integer, not timestamp, because two records written in the same clock tick
+    would otherwise be unordered.
+    """
+
+    __tablename__ = "content_export_reconciliations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    attempt_id: Mapped[str] = mapped_column(
+        String, ForeignKey("content_export_attempts.attempt_id"), nullable=False, index=True
+    )
+    from_state: Mapped[str] = mapped_column(String, nullable=False)
+    to_state: Mapped[str] = mapped_column(String, nullable=False)
+    # Points at something outside this system -- a receiver's log, a ticket.
+    # Never content, and bounded.
+    evidence: Mapped[str] = mapped_column(String, nullable=False)
+    reconciled_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    reconciled_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "to_state IN ('succeeded','failed','indeterminate')",
+            name="ck_content_export_reconciliation_to",
+        ),
+    )
+
+
+class ContentExportNote(Base):
+    """What happened on a path that does not own the attempt row.
+
+    Best effort: a note is evidence ABOUT an export, not a precondition of one,
+    so failing to write one degrades to a log and never changes the response.
+    That is the opposite direction from the attempt row, deliberately -- the row
+    governs whether content leaves, and a note only describes what happened
+    after it already did.
+    """
+
+    __tablename__ = "content_export_notes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    attempt_id: Mapped[str] = mapped_column(
+        String, ForeignKey("content_export_attempts.attempt_id"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    # A status, a phase, an exception type. Never content, a response body, or a
+    # URL -- a query string can carry a secret.
+    detail: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('settlement_lost','body_read_failed','settlement_commit_failed','cleanup_failed')",
+            name="ck_content_export_note_kind",
+        ),
+    )
 
 
 class ModelIntent(Base):

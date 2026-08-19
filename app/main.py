@@ -16,6 +16,7 @@ services are unused).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import pathlib
@@ -82,7 +83,34 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # service construction, so an invalid configuration created and migrated a
     # database and only then refused to serve — a rejected config should not
     # leave persistent state behind.
-    if not settings.BOOTSTRAP_KEY and not _has_existing_api_keys(settings.DB_URL):
+    # Before ANY database access, including the read-only probe below and the
+    # Alembic migration further down. A migration running before the lock is a
+    # second writer by another name, and a read taken while another process
+    # writes is exactly what the lock exists to order.
+    #
+    # Acquired here rather than at import so a forked worker takes its own: a
+    # lock inherited from a pre-fork parent is shared through the same open file
+    # description and excludes nothing.
+    #
+    # It does create a lockfile beside the database even for a configuration
+    # that is about to be refused. That is one empty file rather than the
+    # migrated, seeded database the refusal below exists to avoid.
+    from app.services.process_lock import ProcessLock
+
+    process_lock = ProcessLock()
+    process_lock.acquire(settings.DB_URL)
+    app.state.process_lock = process_lock
+    app.state.boot_id = process_lock.boot_id
+
+    try:
+        refuse = not settings.BOOTSTRAP_KEY and not _has_existing_api_keys(settings.DB_URL)
+    except Exception:
+        process_lock.release()
+        raise
+    if refuse:
+        # Released before raising: a refused startup must not leave the database
+        # locked against the next attempt.
+        process_lock.release()
         # Checked before any database work: a configuration that will be
         # refused must not leave a migrated, seeded database behind.
         raise RuntimeError(
@@ -97,6 +125,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.db.seed import seed_from_yaml
 
     os.makedirs(_PROJECT_ROOT / "data", exist_ok=True)
+
     engine = get_engine(settings.DB_URL)
     SessionLocal = get_session_factory(engine)
 
@@ -170,7 +199,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     scheduler = None
     try:
-        from app.services.scheduler import Scheduler, retention_job
+        from app.services.scheduler import Scheduler, export_abandon_job, retention_job
 
         # Assigned before start(), so a partial start is still stoppable. If
         # start() creates one task and then fails, dropping the reference would
@@ -178,7 +207,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # background work — and decides whether to dispose the engine on that
         # belief.
         scheduler = Scheduler()
-        scheduler.start([retention_job(SessionLocal, scheduler=scheduler)])
+        scheduler.start(
+            [
+                retention_job(SessionLocal, scheduler=scheduler),
+                # Resolves export attempts left pending by a process that is
+                # gone. It never sends anything.
+                export_abandon_job(SessionLocal, boot_id=process_lock.boot_id, scheduler=scheduler),
+            ]
+        )
     except Exception:
         report(
             logging.getLogger(__name__),
@@ -192,6 +228,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Deliberately not reset to None: if start() got far enough to create a
         # task, that task is running and shutdown must still stop and drain it.
     app.state.scheduler = scheduler
+    # Settlement tasks this process started. A bare create_task is owned by
+    # nothing: the handler holds a strong reference only while it runs, and at
+    # shutdown the loop can close with one still in flight.
+    app.state.export_settlements = set()
 
     logging.info("Tidewall ready")
 
@@ -201,47 +241,87 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # In a finally: an exception thrown into the lifespan context would
         # otherwise skip both, leaving the scheduler running against a disposed
         # engine.
-        # Stopping it is capture-only work too, so it cannot decide whether
-        # shutdown completes. Unguarded, an exception here escaped lifespan
-        # teardown and skipped engine.dispose() entirely.
+        # The order the lock's meaning depends on:
+        #   1. stop the scheduler
+        #   2. drain the settlement-task set
+        #   3. drain_workers()
+        #   4. release the lock
+        #   5. dispose the engine
         #
-        # A raising stop() means we do not know whether a worker still owns a
-        # session, so it counts as not drained: the same conservative answer
-        # stop() gives when it times out.
-        if scheduler is None:
-            drained = True
-        else:
+        # Two conditions gate 4 and 5, and they answer different questions.
+        #
+        # stop() must return WITHOUT RAISING: that is what establishes no
+        # scheduler task can still call run_in_worker. If it raises, tasks may
+        # be live, and a worker registered after drain_workers() observed zero
+        # would be missed entirely.
+        #
+        # Its return VALUE is advisory. It reports whether its own drain
+        # completed and can say False for a worker drain_workers() then drains
+        # successfully -- two answers to one question -- so it gates nothing. It
+        # is logged rather than discarded, because a stop() failure unrelated to
+        # live workers still deserves attention.
+        quiesced = scheduler is None
+        if scheduler is not None:
             try:
-                drained = await scheduler.stop()
+                if not await scheduler.stop():
+                    report(
+                        logging.getLogger(__name__),
+                        "warning",
+                        "scheduler stop reported work still running; re-draining before release",
+                    )
+                quiesced = True
             except Exception:
                 report(
                     logging.getLogger(__name__),
                     "error",
-                    "retention scheduler did not stop cleanly; assuming background work is still running",
+                    "scheduler stop raised, so producers may still be live; " "the database lock will not be released",
                     exc_info=True,
                 )
-                drained = False
-        if drained:
+
+        # 2. Settlements this process started, which may not have reached a
+        #    worker yet. Awaited rather than cancelled: cancelling a coroutine
+        #    that awaits a thread detaches the thread.
+        settlements = list(getattr(app.state, "export_settlements", ()) or ())
+        if settlements:
+            await asyncio.gather(*settlements, return_exceptions=True)
+
+        # 3. The single predicate for "nothing is still writing". Separate from
+        #    the drain stop() performs, which ran before step 2.
+        #
+        #    Not INDEPENDENTLY killable, and that is worth saying rather than
+        #    implying otherwise. For THIS scenario it is redundant with the
+        #    worker drain inside stop(): removing this call alone leaves every
+        #    test green. (The reverse is not true -- stop()'s own drain has a
+        #    direct test, test_stop_waits_for_a_tracked_worker_past_the_task_
+        #    timeout, which removing it fails.) Removing BOTH fails
+        #    test_shutdown_waits_for_a_settlement_thread_whose_task_was_cancelled,
+        #    which is the case they exist for -- a worker DETACHED by a
+        #    cancelled await, where the task is done and only the thread is
+        #    still writing. Step 2 cannot see that: the task it awaits has
+        #    already completed as cancelled.
+        #
+        #    Step 2 is not redundant with either of them, and has its own test
+        #    (test_shutdown_waits_for_a_settlement_that_has_not_reached_a_worker):
+        #    before a settlement takes its first step no worker is registered,
+        #    so both drains correctly report idle while the work is pending.
+        workers_drained = True
+        if scheduler is not None:
+            workers_drained = await scheduler.drain_workers()
+
+        if quiesced and workers_drained:
+            # Released only now. Closing it earlier would let a replacement
+            # instance start while this process was still writing.
+            process_lock.release()
             engine.dispose()
         else:
-            # Withheld because the pool class decides whether this is safe, and
-            # only one of the two is. Measured against this codebase's own
-            # get_engine(): a file-backed URL gets a QueuePool, where dispose()
-            # closes checked-in connections only — a worker holding a
-            # checked-out one keeps working, and the engine stays usable
-            # through its replacement pool. An in-memory URL gets a StaticPool,
-            # whose single shared connection dispose() closes outright; a
-            # worker still using it then fails with a ProgrammingError.
-            #
-            # So for the production configuration disposing here would be
-            # harmless, and an earlier version of this comment claimed the
-            # general case wrongly. Withholding it costs an idle pool on a path
-            # where the process is about to exit anyway, and is correct for
-            # both.
+            # Holding the lock keeps a replacement from starting while a thread
+            # may still be writing, which is the whole point of holding it.
+            # Leaking both on a shutdown path is the lesser fault.
             report(
                 logging.getLogger(__name__),
                 "error",
-                "not disposing the database engine: background work is still running",
+                "not releasing the database lock or disposing the engine: "
+                f"quiesced={quiesced} workers_drained={workers_drained}",
             )
 
 
@@ -288,6 +368,8 @@ def create_app() -> FastAPI:
     from app.routes import (
         activity,
         content,
+        content_export,
+        content_export_admin,
         dashboard,
         devices,
         guard,
@@ -304,6 +386,8 @@ def create_app() -> FastAPI:
     app.include_router(unredact.router)
     app.include_router(logs.router)
     app.include_router(content.router)
+    app.include_router(content_export.router)
+    app.include_router(content_export_admin.router)
     app.include_router(me.router)
     app.include_router(dashboard.router)
     app.include_router(policies.router)

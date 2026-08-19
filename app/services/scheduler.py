@@ -12,10 +12,17 @@ lifespan, not a job queue: there is no durable state, no retries across
 restarts, and no distribution. That matches what the work actually is —
 idempotent housekeeping that is harmless to skip and harmless to repeat.
 
-**Single process only.** The launcher starts one uvicorn worker. With several,
-every worker would run its own copy; the jobs here are idempotent so that is
-survivable rather than correct, and a real deployment story needs either leader
-election or an external scheduler. Said here rather than discovered later.
+**Single process only**, and now enforced rather than assumed. The launcher
+starts one uvicorn worker, and since the process lock landed a second worker
+does not run its own copy of these jobs -- it fails to start, because the lock
+is acquired per worker after the fork and the second acquisition is refused.
+Before that, several workers each running every job was merely survivable on
+the grounds that the jobs are idempotent.
+
+That makes leader election unnecessary for this deployment shape rather than
+merely deferred. A deployment that genuinely needs several processes against
+one database needs a different storage story first; see
+``app/services/process_lock.py``.
 """
 
 from __future__ import annotations
@@ -75,11 +82,17 @@ class Scheduler:
     async def run_in_worker(self, fn: Callable[[], object]) -> object:
         """Run blocking work off the loop, tracked so shutdown can wait for it.
 
-        The bookkeeping happens *inside* the thread. A ``finally`` around the
-        await would run when the awaiting task is cancelled — which is exactly
-        the moment the thread is still running — so the counter would drop to
-        zero while a worker still held a session, and shutdown would stop
-        waiting for the thing it is meant to wait for.
+        Registration happens on the event loop *before* dispatch, and
+        deregistration *inside* the thread. Both halves matter, and an earlier
+        version of this docstring claimed both happened in the thread:
+
+        - registering before dispatch leaves no window in which the work exists
+          but is uncounted;
+        - decrementing inside the thread is what stops a cancelled await
+          dropping the count while the thread runs on. A ``finally`` around the
+          await would fire at exactly the moment the worker is still running,
+          so the counter would reach zero while a session was still held and
+          shutdown would stop waiting for the thing it is meant to wait for.
         """
         self._worker_started()
 
@@ -90,6 +103,20 @@ class Scheduler:
                 self._worker_finished()
 
         return await asyncio.to_thread(_tracked)
+
+    def drain_workers_sync(self, timeout_seconds: float = 30.0) -> bool:
+        """Block until no worker threads remain. Returns whether they drained.
+
+        Separate from :meth:`stop`, which drains as part of stopping and
+        therefore runs too early: a task that had not reached
+        :meth:`run_in_worker` when ``stop()`` completed registers a worker
+        afterwards, and nothing would wait for it.
+        """
+        return self._workers_idle.wait(timeout_seconds)
+
+    async def drain_workers(self, timeout_seconds: float = 30.0) -> bool:
+        """The awaitable form. The wait itself runs off the loop."""
+        return await asyncio.to_thread(self.drain_workers_sync, timeout_seconds)
 
     def start(self, jobs: list[Job]) -> None:
         """Create the job tasks.
@@ -172,6 +199,46 @@ class Scheduler:
                 return False
         report(logger, "info", "Scheduler stopped")
         return True
+
+
+def export_abandon_job(
+    session_factory: Callable[[], object],
+    *,
+    boot_id: str,
+    interval_seconds: float = 300.0,
+    scheduler: Scheduler | None = None,
+) -> Job:
+    """Terminate export attempts left pending by a process that is gone.
+
+    **Never sends anything.** An attempt whose delivery is unknown must not be
+    retried: that is how one disclosure becomes two.
+
+    A pending row from the CURRENT boot is left alone however old. It is owned
+    by a live coroutine that will settle it, or it is genuinely stuck -- and a
+    stuck row surfaces through the derived pending-health signal and resolves on
+    the next restart. Age has no role here, because no wall-clock bound on a
+    synchronous SQLite operation exists to build one on.
+    """
+
+    async def _run() -> None:
+        from app.services.content_export import abandon_foreign_pending
+
+        def _sweep() -> int:
+            with session_factory() as session:  # type: ignore[attr-defined]
+                count = abandon_foreign_pending(session, boot_id=boot_id)
+                session.commit()
+                return count
+
+        abandoned = await (scheduler.run_in_worker(_sweep) if scheduler else asyncio.to_thread(_sweep))
+        if abandoned:
+            report(
+                logger,
+                "warning",
+                f"abandoned {abandoned} export attempt(s) left pending by a previous process; "
+                "their delivery is unknown and nothing has been retried",
+            )
+
+    return Job(name="content-export-abandon", interval_seconds=interval_seconds, run=_run)
 
 
 def retention_job(
