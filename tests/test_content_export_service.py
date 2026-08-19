@@ -95,21 +95,15 @@ def test_the_key_itself_is_never_stored(factory):
     with factory() as s:
         row = s.query(ContentExportAttempt).one()
         assert row.idempotency_key_digest != "super-secret"
-        assert "super-secret" not in str(
-            {c.name: getattr(row, c.name) for c in row.__table__.columns}
-        )
+        assert "super-secret" not in str({c.name: getattr(row, c.name) for c in row.__table__.columns})
 
 
 def test_settlement_is_a_compare_and_set(factory):
     attempt_id, _ = svc.reserve(factory, attempt=_attempt())
-    assert svc.settle(
-        factory, attempt_id=attempt_id, state="succeeded", transport_status=204, peer="1.2.3.4"
-    ) is True
+    assert svc.settle(factory, attempt_id=attempt_id, state="succeeded", transport_status=204, peer="1.2.3.4") is True
     # A row already settled is not overwritten: the caller answers 502 with the
     # stored state rather than 202.
-    assert svc.settle(
-        factory, attempt_id=attempt_id, state="failed", transport_status=500, peer=None
-    ) is False
+    assert svc.settle(factory, attempt_id=attempt_id, state="failed", transport_status=500, peer=None) is False
     with factory() as s:
         row = s.get(ContentExportAttempt, attempt_id)
         assert row.state == "succeeded"
@@ -122,9 +116,7 @@ def test_only_foreign_boot_ids_are_abandoned(factory):
     """A row from the CURRENT boot is owned by a live coroutine and is never
     touched, however old: age has no role in this protocol."""
     mine, _ = svc.reserve(factory, attempt=_attempt(boot_id="boot-current"))
-    theirs, _ = svc.reserve(
-        factory, attempt=_attempt(boot_id="boot-old", idempotency_key_digest="d2")
-    )
+    theirs, _ = svc.reserve(factory, attempt=_attempt(boot_id="boot-old", idempotency_key_digest="d2"))
     with factory() as s:
         assert svc.abandon_foreign_pending(s, boot_id="boot-current") == 1
         s.commit()

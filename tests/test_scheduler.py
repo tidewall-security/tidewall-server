@@ -605,3 +605,76 @@ def test_an_advisory_false_from_stop_still_releases_the_lock(tmp_path):
 
     assert not lock.held, "an advisory False held the lock"
     assert disposed, "an advisory False withheld engine disposal"
+
+
+def test_shutdown_waits_for_a_settlement_that_starts_after_stop(tmp_path):
+    """The gap Task 3 deferred, closed now that settlements exist.
+
+    stop() drains workers as part of stopping and runs first. A settlement task
+    that had not yet reached run_in_worker when stop() completed registers a
+    worker afterwards -- and without a second drain, nothing waits for it.
+
+    The assertion is on ORDER, not completion: a test that merely checks the
+    worker eventually finished passes whether or not shutdown waited, because
+    the worker finishes either way. An earlier version did exactly that and
+    survived removing both drains.
+    """
+    import asyncio
+    import os
+    import threading
+    from unittest.mock import patch
+
+    from app.main import create_app, lifespan
+
+    db = tmp_path / "settle.db"
+    env = {"DB_URL": f"sqlite:///{db}", "BOOTSTRAP_KEY": "test-bootstrap-key-0123456789"}
+
+    timeline: list[str] = []
+    lock = threading.Lock()
+
+    def _record(event: str) -> None:
+        with lock:
+            timeline.append(event)
+
+    def _slow_settlement():
+        _record("worker-started")
+        threading.Event().wait(0.3)
+        _record("worker-finished")
+
+    async def _run():
+        app = create_app()
+        ctx = lifespan(app)
+        await ctx.__aenter__()
+        scheduler = app.state.scheduler
+        assert scheduler is not None
+
+        gate = asyncio.Event()
+
+        async def _settlement():
+            # Not yet in a worker when stop() completes.
+            await gate.wait()
+            await scheduler.run_in_worker(_slow_settlement)
+
+        task = asyncio.create_task(_settlement())
+        app.state.export_settlements.add(task)
+        task.add_done_callback(app.state.export_settlements.discard)
+
+        async def _open_the_gate():
+            # After stop() has completed inside __aexit__.
+            await asyncio.sleep(0.1)
+            gate.set()
+
+        opener = asyncio.create_task(_open_the_gate())
+        await ctx.__aexit__(None, None, None)
+        _record("shutdown-returned")
+        await opener
+        return app
+
+    with patch.dict(os.environ, env, clear=False):
+        app = asyncio.run(_run())
+
+    assert "worker-started" in timeline, "the settlement never reached its worker"
+    assert timeline.index("worker-finished") < timeline.index(
+        "shutdown-returned"
+    ), f"shutdown returned while a settlement worker was still running: {timeline}"
+    assert not app.state.export_settlements, "a settlement task outlived shutdown"

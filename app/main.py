@@ -287,6 +287,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         # 3. The single predicate for "nothing is still writing". Separate from
         #    the drain stop() performs, which ran before step 2.
+        #
+        #    Not independently killable by a test, and that is worth saying
+        #    rather than implying otherwise. Settlement tasks are never
+        #    cancelled, so step 2 already awaits each one through its worker;
+        #    the case this call exists for is a worker DETACHED by a cancelled
+        #    await, which only stop() cancelling a scheduler job can produce.
+        #    That mechanism has its own direct test
+        #    (test_drain_workers_waits_for_a_detached_worker). Removing step 2
+        #    and this together does fail a test.
         workers_drained = True
         if scheduler is not None:
             workers_drained = await scheduler.drain_workers()
@@ -351,6 +360,7 @@ def create_app() -> FastAPI:
     from app.routes import (
         activity,
         content,
+        content_export,
         dashboard,
         devices,
         guard,
@@ -367,6 +377,7 @@ def create_app() -> FastAPI:
     app.include_router(unredact.router)
     app.include_router(logs.router)
     app.include_router(content.router)
+    app.include_router(content_export.router)
     app.include_router(me.router)
     app.include_router(dashboard.router)
     app.include_router(policies.router)
