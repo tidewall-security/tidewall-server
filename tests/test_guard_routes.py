@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import builtins
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -372,65 +374,150 @@ def test_multiple_interactions_logged(setup):
     session.close()
 
 
-def _enable_capture(session_factory):
+CAPTURE_CANARY = "swordfish-42"
+
+
+def _configure(session_factory, *, capture: bool):
+    """Enable capture and a redacting regex detector, so the parity comparison
+    is made against a request that actually gets enforced on."""
     session = session_factory()
     policy = session.query(Policy).filter_by(name="test_policy").first()
-    policy.raw_content_enabled = True
+    policy.raw_content_enabled = capture
+    for rs in session.query(RuleSet).filter_by(policy_id=policy.id):
+        rs.detectors = {"custom_entity": {"enabled": True, "action": "redact", "patterns": [CAPTURE_CANARY]}}
     session.commit()
     session.close()
 
 
+def _enforcement(response):
+    """The parts of the response that are the security decision.
+
+    GuardResponse sets extra="allow", so a typo'd field name silently reads
+    None and compares equal to another None. Assert the shape first.
+    """
+    body = response.json()
+    for field in ("status", "summary", "result"):
+        assert field in body, f"{field!r} missing from the guard response"
+    result = dict(body["result"])
+    for field in ("blocked", "transformed", "detectors", "guard_output"):
+        assert field in result, f"result.{field!r} missing from the guard response"
+    # A fresh vault token per request. Excluded deliberately: comparing it
+    # would be comparing nonces. Its presence is asserted instead, so a
+    # capture failure that suppressed redaction entirely would still show up.
+    assert result.pop("fpe_context", None), "no fpe_context, so redaction did not happen"
+    return {
+        "status": body["status"],
+        "summary": body["summary"],
+        "result": result,
+    }
+
+
+def _stored(session_factory):
+    session = session_factory()
+    try:
+        row = session.query(Interaction).order_by(Interaction.id.desc()).first()
+        return (row.blocked, row.transformed, row.status)
+    finally:
+        session.close()
+
+
 def test_capture_setup_failure_does_not_change_the_enforcement_response(setup, monkeypatch):
-    """Optional audit capture must never decide whether the guard runs.
+    """Optional audit capture must never decide what the guard does.
 
     Collector construction and source registration happen in the route, before
     the scan. Unwrapped, an exception there returned HTTP 500 for a request
-    that capture-off would have scanned and answered normally.
+    that capture-off would have scanned, enforced on, and answered normally.
     """
     client, _admin_key, api_key, _viewer_key, session_factory = setup
     headers = {"Authorization": f"Bearer {api_key}"}
     payload = _guard_payload(
         messages=[
             {"role": "system", "content": "You are helpful."},
-            {"role": "user", "content": "Hello, how are you?"},
+            {"role": "user", "content": f"my code is {CAPTURE_CANARY} ok"},
         ]
     )
 
-    # Baseline: capture off.
-    capture_off = client.post("/v1/guard_chat_completions", json=payload, headers=headers)
+    # Baseline: capture off, detector on. This redacts, so there is a real
+    # enforcement outcome to compare rather than an empty one.
+    _configure(session_factory, capture=False)
+    off = client.post("/v1/guard_chat_completions", json=payload, headers=headers)
+    assert off.status_code == 200
+    baseline = _enforcement(off)
+    assert baseline["result"]["transformed"] is True, "the detector did not fire, so parity proves nothing"
+    stored_off = _stored(session_factory)
 
     # Capture on, but every attempt to set it up fails.
-    _enable_capture(session_factory)
+    _configure(session_factory, capture=True)
     import app.services.audit_evidence as audit_evidence
 
     def _explode(*args, **kwargs):
         raise RuntimeError("collector unavailable")
 
     monkeypatch.setattr(audit_evidence, "MatchCollector", _explode)
-    capture_on = client.post("/v1/guard_chat_completions", json=payload, headers=headers)
+    on = client.post("/v1/guard_chat_completions", json=payload, headers=headers)
 
-    assert capture_on.status_code == capture_off.status_code == 200
-    on, off = capture_on.json(), capture_off.json()
-    for field in ("action", "detected", "results", "guard_output"):
-        assert on.get(field) == off.get(field), f"capture setup failure changed {field!r}"
+    assert on.status_code == 200
+    assert _enforcement(on) == baseline, "capture setup failure changed the enforcement response"
+    assert _stored(session_factory) == stored_off, "capture setup failure changed the stored verdict"
 
 
 def test_registration_failure_also_falls_back_to_capture_off_scanning(setup, monkeypatch):
     """The same for the second half of setup: registering the sources."""
     client, _admin_key, api_key, _viewer_key, session_factory = setup
     headers = {"Authorization": f"Bearer {api_key}"}
-    payload = _guard_payload()
+    payload = _guard_payload(messages=[{"role": "user", "content": f"my code is {CAPTURE_CANARY} ok"}])
 
-    capture_off = client.post("/v1/guard_chat_completions", json=payload, headers=headers)
+    _configure(session_factory, capture=False)
+    off = client.post("/v1/guard_chat_completions", json=payload, headers=headers)
+    baseline = _enforcement(off)
+    assert baseline["result"]["transformed"] is True
 
-    _enable_capture(session_factory)
+    _configure(session_factory, capture=True)
     import app.services.audit_evidence as audit_evidence
 
     def _explode(self, segments):
         raise RuntimeError("registration failed")
 
     monkeypatch.setattr(audit_evidence.MatchCollector, "register_flattened", _explode)
-    capture_on = client.post("/v1/guard_chat_completions", json=payload, headers=headers)
+    on = client.post("/v1/guard_chat_completions", json=payload, headers=headers)
 
-    assert capture_on.status_code == capture_off.status_code == 200
-    assert capture_on.json().get("action") == capture_off.json().get("action")
+    assert on.status_code == 200
+    assert _enforcement(on) == baseline
+
+
+def test_a_capture_dependency_failure_still_commits_the_verdict(setup, monkeypatch):
+    """Loading the capture module is capture-only work too.
+
+    The import sat outside the failure boundary, so an ImportError escaped the
+    writer, escaped the route's awaited thread, and lost both the response and
+    the audit event that capture-off would have stored.
+    """
+    client, _admin_key, api_key, _viewer_key, session_factory = setup
+    headers = {"Authorization": f"Bearer {api_key}"}
+    payload = _guard_payload(messages=[{"role": "user", "content": f"my code is {CAPTURE_CANARY} ok"}])
+
+    _configure(session_factory, capture=False)
+    off = client.post("/v1/guard_chat_completions", json=payload, headers=headers)
+    baseline = _enforcement(off)
+
+    _configure(session_factory, capture=True)
+    real_import = builtins.__import__
+
+    def _fail_capture_import(name, *args, **kwargs):
+        if name == "app.services.content_capture":
+            raise ImportError("capture module unavailable")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _fail_capture_import)
+    on = client.post("/v1/guard_chat_completions", json=payload, headers=headers)
+    monkeypatch.undo()
+
+    assert on.status_code == 200, "a capture dependency failure became an HTTP error"
+    assert _enforcement(on) == baseline
+    session = session_factory()
+    try:
+        row = session.query(Interaction).order_by(Interaction.id.desc()).first()
+        assert row is not None, "the audit event was lost to a capture-only failure"
+        assert row.content_available is False
+    finally:
+        session.close()

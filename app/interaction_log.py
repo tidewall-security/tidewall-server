@@ -278,9 +278,14 @@ class InteractionLog:
             # turned a completed guard decision into an HTTP error — the
             # logging concern taking down the thing it was logging.
             if content is not None and capture_enabled:
-                from app.services.content_capture import build_content, capture_content
-
                 try:
+                    # Inside the boundary. Loading the capture module is itself
+                    # capture-only work: an ImportError here escaped log_event,
+                    # escaped the route's awaited thread, and turned a completed
+                    # guard decision into an HTTP 500 with the verdict never
+                    # committed. Capture-off never runs this import at all.
+                    from app.services.content_capture import build_content, capture_content
+
                     prepared = build_content(
                         input_messages=content.get("input"),
                         output_messages=content.get("output"),
