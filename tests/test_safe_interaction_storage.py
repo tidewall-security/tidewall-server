@@ -296,7 +296,7 @@ def test_the_writer_refuses_an_unscoped_row():
 
     with pytest.raises(ValueError, match="policy_id is required"):
         InteractionLog(sessionmaker(bind=engine)).log_event(
-            request_id="r",
+            request_id="tw_00000000000000cc",
             timestamp="2026-08-19T00:00:00Z",
             event_type="input",
             policy="p",
@@ -378,7 +378,10 @@ def test_an_unbound_admin_deletes_globally(scoped_app):
 
 @pytest.mark.parametrize(
     "field",
-    ["user_id", "app_id", "model", "llm_provider", "device_id"],
+    # Caller-declared routing metadata: dropped when it is not identifier
+    # shaped. device_id is NOT here — it is resolved provenance like policy_id,
+    # so an invalid one is a programming error and raises.
+    ["user_id", "app_id", "model", "llm_provider"],
 )
 def test_a_prompt_in_a_metadata_field_is_not_stored_verbatim(field):
     """The attack my own comment described, and my first fix did not stop.
@@ -404,7 +407,7 @@ def test_a_prompt_in_a_metadata_field_is_not_stored_verbatim(field):
     SessionLocal = sessionmaker(bind=engine)
 
     InteractionLog(SessionLocal).log_event(
-        request_id="tw_meta",
+        request_id="tw_00000000000000aa",
         timestamp="2026-08-19T00:00:00Z",
         event_type="input",
         policy="p",
@@ -423,6 +426,97 @@ def test_a_prompt_in_a_metadata_field_is_not_stored_verbatim(field):
 
     assert CANARY not in (stored or ""), f"{field} stored the prompt"
     assert stored is None, f"{field} kept a non-identifier value: {stored!r}"
+
+
+@pytest.mark.parametrize("field", ["policy_id", "api_key_id", "device_id"])
+def test_provenance_fields_reject_rather_than_drop(field):
+    """These are resolved by the server, not declared by the caller, so a bad
+    value is a bug rather than input to sanitise. Dropping it silently would
+    make the row unscoped or unattributable."""
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from app.db.models import Base
+    from app.interaction_log import InteractionLog
+
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+
+    kwargs = dict(
+        request_id="tw_00000000000000ee",
+        timestamp="2026-08-19T00:00:00Z",
+        event_type="input",
+        policy="p",
+        policy_id="policy-a",
+        blocked=False,
+        transformed=False,
+        latency_ms=1.0,
+    )
+    kwargs[field] = f"my secret is {CANARY}"
+
+    with pytest.raises(ValueError):
+        InteractionLog(sessionmaker(bind=engine)).log_event(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("request_id", "not-a-request-id"),
+        ("timestamp", "yesterday"),
+        ("status", "made-up"),
+    ],
+)
+def test_generated_fields_must_have_their_generated_form(field, value):
+    """log_event claims to be the safe writer boundary, and a boundary that is
+    only safe because of what its callers happen to do is not a boundary."""
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from app.db.models import Base
+    from app.interaction_log import InteractionLog
+
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+
+    kwargs = dict(
+        request_id="tw_00000000000000ff",
+        timestamp="2026-08-19T00:00:00Z",
+        event_type="input",
+        policy="p",
+        policy_id="policy-a",
+        blocked=False,
+        transformed=False,
+        latency_ms=1.0,
+    )
+    kwargs[field] = value
+
+    with pytest.raises(ValueError):
+        InteractionLog(sessionmaker(bind=engine)).log_event(**kwargs)
+
+
+def test_a_hostile_component_name_is_dropped():
+    """The comment claiming callers never reach this structure was false:
+    log_event(evidence=...) and emit(detectors=...) both project caller dicts."""
+    from app.services.safe_export_evidence import project_detectors
+
+    projected = project_detectors({"malicious_prompt": {"detected": True, "components": {CANARY: {"status": "ok"}}}})
+
+    assert "components" not in projected["malicious_prompt"]
+
+
+def test_a_flood_of_unknown_detectors_cannot_crowd_out_the_real_ones():
+    """Slicing the input before dropping unknown names turned a flood into a
+    silently empty verdict."""
+    from app.services.safe_export_evidence import project_detectors
+
+    flood = {f"UNKNOWN{i}": {"detected": True} for i in range(80)}
+    flood["topic"] = {"detected": True}
+    flood["_degraded"] = {"degraded": True, "failed_detectors": ["code"]}
+
+    projected = project_detectors(flood)
+
+    assert "topic" in projected
+    assert projected["_degraded"]["failed_detectors"] == ["code"]
 
 
 def test_an_ordinary_identifier_is_kept_readable():
@@ -465,7 +559,7 @@ def test_the_writer_projects_evidence_rather_than_trusting_it():
     SessionLocal = sessionmaker(bind=engine)
 
     InteractionLog(SessionLocal).log_event(
-        request_id="tw_ev",
+        request_id="tw_00000000000000bb",
         timestamp="2026-08-19T00:00:00Z",
         event_type="input",
         policy="p",
@@ -586,12 +680,43 @@ def test_alembic_head_matches_the_orm_schema(tmp_path):
             for name in sorted(set(cm) | set(co)):
                 if name not in cm or name not in co:
                     differences.append(f"{table}.{name}: present in only one schema")
-                elif cm[name]["nullable"] != co[name]["nullable"]:
+                    continue
+                if cm[name]["nullable"] != co[name]["nullable"]:
                     differences.append(f"{table}.{name}: nullability differs")
+                if str(cm[name]["type"]) != str(co[name]["type"]):
+                    differences.append(f"{table}.{name}: type {cm[name]['type']} vs {co[name]['type']}")
+
             ixm = {i["name"] for i in im.get_indexes(table)}
             ixo = {i["name"] for i in io.get_indexes(table)}
             for name in sorted(ixm ^ ixo):
                 differences.append(f"{table}: index {name} present in only one schema")
+
+            # Constraints, not only columns. The first version of this test
+            # compared presence, nullability and index names, so it could pass
+            # while the schemas differed in exactly the way that was reported.
+            pkm = tuple(im.get_pk_constraint(table).get("constrained_columns") or ())
+            pko = tuple(io.get_pk_constraint(table).get("constrained_columns") or ())
+            if pkm != pko:
+                differences.append(f"{table}: primary key {pkm} vs {pko}")
+
+            def _fk_set(insp):
+                return {
+                    (
+                        tuple(fk["constrained_columns"]),
+                        fk["referred_table"],
+                        tuple(fk["referred_columns"]),
+                        (fk.get("options") or {}).get("ondelete"),
+                    )
+                    for fk in insp.get_foreign_keys(table)
+                }
+
+            for fk in sorted(_fk_set(im) ^ _fk_set(io), key=str):
+                differences.append(f"{table}: foreign key {fk} present in only one schema")
+
+            uqm = {tuple(u["column_names"]) for u in im.get_unique_constraints(table)}
+            uqo = {tuple(u["column_names"]) for u in io.get_unique_constraints(table)}
+            for uq in sorted(uqm ^ uqo, key=str):
+                differences.append(f"{table}: unique constraint {uq} present in only one schema")
     finally:
         migrated.dispose()
         orm.dispose()
@@ -607,7 +732,7 @@ def test_the_response_model_rejects_an_unexpected_field(scoped_app):
     with pytest.raises(Exception):
         LogEvent(
             id=1,
-            request_id="r",
+            request_id="tw_00000000000000cc",
             timestamp="t",
             event_type="input",
             policy="p",
@@ -643,8 +768,21 @@ def test_emit_normalises_every_textual_field():
 
     class _Svc(ExportService):
         def _get_matching_targets(self, status):  # type: ignore[override]
-            return [type("T", (), {"id": "t", "name": "t", "type": "webhook", "format": "raw",
-                                   "config": {"url": "https://x.test"}, "events": ["blocked"], "enabled": True})()]
+            return [
+                type(
+                    "T",
+                    (),
+                    {
+                        "id": "t",
+                        "name": "t",
+                        "type": "webhook",
+                        "format": "raw",
+                        "config": {"url": "https://x.test"},
+                        "events": ["blocked"],
+                        "enabled": True,
+                    },
+                )()
+            ]
 
         def _build_event(self, format, **kwargs):  # type: ignore[override]
             captured.append(kwargs)
@@ -658,7 +796,7 @@ def test_emit_normalises_every_textual_field():
         asyncio.run(
             svc.emit(
                 status="blocked",
-                request_id="r",
+                request_id="tw_00000000000000cc",
                 summary=f"Blocked by access rule: {CANARY}",
                 policy_name=f"policy {CANARY}",
                 user_id=f"prompt {CANARY}",

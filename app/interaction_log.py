@@ -35,8 +35,15 @@ from app.services.safe_export_evidence import EVIDENCE_SCHEMA_VERSION, project_d
 #
 # What is retained deliberately: identifiers the operator's own integration
 # chose to send — a user ID, an application name, a model name. An audit trail
-# without those is not an audit trail. They may be personal data; they are not
-# the prompt, and the finding is about the prompt.
+# without those is not an audit trail.
+#
+# Stated honestly, because the earlier comments here overclaimed: this is a
+# LENGTH AND SHAPE BOUND, not proof that the value is not content. A compact
+# token or a secret-shaped string passes, because nothing lexical can tell one
+# from an application name. These fields are permitted routing metadata by
+# product decision; they are subject to the same retention as the rest of the
+# row, and they are not a channel this code can close without refusing
+# legitimate identifiers.
 #
 # What is dropped: anything that is not shaped like an identifier. Dropped,
 # not hashed. An unsalted digest of a low-entropy value like an email address
@@ -86,6 +93,64 @@ def _validated_ip(value: str | None) -> str | None:
         return str(ipaddress.ip_address(value.strip()))
     except ValueError:
         return None
+
+
+_STATUSES = frozenset({"allowed", "blocked", "transformed", "reported", "alerted"})
+_REQUEST_ID_PREFIX = "tw_"
+_ID_MAX = 64
+
+
+def _validated_request_id(value: str) -> str:
+    """The generated form, not merely a plausible string.
+
+    The guard generates this, but log_event claims to be the safe writer
+    boundary — and a boundary that is only safe because of what its callers
+    happen to do is not a boundary.
+    """
+    if (
+        not isinstance(value, str)
+        or not value.startswith(_REQUEST_ID_PREFIX)
+        or len(value) > _ID_MAX
+        or not all(c in "0123456789abcdef" for c in value[len(_REQUEST_ID_PREFIX) :])
+    ):
+        raise ValueError("request_id must be the generated tw_<hex> form")
+    return value
+
+
+def _validated_timestamp(value: str) -> str:
+    """Parsed, then re-rendered canonically. An unparsed timestamp is a
+    free-text field with a trustworthy-sounding name."""
+    from datetime import datetime
+
+    if not isinstance(value, str):
+        raise ValueError("timestamp must be a string")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError("timestamp must be ISO 8601") from None
+    return parsed.isoformat()
+
+
+def _validated_status(value: str) -> str:
+    if value not in _STATUSES:
+        raise ValueError(f"unknown status {value!r}")
+    return value
+
+
+def _validated_db_id(value: str | None, field: str) -> str | None:
+    """A database identifier: bounded, no whitespace, no separators budget.
+
+    These are UUIDs or slugs this codebase generates. Constraining them is
+    cheap, and it stops the writer being a place where arbitrary text is
+    accepted because it happens to sit in a column with an official name.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value or len(value) > _ID_MAX:
+        raise ValueError(f"{field} must be a short identifier")
+    if not all(c.isalnum() or c in "_-" for c in value):
+        raise ValueError(f"{field} must be a short identifier")
+    return value
 
 
 def _validated_event_type(value: str) -> str:
@@ -151,15 +216,15 @@ class InteractionLog:
 
         with self._session_factory() as session:
             row = Interaction(
-                request_id=_validated(request_id, "request_id"),
-                timestamp=timestamp,
+                request_id=_validated_request_id(request_id),
+                timestamp=_validated_timestamp(timestamp),
                 event_type=_validated_event_type(event_type),
                 policy_name=_validated(policy, "policy"),
-                policy_id=policy_id,
-                api_key_id=api_key_id,
+                policy_id=_validated_db_id(policy_id, "policy_id"),
+                api_key_id=_validated_db_id(api_key_id, "api_key_id"),
                 blocked=blocked,
                 transformed=transformed,
-                status=status,
+                status=_validated_status(status),
                 latency_ms=latency_ms,
                 # Projected here, not trusted from the caller. Accepting a
                 # dict meant any caller could store {"prompt": "..."} and it
@@ -177,7 +242,7 @@ class InteractionLog:
                 llm_provider=_validated(llm_provider, "llm_provider"),
                 model=_validated(model, "model"),
                 source_ip=_validated_ip(source_ip),
-                device_id=_validated(device_id, "device_id"),
+                device_id=_validated_db_id(device_id, "device_id"),
             )
             session.add(row)
             session.commit()

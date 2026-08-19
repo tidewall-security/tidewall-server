@@ -63,7 +63,7 @@ def _event(fmt: str) -> dict:
     return svc._build_event(
         fmt,
         status="allowed",
-        request_id="tw_test",
+        request_id="tw_00000000000000dd",
         timestamp="2026-08-16T00:00:00Z",
         summary="Scan incomplete: one or more detectors could not run.",
         policy_name="default",
@@ -97,7 +97,7 @@ def test_clean_events_carry_no_degraded_marker():
     event = svc._build_event(
         "raw",
         status="allowed",
-        request_id="tw_test",
+        request_id="tw_00000000000000dd",
         timestamp="2026-08-16T00:00:00Z",
         summary="No threats detected.",
         policy_name="default",
@@ -125,7 +125,7 @@ def test_interaction_row_carries_the_degraded_marker():
     SessionLocal = sessionmaker(bind=engine)
 
     InteractionLog(SessionLocal).log_event(
-        request_id="tw_test",
+        request_id="tw_00000000000000dd",
         timestamp="2026-08-16T00:00:00Z",
         event_type="input",
         policy="default",
