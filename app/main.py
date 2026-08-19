@@ -189,7 +189,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # In a finally: an exception thrown into the lifespan context would
         # otherwise skip both, leaving the scheduler running against a disposed
         # engine.
-        drained = await scheduler.stop() if scheduler is not None else True
+        # Stopping it is capture-only work too, so it cannot decide whether
+        # shutdown completes. Unguarded, an exception here escaped lifespan
+        # teardown and skipped engine.dispose() entirely.
+        #
+        # A raising stop() means we do not know whether a worker still owns a
+        # session, so it counts as not drained: the same conservative answer
+        # stop() gives when it times out.
+        if scheduler is None:
+            drained = True
+        else:
+            try:
+                drained = await scheduler.stop()
+            except Exception:
+                logging.getLogger(__name__).error(
+                    "retention scheduler did not stop cleanly; assuming background work is still running",
+                    exc_info=True,
+                )
+                drained = False
         if drained:
             engine.dispose()
         else:

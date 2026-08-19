@@ -284,3 +284,61 @@ def test_a_scheduler_that_cannot_start_does_not_stop_the_server(tmp_path):
     assert any(
         "retention scheduler did not start" in m for m in records
     ), "a scheduler that failed to start did so quietly"
+
+
+def test_a_scheduler_that_cannot_stop_does_not_break_shutdown(tmp_path):
+    """Stopping retention is capture-only work too.
+
+    Unguarded, an exception from stop() escaped lifespan teardown and skipped
+    engine.dispose() entirely — capture deciding whether the server shuts down
+    cleanly. A raising stop() also means we cannot know whether a worker still
+    owns a session, so it must count as *not* drained: the same conservative
+    answer stop() gives when it times out, and the same consequence — do not
+    dispose the engine out from under a worker that may still hold a session.
+    """
+    import asyncio
+    import logging
+    import os
+    from unittest.mock import patch
+
+    from sqlalchemy.engine import Engine
+
+    import app.services.scheduler as scheduler_module
+    from app.main import create_app, lifespan
+
+    db = tmp_path / "sched_stop.db"
+    env = {"DB_URL": f"sqlite:///{db}", "BOOTSTRAP_KEY": "test-bootstrap-key-0123456789"}
+
+    async def _explode(self):
+        raise RuntimeError("stop failed")
+
+    records: list[str] = []
+    real_error = logging.Logger.error
+
+    def _record(self, msg, *args, **kwargs):
+        records.append(str(msg))
+        return real_error(self, msg, *args, **kwargs)
+
+    disposals: list[int] = []
+    real_dispose = Engine.dispose
+
+    def _count_dispose(self, *args, **kwargs):
+        disposals.append(1)
+        return real_dispose(self, *args, **kwargs)
+
+    async def _startup_then_shutdown():
+        app = create_app()
+        ctx = lifespan(app)
+        await ctx.__aenter__()
+        disposals.clear()  # ignore anything migrations disposed during startup
+        with patch.object(Engine, "dispose", _count_dispose):
+            # Must not raise: the scheduler cannot fail the shutdown.
+            await ctx.__aexit__(None, None, None)
+
+    with patch.dict(os.environ, env, clear=False):
+        with patch.object(scheduler_module.Scheduler, "stop", _explode):
+            with patch.object(logging.Logger, "error", _record):
+                asyncio.run(_startup_then_shutdown())
+
+    assert any("did not stop cleanly" in m for m in records), "a failing stop() was swallowed quietly"
+    assert not disposals, "disposed the engine while a worker may still have owned a session"
