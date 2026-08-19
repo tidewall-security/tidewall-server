@@ -407,29 +407,33 @@ def test_scheduler_teardown_survives_a_hostile_logger():
             invoked.append(record.getMessage())
             raise RuntimeError("filter is broken")
 
+    logger = logging.getLogger("app.services.scheduler")
+    logger.disabled = False
+    previous = logger.level
+    logger.setLevel(logging.DEBUG)
+    hostile = _HostileFilter()
+
     async def _go():
         scheduler = Scheduler()
         scheduler.start([])
+        # Installed only now: start() reports too, and a filter added before it
+        # is satisfied by that report alone — so deleting the teardown report
+        # left this test passing.
+        logger.addFilter(hostile)
         return await scheduler.stop(timeout_seconds=1, worker_drain_seconds=1)
 
-    logger = logging.getLogger("app.services.scheduler")
-    logger.disabled = False
-    hostile = _HostileFilter()
-    logger.addFilter(hostile)
-    # Without this the logger's effective level is WARNING, so info() never
-    # builds a record, the filter never runs, and the test proves nothing.
-    previous = logger.level
-    logger.setLevel(logging.DEBUG)
     try:
         assert asyncio.run(_go()) is True
     finally:
         logger.removeFilter(hostile)
         logger.setLevel(previous)
 
-    # Otherwise a disabled logger — see
-    # test_startup_migrations_do_not_silence_application_logging — makes this
-    # pass without the hostile filter ever running.
-    assert invoked, "the hostile filter was never reached, so nothing was proven"
+    # Named, not just non-empty: a disabled logger — see
+    # test_startup_migrations_do_not_silence_application_logging — would
+    # otherwise make this pass without the filter ever running.
+    assert any(
+        "Scheduler stopped" in m for m in invoked
+    ), f"the teardown report never reached the filter; saw {invoked}"
 
 
 def test_startup_migrations_do_not_silence_application_logging(tmp_path):
