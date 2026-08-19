@@ -288,14 +288,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # 3. The single predicate for "nothing is still writing". Separate from
         #    the drain stop() performs, which ran before step 2.
         #
-        #    Not independently killable by a test, and that is worth saying
-        #    rather than implying otherwise. Settlement tasks are never
-        #    cancelled, so step 2 already awaits each one through its worker;
-        #    the case this call exists for is a worker DETACHED by a cancelled
-        #    await, which only stop() cancelling a scheduler job can produce.
-        #    That mechanism has its own direct test
-        #    (test_drain_workers_waits_for_a_detached_worker). Removing step 2
-        #    and this together does fail a test.
+        #    Not INDEPENDENTLY killable, and that is worth saying rather than
+        #    implying otherwise: it is redundant with the worker drain inside
+        #    stop(), so removing either one alone leaves every test green.
+        #    Removing BOTH fails
+        #    test_shutdown_waits_for_a_settlement_thread_whose_task_was_cancelled,
+        #    which is the case they exist for -- a worker DETACHED by a
+        #    cancelled await, where the task is done and only the thread is
+        #    still writing. Step 2 cannot see that: the task it awaits has
+        #    already completed as cancelled.
+        #
+        #    Step 2 is not redundant with either of them, and has its own test
+        #    (test_shutdown_waits_for_a_settlement_that_has_not_reached_a_worker):
+        #    before a settlement takes its first step no worker is registered,
+        #    so both drains correctly report idle while the work is pending.
         workers_drained = True
         if scheduler is not None:
             workers_drained = await scheduler.drain_workers()
