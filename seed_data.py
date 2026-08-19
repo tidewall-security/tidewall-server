@@ -164,7 +164,7 @@ def generate_events(count=80):
             summary = "secret_and_key_entity: redacted"
 
         log.log_event(
-            request_id=f"tw_seed_{uuid.uuid4().hex[:16]}",
+            request_id=f"tw_{uuid.uuid4().hex[:16]}",
             timestamp=ts_str,
             event_type="input",
             policy="default_policy",

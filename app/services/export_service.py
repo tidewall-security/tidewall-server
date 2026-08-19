@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.db.models import ExportTarget
 from app.interaction_log import _validated as _safe_meta
 from app.interaction_log import _validated_ip as _safe_ip
+from app.interaction_log import is_generated_request_id
 from app.services.ocsf_builder import build_aidr_compat_event, build_ocsf_event
 from app.services.safe_export_evidence import project_detectors
 from app.services.safe_logging import describe
@@ -47,9 +48,8 @@ _EXPORTABLE_FIELDS = frozenset(
 
 
 def _safe_request_id(value: object) -> str | None:
-    if isinstance(value, str) and value.startswith("tw_") and all(c in "0123456789abcdef" for c in value[3:]):
-        return value
-    return None
+    """The same check storage uses, so the two boundaries cannot drift."""
+    return value if is_generated_request_id(value) else None  # type: ignore[return-value]
 
 
 def _safe_timestamp(value: object) -> str | None:

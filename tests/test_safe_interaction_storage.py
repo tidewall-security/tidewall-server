@@ -809,3 +809,57 @@ def test_emit_normalises_every_textual_field():
 
     assert captured, "emit did not reach the builder"
     assert CANARY not in json.dumps(captured[0], default=str)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "tw_",  # all() over an empty suffix is True
+        "tw_deadbeef",  # too short
+        "tw_deadbeefcafebabedeadbeefcafebabe",  # a 32-hex canary
+        "tw_" + "a" * 100_000,  # unbounded
+        "tw_seed_0123456789abcdef",  # what the seeder used to generate
+        "tw_DEADBEEFCAFEBABE",  # uppercase
+    ],
+)
+def test_only_the_generated_request_id_form_is_accepted(value):
+    """My first validator checked `all(c in hex for c in suffix)`, which is
+    True for an empty suffix and for any length — so a function whose docstring
+    claimed to enforce the generated form accepted 'tw_' and a 32-character hex
+    canary, and both reached storage, the response and an export."""
+    from app.interaction_log import is_generated_request_id
+
+    assert not is_generated_request_id(value)
+
+
+def test_the_real_generated_form_is_accepted():
+    import uuid as _uuid
+
+    from app.interaction_log import is_generated_request_id
+
+    assert is_generated_request_id(f"tw_{_uuid.uuid4().hex[:16]}")
+
+
+def test_storage_and_export_share_one_request_id_check():
+    """Two copies of a format rule drift, and this one already had."""
+    from app.interaction_log import is_generated_request_id
+    from app.services.export_service import _safe_request_id
+
+    canary = "tw_deadbeefcafebabedeadbeefcafebabe"
+    assert not is_generated_request_id(canary)
+    assert _safe_request_id(canary) is None
+
+
+def test_the_seeder_produces_a_request_id_the_writer_accepts():
+    """The stricter writer broke the demo seeder, which generated
+    tw_seed_<hex>. Assert the generated shape rather than the bootstrap."""
+    import re as _re
+
+    from app.interaction_log import is_generated_request_id
+
+    source = Path(__file__).resolve().parent.parent / "seed_data.py"
+    match = _re.search(r'request_id=f"([^"]+)"', source.read_text())
+    assert match, "could not find the seeder's request_id"
+
+    template = match.group(1).replace("{uuid.uuid4().hex[:16]}", "0123456789abcdef")
+    assert is_generated_request_id(template), f"the seeder generates {template!r}, which the writer rejects"

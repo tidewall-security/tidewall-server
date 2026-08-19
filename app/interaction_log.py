@@ -97,7 +97,24 @@ def _validated_ip(value: str | None) -> str | None:
 
 _STATUSES = frozenset({"allowed", "blocked", "transformed", "reported", "alerted"})
 _REQUEST_ID_PREFIX = "tw_"
+# The generator produces exactly this many hex characters. Anything else is not
+# the generated form, however plausible it looks.
+_REQUEST_ID_HEX = 16
 _ID_MAX = 64
+
+
+def is_generated_request_id(value: object) -> bool:
+    """Exactly tw_ + 16 lowercase hex.
+
+    My first version checked `all(c in hex for c in suffix)`, which is True for
+    the empty suffix and for any length — so "tw_" and a 32-character hex
+    canary both passed a function whose docstring claimed to enforce the
+    generated form. Shared by storage and export so the two cannot drift.
+    """
+    if not isinstance(value, str) or not value.startswith(_REQUEST_ID_PREFIX):
+        return False
+    suffix = value[len(_REQUEST_ID_PREFIX) :]
+    return len(suffix) == _REQUEST_ID_HEX and all(c in "0123456789abcdef" for c in suffix)
 
 
 def _validated_request_id(value: str) -> str:
@@ -107,13 +124,8 @@ def _validated_request_id(value: str) -> str:
     boundary — and a boundary that is only safe because of what its callers
     happen to do is not a boundary.
     """
-    if (
-        not isinstance(value, str)
-        or not value.startswith(_REQUEST_ID_PREFIX)
-        or len(value) > _ID_MAX
-        or not all(c in "0123456789abcdef" for c in value[len(_REQUEST_ID_PREFIX) :])
-    ):
-        raise ValueError("request_id must be the generated tw_<hex> form")
+    if not is_generated_request_id(value):
+        raise ValueError("request_id must be the generated tw_<16 hex> form")
     return value
 
 
