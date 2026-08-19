@@ -200,3 +200,31 @@ def test_report_still_reports_when_nothing_is_wrong():
     rendered = " ".join(str(a) for a in messages[0])
     assert "capture failed" in rendered
     assert "ValueError" in rendered, "the exception type was dropped"
+
+
+def test_report_survives_a_logger_whose_attribute_lookup_raises():
+    from app.services.safe_logging import report
+
+    class _Hostile:
+        def __getattr__(self, _name):
+            raise RuntimeError("no attributes for you")
+
+    report(_Hostile(), "warning", "capture failed", ValueError("x"))  # must not raise
+
+
+def test_report_ignores_a_level_the_logger_does_not_have():
+    import logging
+
+    from app.services.safe_logging import report
+
+    report(logging.getLogger("tests.levels"), "shout", "capture failed")  # must not raise
+
+
+def test_report_survives_kwargs_the_emitter_rejects():
+    from app.services.safe_logging import report
+
+    class _Picky:
+        def warning(self, *_args):  # no **kwargs
+            return None
+
+    report(_Picky(), "warning", "capture failed", ValueError("x"), exc_info=True)  # must not raise

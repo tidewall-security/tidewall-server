@@ -10,7 +10,13 @@ from app.db.models import Base
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers defaults to True, which disables every logger
+    # that already exists and is not named in alembic.ini. Migrations run
+    # inside application startup, so that silenced app.routes.guard,
+    # app.services.scheduler and the rest for the life of the process — every
+    # capture failure, detector failure and scheduler error reported to an
+    # operator went nowhere, while the code that reported them looked correct.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

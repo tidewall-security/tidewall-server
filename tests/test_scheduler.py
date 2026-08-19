@@ -391,3 +391,85 @@ def test_a_scheduler_that_fails_midway_through_start_is_still_stopped(tmp_path):
                 asyncio.run(_startup_then_shutdown())
 
     assert stopped, "shutdown never stopped the partially started scheduler"
+
+
+def test_scheduler_teardown_survives_a_hostile_logger():
+    """Path-specific, so the mutation localises here and not only on report()."""
+    import asyncio
+    import logging
+
+    from app.services.scheduler import Scheduler
+
+    invoked: list[str] = []
+
+    class _HostileFilter(logging.Filter):
+        def filter(self, record):
+            invoked.append(record.getMessage())
+            raise RuntimeError("filter is broken")
+
+    async def _go():
+        scheduler = Scheduler()
+        scheduler.start([])
+        return await scheduler.stop(timeout_seconds=1, worker_drain_seconds=1)
+
+    logger = logging.getLogger("app.services.scheduler")
+    logger.disabled = False
+    hostile = _HostileFilter()
+    logger.addFilter(hostile)
+    # Without this the logger's effective level is WARNING, so info() never
+    # builds a record, the filter never runs, and the test proves nothing.
+    previous = logger.level
+    logger.setLevel(logging.DEBUG)
+    try:
+        assert asyncio.run(_go()) is True
+    finally:
+        logger.removeFilter(hostile)
+        logger.setLevel(previous)
+
+    # Otherwise a disabled logger — see
+    # test_startup_migrations_do_not_silence_application_logging — makes this
+    # pass without the hostile filter ever running.
+    assert invoked, "the hostile filter was never reached, so nothing was proven"
+
+
+def test_startup_migrations_do_not_silence_application_logging(tmp_path):
+    """Alembic's fileConfig defaults to disable_existing_loggers=True.
+
+    Migrations run inside application startup, so that disabled every app
+    logger that already existed and was not named in alembic.ini — for the
+    life of the process. Every capture failure, detector failure and scheduler
+    error reported to an operator went nowhere, while the code reporting them
+    looked correct. The isolation work in this step is only as good as the
+    reports it leaves behind.
+    """
+    import asyncio
+    import logging
+    import os
+    from unittest.mock import patch
+
+    from app.main import create_app, lifespan
+
+    names = [
+        "app.routes.guard",
+        "app.services.scheduler",
+        "app.scanner_engine",
+        "app.interaction_log",
+        "app.services.audit_evidence",
+    ]
+    for name in names:
+        logging.getLogger(name).disabled = False
+
+    db = tmp_path / "logging.db"
+    env = {"DB_URL": f"sqlite:///{db}", "BOOTSTRAP_KEY": "test-bootstrap-key-0123456789"}
+
+    async def _startup_then_shutdown():
+        app = create_app()
+        ctx = lifespan(app)
+        await ctx.__aenter__()
+        await ctx.__aexit__(None, None, None)
+
+    with patch.dict(os.environ, env, clear=False):
+        asyncio.run(_startup_then_shutdown())
+
+    silenced = [n for n in names if logging.getLogger(n).disabled]
+    assert not silenced, f"startup migrations disabled these loggers for the rest of the process: {silenced}"
