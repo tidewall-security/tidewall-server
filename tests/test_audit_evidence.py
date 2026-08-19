@@ -950,3 +950,35 @@ def test_capture_stops_after_a_redactor_mutates_the_text():
         "a match was captured after the text was mutated; its offsets validated "
         "by coincidence and would be attributed to the wrong message"
     )
+
+
+@pytest.mark.parametrize("module_name", ["app.detectors.custom_entity", "app.detectors.pii"])
+def test_a_broken_audit_hook_does_not_disable_an_enforcing_detector(module_name, monkeypatch):
+    """Capture is optional; the detectors that report into it are not.
+
+    These modules are loaded dynamically by ScannerEngine. While they imported
+    the audit hook at module scope, an unimportable audit module became a
+    detector *construction* failure — so turning on nothing at all, merely
+    having a broken optional dependency, could degrade or block a request
+    depending on on_detector_failure.
+    """
+    import builtins
+    import importlib
+    import sys
+
+    real_import = builtins.__import__
+
+    def _fail_audit_import(name, *args, **kwargs):
+        if name == "app.services.audit_evidence":
+            raise ImportError("audit evidence unavailable")
+        return real_import(name, *args, **kwargs)
+
+    for cached in (module_name, "app.services.audit_evidence"):
+        monkeypatch.delitem(sys.modules, cached, raising=False)
+    monkeypatch.setattr(builtins, "__import__", _fail_audit_import)
+
+    # The import itself must survive.
+    module = importlib.import_module(module_name)
+
+    # And so must reporting through it, which is now a no-op.
+    assert module._report_match(None, "d", "T", "v", 0, 1) is None

@@ -229,3 +229,58 @@ def test_stop_waits_for_a_tracked_worker_past_the_task_timeout():
         return finished.is_set()
 
     assert asyncio.run(_main()), "stop() returned while a tracked worker was still holding a session"
+
+
+def test_a_scheduler_that_cannot_start_does_not_stop_the_server(tmp_path):
+    """Installing retention is capture-only work, so it cannot decide whether
+    the server serves.
+
+    Unguarded, an import or task-creation failure aborted startup even with
+    capture disabled on every policy: no enforcement at all, because of a
+    subsystem with nothing to do. Content is not left exposed by this — the
+    read gate denies expired content whether or not a purge ever ran — but
+    expired rows do stay on disk, so it must be loud.
+    """
+    import asyncio
+    import logging
+    import os
+    from unittest.mock import patch
+
+    import app.services.scheduler as scheduler_module
+    from app.main import create_app, lifespan
+
+    db = tmp_path / "sched.db"
+    env = {"DB_URL": f"sqlite:///{db}", "BOOTSTRAP_KEY": "test-bootstrap-key-0123456789"}
+
+    def _explode(*_args, **_kwargs):
+        raise RuntimeError("scheduler unavailable")
+
+    async def _startup_then_shutdown():
+        app = create_app()
+        ctx = lifespan(app)
+        await ctx.__aenter__()
+        try:
+            # Startup completed, so the server would begin accepting requests.
+            assert app.state.scheduler is None
+            assert app.state.interaction_log is not None
+        finally:
+            await ctx.__aexit__(None, None, None)
+
+    # Captured at the call, not at a handler: Alembic runs fileConfig during
+    # startup migrations, which replaces the root handlers — so caplog and any
+    # handler attached beforehand see nothing.
+    records: list[str] = []
+    real_error = logging.Logger.error
+
+    def _record(self, msg, *args, **kwargs):
+        records.append(str(msg))
+        return real_error(self, msg, *args, **kwargs)
+
+    with patch.dict(os.environ, env, clear=False):
+        with patch.object(scheduler_module, "Scheduler", _explode):
+            with patch.object(logging.Logger, "error", _record):
+                asyncio.run(_startup_then_shutdown())
+
+    assert any(
+        "retention scheduler did not start" in m for m in records
+    ), "a scheduler that failed to start did so quietly"

@@ -153,10 +153,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #
     # The read gate stays regardless: expiry is a promise about what gets
     # disclosed, and that must not depend on a background task having run.
-    from app.services.scheduler import Scheduler, retention_job
+    # Installing it is capture-only work, so it cannot decide whether the
+    # server serves. Unguarded, an import or task-creation failure aborted
+    # startup even with capture disabled on every policy — no enforcement at
+    # all, because of a subsystem with nothing to do.
+    #
+    # A failure here does not leave content exposed: the read gate denies
+    # expired content whether or not a purge ran. It does mean expired rows
+    # stay on disk, so it logs at error rather than passing quietly.
+    #
+    # /health is unauthenticated, so it is deliberately not reported there —
+    # "retention is not running" tells an unauthenticated caller that captured
+    # content is accumulating. Operator-visible reporting on an authenticated
+    # surface is worth adding and is not here yet.
+    scheduler = None
+    try:
+        from app.services.scheduler import Scheduler, retention_job
 
-    scheduler = Scheduler()
-    scheduler.start([retention_job(SessionLocal, scheduler=scheduler)])
+        scheduler = Scheduler()
+        scheduler.start([retention_job(SessionLocal, scheduler=scheduler)])
+    except Exception:
+        logging.getLogger(__name__).error(
+            "retention scheduler did not start; expired content will not be reclaimed from disk "
+            "(it remains undisclosable through the read gate)",
+            exc_info=True,
+        )
+        scheduler = None
     app.state.scheduler = scheduler
 
     logging.info("Tidewall ready")
@@ -167,7 +189,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # In a finally: an exception thrown into the lifespan context would
         # otherwise skip both, leaving the scheduler running against a disposed
         # engine.
-        drained = await scheduler.stop()
+        drained = await scheduler.stop() if scheduler is not None else True
         if drained:
             engine.dispose()
         else:
