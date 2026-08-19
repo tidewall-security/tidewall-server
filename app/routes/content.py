@@ -36,14 +36,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-CONTENT_PATH_RE = r"^/v1/logs/[^/]+/content$"
-
-#: SQLAlchemy's SQLite DateTime bind processor writes exactly this, for both
-#: aware and naive inputs: 26 characters, zero-padded, naive UTC. Fixed width is
-#: what makes SQLite's lexicographic comparison chronological, which is what the
-#: expiry CASE in the query relies on. A value in any other shape did not come
-#: from this application.
-_STORED_TIMESTAMP = "%Y-%m-%d %H:%M:%S.%f"
 
 _MAX_ID = 2**63 - 1
 

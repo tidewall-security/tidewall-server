@@ -12,12 +12,17 @@ An exclusive ``flock`` gives real exclusion. The kernel releases it when the
 holding process exits, crashes or is killed, so there is no lease, no heartbeat,
 no clock, and nothing to get wrong about liveness.
 
-Where ``flock`` is weak it is weak in the direction of refusing to start rather
-than of abandoning live work: on some network filesystems it is advisory-only or
-emulated, so two instances could both acquire it. SQLite is already unsafe on
-those filesystems for the same reason, so this adds no new exposure -- but the
-database must live on local storage, and that is now load-bearing for more than
-performance.
+Where ``flock`` is weak, it is weak in the DANGEROUS direction, and an earlier
+version of this note claimed the opposite. On some network filesystems it is
+advisory-only or emulated, and two instances can then both acquire it -- not
+"fail to start", but "both believe they are the only one". That matters here
+beyond ordinary write safety: a second live process makes the boot_id
+abandonment rule wrong, because each will treat the other's in-flight export
+attempts as belonging to a process that is gone.
+
+SQLite is already unsafe on those filesystems, so this adds no new exposure.
+But the database must live on local storage, and that requirement is now
+load-bearing for correctness rather than performance.
 """
 
 from __future__ import annotations

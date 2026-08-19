@@ -26,8 +26,6 @@ from app.services.safe_logging import report
 
 logger = logging.getLogger(__name__)
 
-TERMINAL = ("succeeded", "failed", "indeterminate", "abandoned_indeterminate")
-NOTE_KINDS = ("settlement_lost", "body_read_failed", "settlement_commit_failed", "cleanup_failed")
 
 #: Bounds the evidence an operator may attach and the detail a note may carry.
 MAX_EVIDENCE = 500

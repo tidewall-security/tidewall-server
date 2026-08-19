@@ -32,6 +32,7 @@ from app.services.content_projection import (
     canonical_json,
     parse_stored_timestamp,
     project_content,
+    render_timestamp,
 )
 from app.services.export_transport import (
     DestinationRefused,
@@ -46,7 +47,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-CONTENT_EXPORT_PATH_RE = r"^/v1/logs/[^/]+/content-export$"
 
 PAYLOAD_SCHEMA = "tidewall.content_export.v1"
 
@@ -149,7 +149,6 @@ def _select(interaction_id: int, policy_id: str) -> sa.Select:
     return (
         sa.select(
             Interaction.id.label("interaction_id"),
-            Interaction.request_id.label("request_id"),
             c.id.label("content_id"),
             sa.cast(c.captured_at, sa.Text).label("captured_raw"),
             sa.cast(c.expires_at, sa.Text).label("expires_raw"),
@@ -356,7 +355,12 @@ async def _reserve_and_send(*, request: Request, **ctx: Any) -> Response:
         "attempt_id": attempt_id,
         "interaction_id": ctx["interaction_id"],
         "view": ctx["view"],
-        "exported_at": ctx["projection"]["captured_at"],
+        # When this export happened, which is NOT when the content was
+        # captured -- the two can be days apart, and the payload already
+        # carries content.captured_at for the latter. An earlier version set
+        # this from the projection, so every export told its receiver it had
+        # happened at capture time.
+        "exported_at": render_timestamp(datetime.now(UTC)),
         "content": ctx["projection"],
     }
     # Deliberately absent: policy_id, the API key id, and the guard's request_id.

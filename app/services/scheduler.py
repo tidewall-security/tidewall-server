@@ -12,10 +12,17 @@ lifespan, not a job queue: there is no durable state, no retries across
 restarts, and no distribution. That matches what the work actually is —
 idempotent housekeeping that is harmless to skip and harmless to repeat.
 
-**Single process only.** The launcher starts one uvicorn worker. With several,
-every worker would run its own copy; the jobs here are idempotent so that is
-survivable rather than correct, and a real deployment story needs either leader
-election or an external scheduler. Said here rather than discovered later.
+**Single process only**, and now enforced rather than assumed. The launcher
+starts one uvicorn worker, and since the process lock landed a second worker
+does not run its own copy of these jobs -- it fails to start, because the lock
+is acquired per worker after the fork and the second acquisition is refused.
+Before that, several workers each running every job was merely survivable on
+the grounds that the jobs are idempotent.
+
+That makes leader election unnecessary for this deployment shape rather than
+merely deferred. A deployment that genuinely needs several processes against
+one database needs a different storage story first; see
+``app/services/process_lock.py``.
 """
 
 from __future__ import annotations

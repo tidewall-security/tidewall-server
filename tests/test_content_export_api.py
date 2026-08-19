@@ -109,7 +109,7 @@ def _key(Session, *, role="admin", policy_id="policy-a", grants=None):
 _next_id = 0
 
 
-def _interaction(Session, *, policy_id="policy-a", content=True, expires_at=None):
+def _interaction(Session, *, policy_id="policy-a", content=True, expires_at=None, captured_at=None):
     global _next_id
     _next_id += 1
     session = Session()
@@ -136,7 +136,7 @@ def _interaction(Session, *, policy_id="policy-a", content=True, expires_at=None
                 output_json=[{"role": "assistant", "content": "reply"}],
                 matches_json=None,
                 byte_size=10,
-                captured_at=datetime.now(UTC),
+                captured_at=captured_at or datetime.now(UTC),
                 expires_at=expires_at,
             )
         )
@@ -389,6 +389,38 @@ def test_the_payload_carries_the_content_and_nothing_that_identifies_the_tenant(
     # The receiver's idempotency token is the server-owned attempt id; the
     # caller's key never leaves.
     assert _Receiver.headers_seen[0]["Idempotency-Key"] == body["attempt_id"]
+
+
+def test_exported_at_is_when_the_export_happened_not_when_the_content_was_captured(env):
+    """Two different times, and the payload carries both.
+
+    They can be days apart. An earlier version set exported_at from the
+    projection, so the field named for this request's time always reported the
+    capture's -- and the whole payload test passed with it replaced by the
+    literal string "not-an-export-time", because nothing looked at the value.
+    """
+    client, Session, port = env
+    headers = _key(Session, grants=[CONTENT_EXPORT])
+    captured = datetime(2020, 1, 2, 3, 4, 5, tzinfo=UTC)
+    interaction_id = _interaction(Session, captured_at=captured)
+    target_id = _target(Session, port)
+
+    before = datetime.now(UTC)
+    resp = client.post(
+        f"/v1/logs/{interaction_id}/content-export",
+        json={"view": "full", "target_id": target_id},
+        headers=headers,
+    )
+    after = datetime.now(UTC)
+    assert resp.status_code == 202
+
+    body = json.loads(_Receiver.received[0])
+    exported = datetime.fromisoformat(body["exported_at"].replace("Z", "+00:00"))
+    stored_capture = datetime.fromisoformat(body["content"]["captured_at"].replace("Z", "+00:00"))
+
+    assert stored_capture == captured, "the capture time is not what was stored"
+    assert exported != stored_capture, "exported_at is just the capture time again"
+    assert before <= exported <= after, f"exported_at ({exported}) is not the time of this request ({before}..{after})"
 
 
 def test_the_matches_view_exports_matches_only(env):

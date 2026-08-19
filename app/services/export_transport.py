@@ -95,9 +95,9 @@ _REFUSED_NETWORKS = (
 #: address cannot close that -- one that knew the deployment's translation
 #: prefixes could, which is configuration this module does not have and is not
 #: the place to invent. It is a property of the network the server runs on,
-#: it is recorded here, and it belongs in the operator runbook (step 9), which
-#: does not exist yet: this comment is currently the only place it is written
-#: down.
+#: it is recorded here, and it belongs in the operator runbook, which the
+#: step 9 design now carries -- but no runbook has shipped, so nothing an
+#: operator reads says it yet.
 
 #: Headers this server sets itself on a content export. They are refused in a
 #: target's configuration rather than allowed to lose a merge, because HTTP
@@ -276,10 +276,16 @@ class SendResult:
     status: int | None = None
     peer: str | None = None
     error: str | None = None
-    #: The client is NOT closed here. Cleanup is the caller's, as its own task
-    #: with its own budget and its own cancellation-resistant join -- closing it
-    #: inside the submission would put an unbounded await inside a cancellable
-    #: region, where a cancellation can interrupt it and leak the connection.
+    #: Whenever a result is RETURNED, the client is still open and closing it
+    #: is the caller's, as its own task with its own budget and its own
+    #: cancellation-resistant join. An unbounded plain await inside the
+    #: submission would sit in a cancellable region where a cancellation can
+    #: interrupt it and leak the connection.
+    #:
+    #: The one path that closes inside the submission is the one that returns
+    #: no result at all: a cancellation mid-send propagates an exception, so
+    #: there is no `closer` for anyone to receive. That close is made bounded
+    #: and cancellation-resistant precisely because of the hazard above.
     closer: Any = None
 
 
@@ -467,10 +473,13 @@ async def send_payload(
             # An attempt, not a guarantee, and the difference is worth stating.
             # If aclose() raises, or does not finish inside the budget, the
             # connection may still be open and there is no one left to tell:
-            # this path returns an exception rather than a result, so it has no
-            # `closer` to hand back and no attempt row to annotate. All it can
-            # do is say so where an operator will see it, which is why the
-            # failure is reported rather than swallowed.
+            # this path returns an exception rather than a result, so it has
+            # no `closer` to hand back. The caller does hold a committed
+            # attempt row -- an earlier version of this comment wrongly said no
+            # row existed -- but that row records the state of a DISCLOSURE,
+            # and whether a socket was confirmed shut is a fact about this
+            # process rather than about what the receiver got. So it is
+            # reported, not settled into evidence.
             close_errors: list[Exception] = []
 
             async def _close_bounded() -> None:
@@ -479,14 +488,37 @@ async def send_payload(
 
             close_task = asyncio.create_task(_close_bounded())
             await join_and_drain(close_task, on_error=close_errors.append)
-            if close_errors or close_task.cancelled():
-                reason = type(close_errors[0]).__name__ if close_errors else "TimeoutError"
-                report(
-                    logger,
-                    "warning",
-                    f"content export client was not confirmed closed after a cancellation "
-                    f"during submission ({reason}); the connection may remain open",
-                )
+            try:
+                if close_errors:
+                    # A budget expiry arrives here, not below: asyncio.timeout
+                    # converts its own cancellation into a TimeoutError raised
+                    # inside the task, so the task completes rather than being
+                    # cancelled.
+                    reason: str | None = type(close_errors[0]).__name__
+                elif close_task.cancelled():
+                    # Which leaves only a closer that raised CancelledError
+                    # itself. Labelling this "TimeoutError" -- as an earlier
+                    # version did -- reports a bound that was never reached.
+                    reason = "CancelledError"
+                else:
+                    reason = None
+                if reason is not None:
+                    report(
+                        logger,
+                        "warning",
+                        f"content export client was not confirmed closed after a cancellation "
+                        f"during submission ({reason}); the connection may remain open",
+                    )
+            except BaseException:
+                # Reporting must not become the thing that propagates. report()
+                # is deliberately non-raising but catches only Exception, and
+                # CancelledError is not one: an operator's logging Filter that
+                # raises it would otherwise REPLACE the cancellation being
+                # re-raised below, so the caller would see the logger's
+                # cancellation instead of the submission's. Building the reason
+                # is inside this guard too, because type().__name__ runs before
+                # report() is entered.
+                pass
             raise
     result.closer = client.aclose
     return result

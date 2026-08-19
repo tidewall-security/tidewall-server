@@ -7,6 +7,7 @@ primitive, and every control here exists so it does not become one.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 from unittest.mock import patch
 
@@ -914,7 +915,15 @@ def test_a_cancellation_during_submission_does_not_wait_forever_to_close():
 
 @pytest.mark.parametrize(
     "failure,expected",
-    [("raises", "RuntimeError"), ("hangs", "TimeoutError")],
+    [
+        ("raises", "RuntimeError"),
+        ("hangs", "TimeoutError"),
+        # A closer that raises CancelledError is not a budget expiry, and
+        # must not be reported as one. A real expiry never reaches that
+        # branch: asyncio.timeout converts its own cancellation into a
+        # TimeoutError raised inside the task.
+        ("cancels", "CancelledError"),
+    ],
 )
 def test_a_close_that_does_not_confirm_is_reported_not_swallowed(failure, expected, caplog):
     """The honest half of the cancellation close.
@@ -943,6 +952,8 @@ def test_a_close_that_does_not_confirm_is_reported_not_swallowed(failure, expect
         async def aclose(self):
             if failure == "raises":
                 raise RuntimeError("the socket is gone")
+            if failure == "cancels":
+                raise asyncio.CancelledError("the closer was cancelled")
             await asyncio.Event().wait()
 
     async def _go():
@@ -958,9 +969,20 @@ def test_a_close_that_does_not_confirm_is_reported_not_swallowed(failure, expect
                     )
                 )
                 await asyncio.wait_for(sending.wait(), 5)
-                task.cancel()
-                with pytest.raises(asyncio.CancelledError):
-                    await asyncio.wait_for(asyncio.shield(task), 5)
+                task.cancel("ORIGINAL")
+                # Read off the task rather than awaited through shield() or
+                # wait_for(): each of those constructs a fresh CancelledError,
+                # discarding the very message this asserts on.
+                finished, _still_running = await asyncio.wait({task}, timeout=5)
+                assert finished, "the sender never returned, so this proves nothing"
+                with pytest.raises(asyncio.CancelledError) as raised:
+                    task.result()
+                # The SAME cancellation, not merely some cancellation. A
+                # replacement raised while reporting would satisfy the plain
+                # form of this assertion and lose the caller's.
+                assert raised.value.args == (
+                    "ORIGINAL",
+                ), f"the submission's cancellation was replaced: {raised.value.args!r}"
 
     with caplog.at_level(logging.WARNING):
         asyncio.run(_go())
@@ -970,3 +992,58 @@ def test_a_close_that_does_not_confirm_is_reported_not_swallowed(failure, expect
         "not confirmed closed" in m for m in messages
     ), f"an unconfirmed close was silent; records were {messages!r}"
     assert any(expected in m for m in messages), f"the reason was not reported: {messages!r}"
+
+
+@pytest.mark.parametrize("logger_raises", [RuntimeError("logger"), asyncio.CancelledError("LOGGER")])
+def test_reporting_an_unconfirmed_close_cannot_replace_the_cancellation(logger_raises):
+    """The report is about a cancellation; it must not become one.
+
+    `safe_logging.report` is deliberately non-raising, but it catches only
+    Exception -- and CancelledError is not one. An operator's logging Filter
+    that raises it would otherwise substitute the logger's cancellation for the
+    submission's, and the caller would be told the wrong thing was cancelled.
+    Building the reason string sits inside the same guard, because
+    type().__name__ runs before report() is entered.
+    """
+    import app.services.export_transport as t
+
+    sending = asyncio.Event()
+
+    class _Client:
+        def build_request(self, *args, **kwargs):
+            return object()
+
+        async def send(self, request, stream=False):
+            sending.set()
+            await asyncio.Event().wait()
+
+        async def aclose(self):
+            raise RuntimeError("the socket is gone")
+
+    class _HostileLogger:
+        def warning(self, *args, **kwargs):
+            raise logger_raises
+
+    async def _go():
+        with patch.object(t, "logger", _HostileLogger()):
+            with patch.object(t.httpx, "AsyncClient", lambda **kwargs: _Client()):
+                task = asyncio.create_task(
+                    t.send_payload(
+                        url="https://pinned.invalid/hook",
+                        headers={},
+                        body=b"{}",
+                        addresses=["203.0.113.1"],
+                        deadline_seconds=30,
+                    )
+                )
+                await asyncio.wait_for(sending.wait(), 5)
+                task.cancel("ORIGINAL")
+                finished, _still_running = await asyncio.wait({task}, timeout=5)
+                assert finished, "the sender never returned, so this proves nothing"
+                with pytest.raises(asyncio.CancelledError) as raised:
+                    task.result()
+                assert raised.value.args == ("ORIGINAL",), (
+                    f"the logger's failure replaced the submission's cancellation: " f"{raised.value.args!r}"
+                )
+
+    asyncio.run(_go())
