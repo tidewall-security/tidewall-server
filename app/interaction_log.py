@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Interaction
 from app.services.safe_export_evidence import EVIDENCE_SCHEMA_VERSION, project_detectors
+from app.services.safe_logging import report
 
 # Caller-supplied metadata is bounded and normalised. Without this, content
 # just moves into a different column — an integration is free to put a prompt
@@ -203,6 +204,16 @@ class InteractionLog:
         status: str = "allowed",
         latency_ms: float,
         evidence: dict[str, Any] | None = None,
+        # Raw content, offered but not necessarily stored: the policy decides.
+        # Passed rather than fetched so the writer does not have to know how
+        # the caller assembled the request.
+        content: dict[str, Any] | None = None,
+        # Decided when the request was admitted, not re-read here. Re-reading
+        # meant enabling capture mid-request could retain content that entered
+        # while capture was off, and disabling could silently drop a capture the
+        # operator had been promised.
+        capture_enabled: bool = False,
+        retention_days: int | None = None,
         api_key_id: str | None = None,
         app_id: str | None = None,
         user_id: str | None = None,
@@ -257,6 +268,54 @@ class InteractionLog:
                 device_id=_validated_db_id(device_id, "device_id"),
             )
             session.add(row)
+
+            # Same transaction as the event. A content row without its event,
+            # or an event claiming content_available when the write failed,
+            # would both be worse than not capturing at all.
+            #
+            # But the event must survive a content failure. Rolling both back
+            # meant an unserialisable payload erased the audit record and
+            # turned a completed guard decision into an HTTP error — the
+            # logging concern taking down the thing it was logging.
+            if content is not None and capture_enabled:
+                try:
+                    # Inside the boundary. Loading the capture module is itself
+                    # capture-only work: an ImportError here escaped log_event,
+                    # escaped the route's awaited thread, and turned a completed
+                    # guard decision into an HTTP 500 with the verdict never
+                    # committed. Capture-off never runs this import at all.
+                    from app.services.content_capture import build_content, capture_content
+
+                    prepared = build_content(
+                        input_messages=content.get("input"),
+                        output_messages=content.get("output"),
+                        matches=content.get("matches"),
+                        tools=content.get("tools"),
+                        retention_days=retention_days,
+                    )
+                except Exception as exc:
+                    # No values in the message: this is the content being
+                    # protected, on a path that reaches an operator's log.
+                    report(logger, "error", "content capture failed for request; storing the event without it", exc)
+                    prepared = None
+
+                if prepared is not None:
+                    # A savepoint, so a failure in the content INSERT itself —
+                    # a constraint, a driver disagreement, anything — rolls back
+                    # only the content. Pre-serialising caught unsupported
+                    # Python values; it did nothing for a failure at
+                    # persistence, which still destroyed the audit event.
+                    try:
+                        session.flush()
+                        with session.begin_nested():
+                            capture_content(session, interaction=row, prepared=prepared)
+                        row.content_available = True
+                    except Exception as exc:
+                        report(
+                            logger, "error", "content persistence failed for request; storing the event without it", exc
+                        )
+                        row.content_available = False
+
             session.commit()
 
     def get_recent(

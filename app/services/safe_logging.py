@@ -40,3 +40,31 @@ def describe_with_reason(exc: BaseException, reason: str) -> str:
     from request content."""
     trimmed = reason[:_MAX_REASON_LENGTH]
     return f"{type(exc).__name__}: {trimmed}"
+
+
+def report(logger: object, level: str, message: str, exc: BaseException | None = None, **kwargs: object) -> None:
+    """Report a failure in optional work, without becoming a failure itself.
+
+    Every capture-only operation is wrapped so its failure cannot change the
+    security decision. The *reporting* of that failure was not: it sits inside
+    the handler, so anything it raises escapes the boundary the handler exists
+    to provide. Logging is not as inert as it looks — a Filter installed by an
+    operator raises through `Logger.handle`, `describe()` runs before the call
+    and could raise on an exotic exception type, and `logger` itself may not be
+    what this module expects.
+
+    Nothing here is allowed to propagate. A capture failure that also cannot be
+    logged is worse than one that can, but neither may reach the caller.
+    """
+    try:
+        detail = describe(exc) if exc is not None else None
+        emit = getattr(logger, level, None)
+        if emit is None:
+            return
+        if detail is None:
+            emit(message, **kwargs)
+        else:
+            emit("%s: %s", message, detail, **kwargs)
+    except Exception:
+        # Deliberately silent. There is nowhere left to report to.
+        return

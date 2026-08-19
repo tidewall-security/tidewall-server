@@ -120,3 +120,111 @@ def test_construction_time_sites_deliberately_keep_their_traceback():
     load_line = next(ln for ln in source.split("\n") if "Failed to initialize Presidio" in ln)
 
     assert "exc_info=True" in load_line
+
+
+# ---------------------------------------------------------------------------
+# Reporting a failure must not become a failure
+# ---------------------------------------------------------------------------
+
+
+def test_report_survives_a_logger_that_raises():
+    """Every capture-only operation is wrapped so its failure cannot change
+    the security decision. The reporting of that failure was not: it sits
+    inside the handler, so anything it raises escapes the boundary the handler
+    exists to provide."""
+    from app.services.safe_logging import report
+
+    class _Hostile:
+        def warning(self, *_args, **_kwargs):
+            raise RuntimeError("logging is down")
+
+    report(_Hostile(), "warning", "capture failed", ValueError("x"))  # must not raise
+
+
+def test_report_survives_a_raising_logging_filter():
+    """The realistic vector. A handler's emit() failure is caught by the
+    logging module itself, but a Filter raises straight through
+    Logger.handle — and operators do install filters."""
+    import logging
+
+    from app.services.safe_logging import report
+
+    class _Hostile(logging.Filter):
+        def filter(self, record):
+            raise RuntimeError("filter is broken")
+
+    logger = logging.getLogger("tests.hostile_filter")
+    hostile = _Hostile()
+    logger.addFilter(hostile)
+    try:
+        report(logger, "error", "capture failed", ValueError("x"))  # must not raise
+    finally:
+        logger.removeFilter(hostile)
+
+
+def test_report_survives_a_describe_that_raises():
+    """describe() runs before the logging call, so it is inside the handler
+    and outside the logging module's own protection."""
+    from app.services.safe_logging import report
+
+    class _Hostile(type):
+        @property
+        def __name__(cls):
+            raise RuntimeError("no name for you")
+
+    class _Exotic(Exception, metaclass=_Hostile):
+        pass
+
+    with pytest.raises(RuntimeError):
+        describe(_Exotic())  # the premise: describe() really can raise here
+
+    class _Recording:
+        def warning(self, *args, **_kwargs):
+            raise AssertionError("should not get this far")
+
+    report(_Recording(), "warning", "capture failed", _Exotic())  # must not raise
+
+
+def test_report_still_reports_when_nothing_is_wrong():
+    """The guard must not have turned reporting into a no-op."""
+    from app.services.safe_logging import report
+
+    messages = []
+
+    class _Recording:
+        def warning(self, *args, **_kwargs):
+            messages.append(args)
+
+    report(_Recording(), "warning", "capture failed", ValueError("x"))
+    assert messages, "report() logged nothing at all"
+    rendered = " ".join(str(a) for a in messages[0])
+    assert "capture failed" in rendered
+    assert "ValueError" in rendered, "the exception type was dropped"
+
+
+def test_report_survives_a_logger_whose_attribute_lookup_raises():
+    from app.services.safe_logging import report
+
+    class _Hostile:
+        def __getattr__(self, _name):
+            raise RuntimeError("no attributes for you")
+
+    report(_Hostile(), "warning", "capture failed", ValueError("x"))  # must not raise
+
+
+def test_report_ignores_a_level_the_logger_does_not_have():
+    import logging
+
+    from app.services.safe_logging import report
+
+    report(logging.getLogger("tests.levels"), "shout", "capture failed")  # must not raise
+
+
+def test_report_survives_kwargs_the_emitter_rejects():
+    from app.services.safe_logging import report
+
+    class _Picky:
+        def warning(self, *_args):  # no **kwargs
+            return None
+
+    report(_Picky(), "warning", "capture failed", ValueError("x"), exc_info=True)  # must not raise

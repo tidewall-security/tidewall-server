@@ -1,8 +1,8 @@
 """Tests for SQLAlchemy ORM models."""
 
+from datetime import UTC
+
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
 from app.db.engine import get_engine, get_session_factory
 
@@ -106,13 +106,13 @@ def test_create_interaction(db_session):
 
 
 def test_create_vault(db_session):
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from app.db.models import Vault
 
     vault = Vault(
         data=b"pickled-vault-data",
-        expires_at=datetime(2026, 3, 28, 13, 0, 0, tzinfo=timezone.utc),
+        expires_at=datetime(2026, 3, 28, 13, 0, 0, tzinfo=UTC),
     )
     db_session.add(vault)
     db_session.commit()

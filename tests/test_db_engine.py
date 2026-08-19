@@ -3,8 +3,6 @@
 import os
 import tempfile
 
-import pytest
-
 
 def test_engine_creates_database_file():
     """Engine should create SQLite database at the given path."""

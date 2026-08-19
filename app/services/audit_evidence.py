@@ -61,11 +61,14 @@ are exactly what the product exists to protect.
 from __future__ import annotations
 
 import json
+import logging
 import unicodedata
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Literal
+
+from app.services.safe_logging import report
 
 # Overflow fails capture closed rather than truncating.
 MAX_MATCH_GROUPS = 100
@@ -84,6 +87,9 @@ MATCHES_SCHEMA_VERSION = 1
 SOURCE_KINDS = ("message", "tool")
 SOURCE_FIELDS = ("content", "name", "description", "parameters")
 _MAX_IDENTIFIER_LENGTH = 64
+
+
+logger = logging.getLogger(__name__)
 
 SourceKind = Literal["message", "tool"]
 SourceField = Literal["content", "name", "description", "parameters"]
@@ -298,10 +304,36 @@ class MatchCollector:
     _originals: dict[SourceRef, str] = field(default_factory=dict, repr=False)
     _matches: list[ExactMatch] = field(default_factory=list, repr=False)
     _finalized: bool = field(default=False, repr=False)
+    _segments: list[tuple[SourceRef, str, int]] = field(default_factory=list, repr=False)
     _capture_open: bool = field(default=False, repr=False)
 
     def __getstate__(self) -> None:
         raise EvidenceError("collector.not_serializable", "the collector holds original content and offsets")
+
+    def register_flattened(self, segments: list[tuple[SourceRef, str, int]]) -> None:
+        """Register the originals behind a concatenated scan text.
+
+        The guard flattens every message into one string before scanning, so a
+        detector reports offsets into that concatenation. Recording those as
+        `message[0].content` was factually wrong: a match in the third message
+        was stored as having come from the first, roles were always lost, and
+        the separator could produce a string that appears in no original field.
+
+        Each segment is (source, original text, offset of that text within the
+        flattened string). A span is resolved back to exactly one segment, and
+        a span crossing a boundary is refused rather than attributed to
+        whichever segment it started in.
+        """
+        self._segments = sorted(segments, key=lambda seg: seg[2])
+        for source, original, _offset in self._segments:
+            self.register_source(source, original)
+
+    def resolve_flattened(self, start: int, end: int) -> tuple[SourceRef, int, int] | None:
+        """Map a flattened span to (source, start, end) in its original field."""
+        for source, original, offset in getattr(self, "_segments", []):
+            if start >= offset and end <= offset + len(original):
+                return source, start - offset, end - offset
+        return None
 
     def register_source(self, source: SourceRef, original: str) -> None:
         """Record a field as it arrived, before any detector runs."""
@@ -318,6 +350,44 @@ class MatchCollector:
             del original
             raise EvidenceError("source.conflicting_registration")
         self._originals[source] = original
+
+    def open_batch(self, detector: str) -> _DetectorCapture:
+        """Start a batch without a context manager.
+
+        The context form ties commit to control flow, which means a commit
+        failure propagates into whatever the caller was doing. The scanner
+        needs capture to be observational — its failures must not be able to
+        replace a detector's result — so it drives open/commit/discard itself.
+        """
+        if self._finalized:
+            raise EvidenceError("collector.finalized")
+        if self._capture_open:
+            raise EvidenceError("collector.capture_already_open")
+        _check_identifier(detector, "match.detector.invalid")
+        self._capture_open = True
+        return _DetectorCapture(detector, self)
+
+    def commit_batch(self, staged: _DetectorCapture) -> None:
+        """Commit a batch, or discard it if anything is wrong with it."""
+        try:
+            if self._finalized or staged.poisoned:
+                return
+            for match in staged._staged:
+                if match.detector != staged.detector:
+                    return
+                original = self._originals.get(match.source)
+                if original is None or validation_error(match, original) is not None:
+                    return
+            if len(self._matches) + len(staged._staged) > MAX_MATCHES_COLLECTED:
+                return
+            self._matches.extend(staged._staged)
+        finally:
+            self.discard_batch(staged)
+
+    def discard_batch(self, staged: _DetectorCapture) -> None:
+        staged._staged.clear()
+        staged._closed = True
+        self._capture_open = False
 
     @contextmanager
     def capture(self, detector: str) -> Iterator[_DetectorCapture]:
@@ -353,6 +423,15 @@ class MatchCollector:
             # again rather than trust what was true on entry.
             if self._finalized:
                 raise EvidenceError("collector.finalized")
+
+            if staged.poisoned:
+                # A match failed validation or could not be attributed. Discard
+                # the whole batch silently — the caller is a detector mid-scan
+                # and bookkeeping is not its job, but a partial set must never
+                # be stored.
+                report(logger, "debug", f"discarding poisoned capture batch for {detector}")
+                return
+
             commit_failure: str | None = None
             for match in staged._staged:
                 # Re-validate rather than trust that add() saw every match.
@@ -494,6 +573,10 @@ class _DetectorCapture:
     _collector: MatchCollector = field(repr=False)
     _staged: list[ExactMatch] = field(default_factory=list, repr=False)
     _closed: bool = field(default=False, repr=False)
+    # Set when a match could not be validated. The batch is then discarded
+    # whole, rather than raising into the detector — optional audit capture
+    # must never change the security decision it is observing.
+    poisoned: bool = field(default=False, repr=False)
 
     def add(self, match: ExactMatch) -> None:
         # Continuing to accept matches after the block exits produced a
@@ -528,3 +611,61 @@ class _DetectorCapture:
             raise EvidenceError(failure)
         original = None
         self._staged.append(match)
+
+
+def report_match(
+    batch: _DetectorCapture | None,
+    detector: str,
+    match_type: str,
+    value: str,
+    start: int,
+    end: int,
+    *,
+    rule_id: str | None = None,
+) -> None:
+    """Stage one match in the detector's open batch, if anyone is collecting.
+
+    Takes the batch rather than the collector deliberately. An earlier version
+    opened and committed a fresh capture per match, which defeated the whole
+    point of the batch: a later invalid match no longer discarded the earlier
+    ones, so a detector that failed part-way could still persist a plausible
+    partial set — and the safe evidence would record no successful finding for
+    it. The scanner opens one capture around each detector call, so a detector
+    that raises discards everything it staged.
+
+    Offsets arrive relative to the flattened scan text and are resolved back to
+    the single original message they came from. A span crossing a boundary is
+    dropped rather than attributed to whichever message it started in.
+    """
+    if batch is None:
+        return
+    try:
+        resolved = batch._collector.resolve_flattened(start, end)
+        if resolved is None:
+            # Cannot be attributed to one message: drop the batch rather than
+            # record a fabricated origin.
+            batch.poisoned = True
+            report(
+                logger, "debug", f"exact match for {detector} could not be attributed to one message; discarding batch"
+            )
+            return
+        source, local_start, local_end = resolved
+        batch.add(
+            ExactMatch(
+                detector=detector,
+                match_type=match_type,
+                source=source,
+                value=value,
+                start=local_start,
+                end=local_end,
+                rule_id=rule_id,
+            )
+        )
+    except Exception:
+        # Everything, not only EvidenceError. This runs inside a detector's
+        # scan, so resolution, construction, normalisation, staging — even an
+        # allocation failure from the extra retained values — must not escape
+        # and become the detector's verdict. Poisoning still discards the whole
+        # batch, so a partial set is never stored.
+        batch.poisoned = True
+        report(logger, "debug", f"exact match capture failed for {detector}; discarding this detector's batch")

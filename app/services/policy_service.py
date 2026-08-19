@@ -16,6 +16,21 @@ from app.services.policy_validation import validate_detectors
 logger = logging.getLogger(__name__)
 
 
+def _validated_retention(days: int | None) -> int | None:
+    """Retention in days, or None for no expiry.
+
+    None is the configured default: the product owner chose configurable
+    retention with no default expiry and no size cap. That is deliberate and
+    differs from every comparable product researched, so it is recorded here
+    rather than left to be rediscovered.
+    """
+    if days is None:
+        return None
+    if not isinstance(days, int) or isinstance(days, bool) or days < 1:
+        raise ValueError("raw_content_retention_days must be a positive number of days, or null for no expiry")
+    return days
+
+
 class PolicyInUseError(Exception):
     """Raised when deleting a policy would silently rebind devices to the default."""
 
@@ -103,12 +118,17 @@ class PolicyService:
         is_default: bool = False,
         detectors: dict[str, Any] | None = None,
         on_detector_failure: str = OnDetectorFailure.REPORT.value,
+        raw_content_enabled: bool = False,
+        raw_content_retention_days: int | None = None,
     ) -> Policy:
         # Validate before writing anything. A policy that cannot be enforced
         # as written is rejected while the administrator is looking at it,
         # rather than accepted and then quietly not applied — which is
         # indistinguishable from applied-and-found-nothing.
         validate_detectors(detectors or {})
+        retention = _validated_retention(raw_content_retention_days)
+        if not isinstance(raw_content_enabled, bool):
+            raise ValueError("raw_content_enabled must be a boolean")
 
         session, should_close = self._get_session()
         try:
@@ -119,6 +139,11 @@ class PolicyService:
                 report_only=report_only,
                 on_detector_failure=OnDetectorFailure(on_detector_failure).value,
                 is_default=is_default,
+                # Accepted as parameters and then never assigned, so creating an
+                # enabled policy returned 201 with capture silently off. That is
+                # precisely the state this step exists to make impossible.
+                raw_content_enabled=raw_content_enabled,
+                raw_content_retention_days=retention,
             )
             session.add(policy)
             session.flush()
@@ -148,6 +173,9 @@ class PolicyService:
         description: str | None = None,
         report_only: bool | None = None,
         on_detector_failure: str | None = None,
+        raw_content_enabled: bool | None = None,
+        raw_content_retention_days: int | None = None,
+        retention_supplied: bool = False,
     ) -> Policy:
         if on_detector_failure is not None:
             on_detector_failure = OnDetectorFailure(on_detector_failure).value
@@ -166,6 +194,13 @@ class PolicyService:
                 policy.report_only = report_only
             if on_detector_failure is not None:
                 policy.on_detector_failure = on_detector_failure
+            if raw_content_enabled is not None:
+                policy.raw_content_enabled = raw_content_enabled
+            if retention_supplied:
+                # Explicit flag, because None is a meaningful value here: it
+                # means "no expiry", not "leave unchanged". Without it there is
+                # no way to turn a retention window back off.
+                policy.raw_content_retention_days = _validated_retention(raw_content_retention_days)
 
             session.commit()
 

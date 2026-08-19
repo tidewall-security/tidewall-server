@@ -37,10 +37,68 @@ from app.interaction_log import _validated as _safe_meta
 from app.interaction_log import _validated_ip as _safe_ip
 from app.models import GuardRequest, GuardResponse, GuardResult
 from app.services.safe_export_evidence import project_detectors
-from app.services.safe_logging import describe
+from app.services.safe_logging import describe, report
 from app.utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
+
+
+def _build_collector(messages: list[dict]) -> Any:
+    """Set up exact-match capture, or give up on it.
+
+    Wrapped whole. Constructing the collector and its sources sits outside the
+    scan, so an exception here turned a request that capture-off would have
+    scanned into a 500 — optional audit deciding whether the guard runs at all.
+    """
+    try:
+        from app.services.audit_evidence import MatchCollector, SourceRef
+
+        collector = MatchCollector()
+        # Per message, with each one's offset into the flattened text, so a
+        # match is attributed to the message it actually came from rather than
+        # to the first one.
+        segments = []
+        cursor = 0
+        for index, message in enumerate(messages or []):
+            segment_text = str(message.get("content") or "")
+            segments.append(
+                (
+                    SourceRef(
+                        kind="message",
+                        index=index,
+                        field="content",
+                        # Roles are caller data, not internal discriminators.
+                        role=_safe_role(message.get("role")),
+                    ),
+                    segment_text,
+                    cursor,
+                )
+            )
+            cursor += len(segment_text) + 1  # the single space the flattening inserts
+        collector.register_flattened(segments)
+        return collector
+    except Exception as exc:
+        report(logger, "warning", "exact-match capture setup failed; continuing without it", exc)
+        return None
+
+
+def _safe_role(value: object) -> str | None:
+    """A role that provenance can record, or nothing.
+
+    Dropped rather than rejected: the role is a nice-to-have on an audit
+    record, and refusing the request because a caller used "human/operator"
+    would make enabling capture change the API contract.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    # ASCII, matching what SourceRef will accept. isalnum() passes Unicode
+    # letters, so a role like "rôle" cleared this check and was then rejected
+    # downstream — failing the request rather than dropping the role.
+    ok = all(("a" <= c <= "z") or ("A" <= c <= "Z") or ("0" <= c <= "9") or c in "_-." for c in value)
+    if len(value) > 64 or not ok:
+        return None
+    return value
+
 
 router = APIRouter()
 
@@ -183,6 +241,14 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             policy_id=policy.id,
             api_key_id=getattr(request.state, "api_key_id", None),
             evidence={},
+            # Blocking before detectors run is a normal outcome, not an error
+            # path — without this, capture-on quietly meant capture-on-except-
+            # when-an-access-rule-fired.
+            content={"input": messages, "output": None, "matches": None, "tools": tools},
+            # Resolved when the request was admitted, so a mid-request policy
+            # change cannot retroactively capture or suppress this one.
+            capture_enabled=bool(getattr(policy, "raw_content_enabled", False)),
+            retention_days=getattr(policy, "raw_content_retention_days", None),
             app_id=body.app_id,
             user_id=body.user_id,
             llm_provider=body.llm_provider,
@@ -222,7 +288,27 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     # Detectors use synchronous ML inference (torch, ONNX) so we offload
     # the entire scan to a thread to keep the async event loop responsive.
     t0 = time.monotonic()
-    scan_result = await asyncio.to_thread(engine.scan, all_text, event_type, vault_id, vault, tools, messages)
+    # A collector only when capture is on. Detectors that hold an original
+    # value report into it, and each match is validated against the text they
+    # were given — provenance rather than a value copied out of a payload.
+    capture_enabled = bool(getattr(policy, "raw_content_enabled", False))
+    match_collector = _build_collector(messages) if capture_enabled else None
+
+    scan_result = await asyncio.to_thread(
+        engine.scan, all_text, event_type, vault_id, vault, tools, messages, match_collector
+    )
+
+    captured_matches = None
+    if match_collector is not None:
+        try:
+            groups = match_collector.finalize()
+            captured_matches = {
+                "schema_version": 1,
+                "matches": [g.as_storable() for g in groups],
+            }
+        except Exception as exc:
+            # Capture failing must not fail the scan that already succeeded.
+            report(logger, "warning", "exact match capture failed", exc)
     latency_ms = (time.monotonic() - t0) * 1000
 
     # If any redacting detector mutated text, we need to re-scan each
@@ -416,6 +502,19 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
         policy_id=policy.id,
         api_key_id=getattr(request.state, "api_key_id", None),
         evidence=project_detectors(scan_result.detectors),
+        # Offered, not stored: log_event captures only if the policy says so.
+        content={
+            "input": messages,
+            "output": guard_output.get("messages") if guard_output else None,
+            # Tools are scanned, so a captured tool-input or tool-listing event
+            # without them is an incomplete record of what was evaluated.
+            "tools": tools,
+            # Exact matches await the detector wiring: the typed channel from
+            # step 1 exists but no detector reports through it yet, so this is
+            "matches": captured_matches,
+        },
+        capture_enabled=capture_enabled,
+        retention_days=getattr(policy, "raw_content_retention_days", None),
         app_id=body.app_id,
         user_id=body.user_id,
         llm_provider=body.llm_provider,

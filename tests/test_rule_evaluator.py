@@ -1,7 +1,5 @@
 """Tests for access rule evaluation logic."""
 
-import pytest
-
 
 def test_no_rules_returns_continue():
     from app.services.rule_evaluator import evaluate_access_rules

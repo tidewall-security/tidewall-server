@@ -145,10 +145,104 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.state.export_service = ExportService(session_factory=SessionLocal)
 
+    # Retention runs on a schedule now. The three partial mechanisms it
+    # replaces each had a real gap: startup only helps if the process restarts,
+    # post-write only runs while traffic arrives, and the read gate protects
+    # disclosure without ever reclaiming disk — so a server that captured
+    # content and then went quiet would hold it indefinitely.
+    #
+    # The read gate stays regardless: expiry is a promise about what gets
+    # disclosed, and that must not depend on a background task having run.
+    # Installing it is capture-only work, so it cannot decide whether the
+    # server serves. Unguarded, an import or task-creation failure aborted
+    # startup even with capture disabled on every policy — no enforcement at
+    # all, because of a subsystem with nothing to do.
+    #
+    # A failure here does not leave content exposed: the read gate denies
+    # expired content whether or not a purge ran. It does mean expired rows
+    # stay on disk, so it logs at error rather than passing quietly.
+    #
+    # /health is unauthenticated, so it is deliberately not reported there —
+    # "retention is not running" tells an unauthenticated caller that captured
+    # content is accumulating. Operator-visible reporting on an authenticated
+    # surface is worth adding and is not here yet.
+    from app.services.safe_logging import report
+
+    scheduler = None
+    try:
+        from app.services.scheduler import Scheduler, retention_job
+
+        # Assigned before start(), so a partial start is still stoppable. If
+        # start() creates one task and then fails, dropping the reference would
+        # leave that task running while shutdown believes there is no
+        # background work — and decides whether to dispose the engine on that
+        # belief.
+        scheduler = Scheduler()
+        scheduler.start([retention_job(SessionLocal, scheduler=scheduler)])
+    except Exception:
+        report(
+            logging.getLogger(__name__),
+            "error",
+            "retention scheduler did not start; expired content will not be reclaimed from disk "
+            "(it remains undisclosable through the read gate)",
+            # Infrastructure, not a scan: the traceback carries no request
+            # content and is the most useful thing here.
+            exc_info=True,
+        )
+        # Deliberately not reset to None: if start() got far enough to create a
+        # task, that task is running and shutdown must still stop and drain it.
+    app.state.scheduler = scheduler
+
     logging.info("Tidewall ready")
 
-    yield
-    engine.dispose()
+    try:
+        yield
+    finally:
+        # In a finally: an exception thrown into the lifespan context would
+        # otherwise skip both, leaving the scheduler running against a disposed
+        # engine.
+        # Stopping it is capture-only work too, so it cannot decide whether
+        # shutdown completes. Unguarded, an exception here escaped lifespan
+        # teardown and skipped engine.dispose() entirely.
+        #
+        # A raising stop() means we do not know whether a worker still owns a
+        # session, so it counts as not drained: the same conservative answer
+        # stop() gives when it times out.
+        if scheduler is None:
+            drained = True
+        else:
+            try:
+                drained = await scheduler.stop()
+            except Exception:
+                report(
+                    logging.getLogger(__name__),
+                    "error",
+                    "retention scheduler did not stop cleanly; assuming background work is still running",
+                    exc_info=True,
+                )
+                drained = False
+        if drained:
+            engine.dispose()
+        else:
+            # Withheld because the pool class decides whether this is safe, and
+            # only one of the two is. Measured against this codebase's own
+            # get_engine(): a file-backed URL gets a QueuePool, where dispose()
+            # closes checked-in connections only — a worker holding a
+            # checked-out one keeps working, and the engine stays usable
+            # through its replacement pool. An in-memory URL gets a StaticPool,
+            # whose single shared connection dispose() closes outright; a
+            # worker still using it then fails with a ProgrammingError.
+            #
+            # So for the production configuration disposing here would be
+            # harmless, and an earlier version of this comment claimed the
+            # general case wrongly. Withholding it costs an idle pool on a path
+            # where the process is about to exit anyway, and is correct for
+            # both.
+            report(
+                logging.getLogger(__name__),
+                "error",
+                "not disposing the database engine: background work is still running",
+            )
 
 
 def create_app() -> FastAPI:

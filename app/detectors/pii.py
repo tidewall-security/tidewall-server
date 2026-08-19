@@ -24,6 +24,24 @@ from .base import BaseDetector, DetectorResult, FailureCode
 logger = logging.getLogger(__name__)
 
 
+def _report_match(*args: object, **kwargs: object) -> None:
+    """Report an exact match for audit, if the audit hook is available at all.
+
+    Capture is optional; this detector is not. Importing the hook at module
+    scope made a capture-only dependency a hard requirement of a security
+    detector: ScannerEngine loads these modules dynamically, so an ImportError
+    here became a detector construction failure, and depending on
+    on_detector_failure the request could then degrade or block. Enforcement
+    must not depend on whether audit code loads.
+    """
+    try:
+        from app.services.audit_evidence import report_match
+
+        report_match(*args, **kwargs)  # type: ignore[arg-type]
+    except Exception:
+        return None
+
+
 class PIIDetector(BaseDetector):
     """Detects and redacts PII using Microsoft Presidio.
 
@@ -116,6 +134,8 @@ class PIIDetector(BaseDetector):
                 placeholder = f"[REDACTED_{entity_type}_{fallback_counts[entity_type]}]"
 
             spans.append((r.start, r.end, placeholder, entity_type))
+
+            _report_match(kwargs.get("matches"), self.name, entity_type, original, r.start, r.end)
 
             rule = self._rules.get(entity_type, {"action": "replacement"})
             redaction = self._redactor.redact(placeholder, entity_type, rule)

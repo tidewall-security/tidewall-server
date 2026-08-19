@@ -1,7 +1,5 @@
 """Tests for entity extraction from text."""
 
-import pytest
-
 
 def test_extract_ipv4():
     from app.services.entity_extractor import extract_entities

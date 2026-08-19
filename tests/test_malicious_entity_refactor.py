@@ -1,7 +1,5 @@
 """Tests for refactored MaliciousEntityDetector with per-type rules."""
 
-import pytest
-
 
 def test_detect_ip_from_blocklist():
     from app.detectors.malicious_entity import MaliciousEntityDetector

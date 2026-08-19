@@ -249,3 +249,195 @@ def test_the_vocabularies_come_from_the_enums_not_a_restated_list():
     for code in FailureCode:
         projected = project_detectors({"code": {"detected": False, "failure_code": code.value}})
         assert projected["code"]["failure_code"] == code.value, f"{code.value} would be dropped"
+
+
+def test_exact_matches_are_captured_when_capture_is_on(client_and_key):
+    """The middle role tier needs matched values, and they must be provenance —
+    validated against the text the detector was given — not values copied out
+    of a public payload."""
+    from app.db.models import InteractionContent, Policy
+
+    client, key = client_and_key
+    factory = client.app.state.session_factory
+
+    session = factory()
+    try:
+        policy = session.query(Policy).first()
+        policy.raw_content_enabled = True
+        session.commit()
+    finally:
+        session.close()
+
+    client.app.state.policy_service.invalidate_all_engines()
+
+    resp = client.post(
+        "/v1/guard_chat_completions",
+        json={
+            "guard_input": {"messages": [{"role": "user", "content": f"token {CANARY} here"}]},
+            "event_type": "input",
+        },
+        headers={"Authorization": f"Bearer {key}"},
+    )
+    assert resp.status_code == 200
+
+    session = factory()
+    try:
+        content = session.query(InteractionContent).one()
+    finally:
+        session.close()
+
+    assert content.matches_json is not None, "no exact matches were captured"
+    stored = json.dumps(content.matches_json)
+    assert CANARY in stored, "the matched value was not recorded"
+    assert "start" not in stored and "end" not in stored, "offsets reached storage"
+
+
+def test_no_matches_are_captured_when_capture_is_off(client_and_key):
+    from app.db.models import InteractionContent
+
+    client, key = client_and_key
+
+    client.post(
+        "/v1/guard_chat_completions",
+        json={
+            "guard_input": {"messages": [{"role": "user", "content": f"token {CANARY} here"}]},
+            "event_type": "input",
+        },
+        headers={"Authorization": f"Bearer {key}"},
+    )
+
+    session = client.app.state.session_factory()
+    try:
+        assert session.query(InteractionContent).count() == 0
+    finally:
+        session.close()
+
+
+def test_a_match_in_a_later_message_is_attributed_to_that_message(client_and_key):
+    """The guard flattens messages before scanning, so a detector reports
+    offsets into the concatenation. Recording those as message[0] was factually
+    wrong: a match in the third message was stored as having come from the
+    first, and the role was always lost."""
+    from app.db.models import InteractionContent, Policy
+
+    client, key = client_and_key
+    factory = client.app.state.session_factory
+
+    session = factory()
+    try:
+        session.query(Policy).first().raw_content_enabled = True
+        session.commit()
+    finally:
+        session.close()
+    client.app.state.policy_service.invalidate_all_engines()
+
+    client.post(
+        "/v1/guard_chat_completions",
+        json={
+            "guard_input": {
+                "messages": [
+                    {"role": "system", "content": "you are helpful"},
+                    {"role": "user", "content": "nothing here"},
+                    {"role": "assistant", "content": f"the token is {CANARY}"},
+                ]
+            },
+            "event_type": "input",
+        },
+        headers={"Authorization": f"Bearer {key}"},
+    )
+
+    session = factory()
+    try:
+        matches = session.query(InteractionContent).one().matches_json
+    finally:
+        session.close()
+
+    assert matches and matches["matches"], "no match was captured"
+    entry = next(m for m in matches["matches"] if CANARY in m["value"])
+    assert entry["source"]["index"] == 2, f"attributed to message {entry['source']['index']}, not 2"
+    assert entry["source"]["role"] == "assistant"
+
+
+def test_a_match_spanning_the_join_boundary_is_dropped(client_and_key):
+    """The separator can create a string that occurs in no original message.
+    Attributing it to whichever message it started in would be a fabricated
+    provenance record."""
+    from app.services.audit_evidence import MatchCollector, SourceRef
+
+    collector = MatchCollector()
+    collector.register_flattened(
+        [
+            (SourceRef(kind="message", index=0, field="content", role="user"), "abc", 0),
+            (SourceRef(kind="message", index=1, field="content", role="user"), "def", 4),
+        ]
+    )
+
+    # "c d" spans the join.
+    assert collector.resolve_flattened(2, 5) is None
+    # Wholly inside the second message.
+    resolved = collector.resolve_flattened(4, 7)
+    assert resolved is not None and resolved[0].index == 1
+
+
+def _post(client, key, messages):
+    return client.post(
+        "/v1/guard_chat_completions",
+        json={"guard_input": {"messages": messages}, "event_type": "input"},
+        headers={"Authorization": f"Bearer {key}"},
+    )
+
+
+def test_capture_does_not_change_the_security_decision(client_and_key):
+    """The governing rule.
+
+    Reporting a match used to raise into detector execution, and the engine
+    turned that into SCAN_FAILED — so enabling capture could skip a redaction
+    that would otherwise have happened. Optional audit must never alter what
+    the guard does.
+    """
+    from app.db.models import Policy
+
+    client, key = client_and_key
+    messages = [
+        {"role": "user", "content": f"first {CANARY} here"},
+        {"role": "assistant", "content": f"second {CANARY} there"},
+    ]
+
+    off = _post(client, key, messages).json()["result"]
+
+    session = client.app.state.session_factory()
+    try:
+        session.query(Policy).first().raw_content_enabled = True
+        session.commit()
+    finally:
+        session.close()
+    client.app.state.policy_service.invalidate_all_engines()
+
+    on = _post(client, key, messages).json()["result"]
+
+    assert on["blocked"] == off["blocked"]
+    assert on["transformed"] == off["transformed"]
+    assert on["guard_output"] == off["guard_output"], "capture changed the sanitised output"
+    assert on["detectors"] == off["detectors"], "capture changed the detector verdicts"
+
+
+@pytest.mark.parametrize("role", ["human/operator", "rôle", "x" * 200, "tool-call"])
+def test_an_unusual_role_is_accepted_whether_or_not_capture_is_on(client_and_key, role):
+    """Roles are caller data, not internal discriminators. Feeding one into the
+    identifier rule made capture-on reject requests capture-off accepts —
+    capture changing what the API accepts."""
+    from app.db.models import Policy
+
+    client, key = client_and_key
+
+    session = client.app.state.session_factory()
+    try:
+        session.query(Policy).first().raw_content_enabled = True
+        session.commit()
+    finally:
+        session.close()
+    client.app.state.policy_service.invalidate_all_engines()
+
+    resp = _post(client, key, [{"role": role, "content": "hello"}])
+
+    assert resp.status_code == 200, f"role {role!r} failed the request when capture was on"

@@ -1,7 +1,7 @@
 """Tests for auth middleware and role dependencies."""
 
 import pytest
-from fastapi import FastAPI, Depends
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from app.db.engine import get_engine, get_session_factory
@@ -28,8 +28,8 @@ def app_with_auth():
     viewer_key, _ = key_svc.create_key(name="viewer", role="viewer", policy_id=policy.id)
     api_key, _ = key_svc.create_key(name="collector", role="api")
 
-    from app.auth.middleware import AuthMiddleware
     from app.auth.dependencies import require_role
+    from app.auth.middleware import AuthMiddleware
 
     app = FastAPI()
     app.state.session_factory = SessionLocal

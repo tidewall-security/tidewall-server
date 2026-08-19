@@ -736,3 +736,249 @@ def test_the_stored_form_carries_a_schema_version():
     assert payload["schema_version"] == 1
     assert payload["matches"][0]["value"] == "alice@example.com"
     assert "start" not in json_keys(payload)
+
+
+def test_a_detector_that_fails_part_way_stores_nothing():
+    """One capture scope per detector run.
+
+    An earlier helper opened and committed a fresh capture per match, so a
+    detector that failed later still persisted a plausible partial set — while
+    the safe evidence recorded no successful finding for it.
+    """
+    from app.services.audit_evidence import report_match
+
+    collector = MatchCollector()
+    collector.register_flattened([(MSG, "alice@example.com and more text here", 0)])
+
+    # No exception: reporting must not raise into detector execution. An
+    # earlier version did, and the engine turned it into SCAN_FAILED — so
+    # turning capture on could skip a redaction that would otherwise have
+    # happened. Audit must never change enforcement.
+    with collector.capture("pii") as batch:
+        report_match(batch, "pii", "EMAIL_ADDRESS", "alice@example.com", 0, 17)
+        report_match(batch, "pii", "US_SSN", "123-45-6789", 22, 33)  # stale
+        assert batch.poisoned is True
+
+    assert collector.finalize() == [], "a partial detector batch survived"
+
+
+def test_an_exception_after_a_reported_match_discards_it():
+    """The PII path reports before redaction; if redaction then raises, the
+    detector is recorded as failed and must not leave exact values behind."""
+    from app.services.audit_evidence import report_match
+
+    collector = MatchCollector()
+    collector.register_flattened([(MSG, "alice@example.com", 0)])
+
+    with pytest.raises(RuntimeError):
+        with collector.capture("pii") as batch:
+            report_match(batch, "pii", "EMAIL_ADDRESS", "alice@example.com", 0, 17)
+            raise RuntimeError("redaction blew up")
+
+    assert collector.finalize() == []
+
+
+def test_a_successful_detector_batch_is_kept():
+    from app.services.audit_evidence import report_match
+
+    collector = MatchCollector()
+    collector.register_flattened([(MSG, "alice@example.com", 0)])
+
+    with collector.capture("pii") as batch:
+        report_match(batch, "pii", "EMAIL_ADDRESS", "alice@example.com", 0, 17)
+
+    groups = collector.finalize()
+    assert len(groups) == 1
+    assert groups[0].value == "alice@example.com"
+
+
+# ---------------------------------------------------------------------------
+# Capture is observational: its failures cost evidence, never the verdict
+# ---------------------------------------------------------------------------
+
+
+def _engine_with(detector, collector):
+    from app.config import PolicyConfig
+    from app.scanner_engine import ScannerEngine
+
+    engine = ScannerEngine.__new__(ScannerEngine)
+    engine._detectors = [(detector.name, detector)]
+    engine._construction_failures = []
+    engine._policy = PolicyConfig(name="t")
+    engine._session_factory = None
+    return engine
+
+
+class _ReportingDetector:
+    """A detector that reports a match and succeeds."""
+
+    action = "report"
+    can_redact = False
+    can_block = False
+    available = True
+
+    @property
+    def name(self) -> str:
+        return "custom_entity"
+
+    def scan(self, text, **kwargs):
+        from app.detectors.base import DetectorResult
+        from app.services.audit_evidence import report_match
+
+        report_match(kwargs.get("matches"), "custom_entity", "CUSTOM", "alice", 0, 5)
+        return DetectorResult(detected=True)
+
+
+def test_a_collector_that_raises_on_commit_does_not_fail_the_detector():
+    """Capture bookkeeping happens after the verdict exists, so it can only
+    cost evidence. Previously the whole collector context sat inside the
+    detector's try, so a commit failure became SCAN_FAILED — and for a redactor
+    that means a redaction that should have happened did not."""
+
+    class _BadCollector(MatchCollector):
+        def commit_batch(self, staged):  # type: ignore[override]
+            raise RuntimeError("commit exploded")
+
+    collector = _BadCollector()
+    collector.register_flattened([(MSG, "alice and bob", 0)])
+
+    engine = _engine_with(_ReportingDetector(), collector)
+    result = engine.scan("alice and bob", "input", "vault-1", None, None, None, collector)
+
+    assert "custom_entity" in result.detectors
+    assert result.detectors["custom_entity"]["detected"] is True
+    assert not result.failures, f"capture failure became a detector failure: {result.failures}"
+
+
+def test_a_collector_that_raises_on_open_does_not_fail_the_detector():
+    class _BadCollector(MatchCollector):
+        def open_batch(self, detector):  # type: ignore[override]
+            raise RuntimeError("open exploded")
+
+    collector = _BadCollector()
+    collector.register_flattened([(MSG, "alice and bob", 0)])
+
+    engine = _engine_with(_ReportingDetector(), collector)
+    result = engine.scan("alice and bob", "input", "vault-1", None, None, None, collector)
+
+    assert result.detectors["custom_entity"]["detected"] is True
+    assert not result.failures
+
+
+def test_a_collector_that_raises_while_resolving_does_not_fail_the_detector():
+    class _BadCollector(MatchCollector):
+        def resolve_flattened(self, start, end):  # type: ignore[override]
+            raise RuntimeError("resolve exploded")
+
+    collector = _BadCollector()
+    collector.register_flattened([(MSG, "alice and bob", 0)])
+
+    engine = _engine_with(_ReportingDetector(), collector)
+    result = engine.scan("alice and bob", "input", "vault-1", None, None, None, collector)
+
+    assert result.detectors["custom_entity"]["detected"] is True
+    assert not result.failures
+
+
+def test_capture_stops_after_a_redactor_mutates_the_text():
+    """The coincidental-validation case.
+
+    Once a redactor changes the text, a later detector's offsets refer to a
+    different coordinate space. Usually validation catches that. But when the
+    shift happens to align the reported offset with an identical value
+    elsewhere in the original — repeated tokens, duplicate secrets, equal text
+    in a neighbouring message — validation *succeeds* and the match commits
+    against the wrong source. Offsets are dropped before storage, so the false
+    attribution is undiscoverable afterwards.
+
+    Here the redaction is exactly long enough that message 0's "token" lands on
+    the offset where message 1's "token" sits in the original.
+    """
+    from app.config import PolicyConfig
+    from app.detectors.base import DetectorResult
+    from app.scanner_engine import ScannerEngine
+    from app.services.audit_evidence import report_match
+
+    first_text = "aaa token"  # "token" at 4..9
+    second_text = "zzz token"  # "token" at 14..19 of the flattened original
+    original = f"{first_text} {second_text}"
+    assert original[14:19] == "token"
+
+    # 3 chars -> 13 shifts message 0's "token" from 4 to exactly 14.
+    mutated = original.replace("aaa", "[REDACTED-AA]")
+    assert mutated[14:19] == "token"
+
+    class _Redactor:
+        action, can_redact, can_block, available = "redact", True, False, True
+
+        def scan(self, text, **kwargs):
+            # Its own match is captured normally: it scanned the original.
+            report_match(kwargs.get("matches"), "confidential_and_pii_entity", "CUSTOM", "aaa", 0, 3)
+            return DetectorResult(detected=True, sanitized_text=text.replace("aaa", "[REDACTED-AA]"))
+
+    class _LaterReporter:
+        action, can_redact, can_block, available = "report", False, False, True
+
+        def scan(self, text, **kwargs):
+            assert text == mutated, "the later detector should see the redacted text"
+            # Offsets into the MUTATED text. They validate against the original
+            # by coincidence, and resolve to message 1 — the wrong message.
+            report_match(kwargs.get("matches"), "custom_entity", "CUSTOM", "token", 14, 19)
+            return DetectorResult(detected=True)
+
+    collector = MatchCollector()
+    collector.register_flattened(
+        [
+            (SourceRef(kind="message", index=0, field="content", role="user"), first_text, 0),
+            (SourceRef(kind="message", index=1, field="content", role="user"), second_text, len(first_text) + 1),
+        ]
+    )
+
+    engine = ScannerEngine.__new__(ScannerEngine)
+    engine._detectors = [("confidential_and_pii_entity", _Redactor()), ("custom_entity", _LaterReporter())]
+    engine._construction_failures = []
+    engine._policy = PolicyConfig(name="t")
+    engine._session_factory = None
+
+    result = engine.scan(original, "input", "v", None, None, None, collector)
+    assert result.transformed, "the redactor did not run, so the test proves nothing"
+
+    groups = collector.finalize()
+    captured = {g.detector for g in groups}
+    assert "confidential_and_pii_entity" in captured, "the mutating detector's own match should survive"
+    assert "custom_entity" not in captured, (
+        "a match was captured after the text was mutated; its offsets validated "
+        "by coincidence and would be attributed to the wrong message"
+    )
+
+
+@pytest.mark.parametrize("module_name", ["app.detectors.custom_entity", "app.detectors.pii"])
+def test_a_broken_audit_hook_does_not_disable_an_enforcing_detector(module_name, monkeypatch):
+    """Capture is optional; the detectors that report into it are not.
+
+    These modules are loaded dynamically by ScannerEngine. While they imported
+    the audit hook at module scope, an unimportable audit module became a
+    detector *construction* failure — so turning on nothing at all, merely
+    having a broken optional dependency, could degrade or block a request
+    depending on on_detector_failure.
+    """
+    import builtins
+    import importlib
+    import sys
+
+    real_import = builtins.__import__
+
+    def _fail_audit_import(name, *args, **kwargs):
+        if name == "app.services.audit_evidence":
+            raise ImportError("audit evidence unavailable")
+        return real_import(name, *args, **kwargs)
+
+    for cached in (module_name, "app.services.audit_evidence"):
+        monkeypatch.delitem(sys.modules, cached, raising=False)
+    monkeypatch.setattr(builtins, "__import__", _fail_audit_import)
+
+    # The import itself must survive.
+    module = importlib.import_module(module_name)
+
+    # And so must reporting through it, which is now a no-op.
+    assert module._report_match(None, "d", "T", "v", 0, 1) is None

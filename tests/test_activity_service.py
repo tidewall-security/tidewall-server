@@ -1,8 +1,9 @@
 """Tests for ActivityService."""
 
 import pytest
+
 from app.db.engine import get_engine, get_session_factory
-from app.db.models import Base, ActivityLog
+from app.db.models import ActivityLog, Base
 
 
 @pytest.fixture

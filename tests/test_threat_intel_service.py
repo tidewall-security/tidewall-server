@@ -1,7 +1,5 @@
 """Tests for ThreatIntelService — local blocklists and external checks."""
 
-import pytest
-
 
 def test_empty_blocklists_no_match():
     from app.services.threat_intel_service import ThreatIntelService

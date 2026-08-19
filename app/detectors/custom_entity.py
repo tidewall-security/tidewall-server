@@ -22,6 +22,24 @@ from .base import BaseDetector, DetectorResult, FailureCode
 logger = logging.getLogger(__name__)
 
 
+def _report_match(*args: object, **kwargs: object) -> None:
+    """Report an exact match for audit, if the audit hook is available at all.
+
+    Capture is optional; this detector is not. Importing the hook at module
+    scope made a capture-only dependency a hard requirement of a security
+    detector: ScannerEngine loads these modules dynamically, so an ImportError
+    here became a detector construction failure, and depending on
+    on_detector_failure the request could then degrade or block. Enforcement
+    must not depend on whether audit code loads.
+    """
+    try:
+        from app.services.audit_evidence import report_match
+
+        report_match(*args, **kwargs)  # type: ignore[arg-type]
+    except Exception:
+        return None
+
+
 class CustomEntityDetector(BaseDetector):
     """Detects custom entities via user-supplied regex patterns."""
 
@@ -114,8 +132,10 @@ class CustomEntityDetector(BaseDetector):
         # Build entities (left-to-right) and sanitize text (right-to-left so
         # earlier offsets stay valid as we splice). Note: entity ``start_pos``
         # records the position in the ORIGINAL ``text``, not in ``sanitized``.
+        collector = kwargs.get("matches")
         entities: list[dict[str, Any]] = []
         for n, (start, _end, value) in enumerate(kept, start=1):
+            _report_match(collector, self.name, "CUSTOM", value, start, start + len(value))
             placeholder = f"[REDACTED_CUSTOM_{n}]"
             entities.append(
                 {

@@ -20,12 +20,14 @@ so detector models are loaded once and reused across requests.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
 from app.config import OnDetectorFailure, PolicyConfig
 from app.detectors.base import BaseDetector, DetectorStatus, FailureCode
-from app.services.safe_logging import describe
+from app.services.safe_logging import describe, report
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +138,60 @@ _DETECTOR_REGISTRY: dict[str, tuple[str, str]] = {
     "competitors": ("app.detectors.competitors", "CompetitorsDetector"),
     "emoji": ("app.detectors.emoji_detector", "EmojiDetector"),
 }
+
+
+def _open_batch(collector: Any, detector: str) -> Any:
+    """Start a capture batch, or give up on capture for this detector."""
+    if collector is None:
+        return None
+    try:
+        return collector.open_batch(detector)
+    except Exception:
+        # Capture is optional; the scan is not.
+        report(logger, "debug", f"could not open a capture batch for {detector}")
+        return None
+
+
+def _settle_batch(collector: Any, batch: Any, *, keep: bool) -> None:
+    """Commit or discard, swallowing everything.
+
+    A failure here happens after the detector has already produced a verdict,
+    so it can only cost evidence — never the verdict.
+    """
+    if collector is None or batch is None:
+        return
+    try:
+        if keep:
+            collector.commit_batch(batch)
+        else:
+            collector.discard_batch(batch)
+    except Exception:
+        report(logger, "debug", "capture bookkeeping failed; discarding this detector's matches")
+
+
+def _discard_batch(collector: Any, batch: Any) -> None:
+    if collector is None or batch is None:
+        return
+    try:
+        collector.discard_batch(batch)
+    except Exception:
+        report(logger, "debug", "could not discard a capture batch")
+
+
+@contextmanager
+def _capture_scope(collector: Any, detector: str) -> Iterator[Any]:
+    """One exact-match batch per detector run, or nothing when capture is off.
+
+    The batch is discarded unless the detector both returns and returns a
+    successful result. A typed FAILED return is a supported outcome, not an
+    exception, and it previously still committed a plausible batch while the
+    safe evidence recorded no finding for that detector.
+    """
+    if collector is None:
+        yield None
+        return
+    with collector.capture(detector) as batch:
+        yield batch
 
 
 def _detector_applies(name: str, event_type: str) -> bool:
@@ -360,8 +416,15 @@ class ScannerEngine:
         vault: Any,
         tools: list[dict] | None = None,
         messages: list[dict] | None = None,
+        matches: Any = None,
     ) -> ScanResult:
-        """Run all enabled detectors on *text* and return aggregated result."""
+        """Run all enabled detectors on *text* and return aggregated result.
+
+        ``matches`` is an optional exact-match collector. When capture is on the
+        guard passes one, detectors that hold an original value report into it,
+        and every match is validated against the text they were given — so the
+        record is provenance rather than a value copied out of a payload.
+        """
         result = ScanResult()
         self._seed_construction_failures(result, event_type=event_type)
         current_text = text
@@ -370,19 +433,31 @@ class ScannerEngine:
             if not _detector_applies(det_name, event_type):
                 continue
 
+            # Capture is opened outside the detector's own error handling and
+            # never inside it. Anything capture does — opening, reporting,
+            # committing, even a MemoryError from the extra allocations — must
+            # not be able to become the detector's verdict, or turning audit on
+            # would change enforcement.
+            batch = _open_batch(matches, det_name)
+            extra: dict[str, Any] = {"matches": batch} if batch is not None else {}
+
             try:
                 if det_name == "mcp_validation" and tools:
-                    det_result = detector.scan(current_text, tools=tools)
+                    det_result = detector.scan(current_text, tools=tools, **extra)
                 elif det_name == "malicious_prompt" and messages:
-                    det_result = detector.scan(current_text, messages=messages)
+                    det_result = detector.scan(current_text, messages=messages, **extra)
                 elif det_name == "confidential_and_pii_entity" and vault is not None:
-                    det_result = detector.scan(current_text, vault=vault)
+                    det_result = detector.scan(current_text, vault=vault, **extra)
                 else:
-                    det_result = detector.scan(current_text)
+                    det_result = detector.scan(current_text, **extra)
             except Exception as exc:
                 logger.error("Detector '%s' raised during scan: %s", det_name, describe(exc))
+                _discard_batch(matches, batch)
                 result.record_failure(det_name, FailureCode.SCAN_FAILED, detector.action)
                 continue
+
+            # Bookkeeping, after the verdict exists and unable to affect it.
+            _settle_batch(matches, batch, keep=det_result.status is not DetectorStatus.FAILED)
 
             # A detector may also report failure by value rather than raising —
             # most know far better than we do why they could not run.
@@ -446,6 +521,21 @@ class ScannerEngine:
                 current_text = det_result.sanitized_text
                 result.guard_output_text = current_text
                 result.summary_parts.append(f"{det_name}: redacted")
+
+                # Coordinate spaces have now diverged from the registered
+                # original. A later detector reports offsets into text that no
+                # longer matches, and if its value happens to equal the
+                # original slice at that stale coordinate — repeated tokens,
+                # duplicate secrets, equal text in a neighbouring message —
+                # validation succeeds and the match is stored against the wrong
+                # message. Offsets are dropped before storage, so that false
+                # attribution is undiscoverable afterwards.
+                #
+                # After this detector's own batch has settled, so its matches
+                # remain eligible.
+                if matches is not None:
+                    report(logger, "debug", f"text mutated by {det_name}; exact-match capture stops here")
+                    matches = None
 
             # --- reporting ---
             else:
