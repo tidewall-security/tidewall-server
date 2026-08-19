@@ -416,6 +416,12 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
         policy_id=policy.id,
         api_key_id=getattr(request.state, "api_key_id", None),
         evidence=project_detectors(scan_result.detectors),
+        # Offered, not stored: log_event captures only if the policy says so.
+        content={
+            "input": messages,
+            "output": guard_output.get("messages") if guard_output else None,
+            "matches": None,
+        },
         app_id=body.app_id,
         user_id=body.user_id,
         llm_provider=body.llm_provider,

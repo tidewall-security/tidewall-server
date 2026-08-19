@@ -22,6 +22,10 @@ class CreatePolicyRequest(BaseModel):
     description: str | None = None
     report_only: bool = False
     on_detector_failure: OnDetectorFailure = OnDetectorFailure.REPORT
+    # Capture is off by default: a fresh policy retains no prompts until
+    # someone turns it on.
+    raw_content_enabled: bool = False
+    raw_content_retention_days: int | None = None
     detectors: dict[str, Any] = {}
 
 
@@ -29,6 +33,8 @@ class UpdatePolicyRequest(BaseModel):
     name: str | None = None
     description: str | None = None
     on_detector_failure: OnDetectorFailure | None = None
+    raw_content_enabled: bool | None = None
+    raw_content_retention_days: int | None = None
     report_only: bool | None = None
 
 
@@ -44,6 +50,8 @@ def _policy_to_dict(policy) -> dict:
         "description": policy.description,
         "report_only": policy.report_only,
         "on_detector_failure": policy.on_detector_failure,
+        "raw_content_enabled": policy.raw_content_enabled,
+        "raw_content_retention_days": policy.raw_content_retention_days,
         "is_default": policy.is_default,
         "created_at": str(policy.created_at),
         "updated_at": str(policy.updated_at),
@@ -84,6 +92,8 @@ async def create_policy(body: CreatePolicyRequest, request: Request) -> dict:
             report_only=body.report_only,
             detectors=body.detectors,
             on_detector_failure=body.on_detector_failure,
+            raw_content_enabled=body.raw_content_enabled,
+            raw_content_retention_days=body.raw_content_retention_days,
         )
         return _policy_to_dict(policy)
     except Exception as e:
@@ -120,6 +130,9 @@ async def update_policy(policy_id: str, body: UpdatePolicyRequest, request: Requ
             description=body.description,
             report_only=body.report_only,
             on_detector_failure=body.on_detector_failure.value if body.on_detector_failure else None,
+            raw_content_enabled=body.raw_content_enabled,
+            raw_content_retention_days=body.raw_content_retention_days,
+            retention_supplied="raw_content_retention_days" in body.model_fields_set,
         )
         # The write above ran on a throwaway PolicyService whose engine cache is
         # not the live one, so its invalidation reached nothing. Invalidate on

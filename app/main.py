@@ -145,6 +145,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.state.export_service = ExportService(session_factory=SessionLocal)
 
+    # Retention has no scheduler to run it, so it runs here, after each write,
+    # and again as a gate on every read. Startup matters because a server that
+    # was down over an expiry window would otherwise serve content that should
+    # already be gone.
+    from app.services.content_capture import purge_expired
+
+    with SessionLocal() as session:
+        purged = purge_expired(session)
+    if purged:
+        logging.getLogger(__name__).info("Purged %d expired content row(s) at startup", purged)
+
     logging.info("Tidewall ready")
 
     yield

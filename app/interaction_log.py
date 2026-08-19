@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Interaction
 from app.services.safe_export_evidence import EVIDENCE_SCHEMA_VERSION, project_detectors
+from app.services.safe_logging import describe
 
 # Caller-supplied metadata is bounded and normalised. Without this, content
 # just moves into a different column — an integration is free to put a prompt
@@ -203,6 +204,10 @@ class InteractionLog:
         status: str = "allowed",
         latency_ms: float,
         evidence: dict[str, Any] | None = None,
+        # Raw content, offered but not necessarily stored: the policy decides.
+        # Passed rather than fetched so the writer does not have to know how
+        # the caller assembled the request.
+        content: dict[str, Any] | None = None,
         api_key_id: str | None = None,
         app_id: str | None = None,
         user_id: str | None = None,
@@ -257,7 +262,52 @@ class InteractionLog:
                 device_id=_validated_db_id(device_id, "device_id"),
             )
             session.add(row)
+
+            # Same transaction as the event. A content row without its event,
+            # or an event claiming content_available when the write failed,
+            # would both be worse than not capturing at all.
+            if content is not None:
+                from app.db.models import Policy
+                from app.services.content_capture import capture_content
+
+                # Not `policy` — that parameter is the policy *name*.
+                policy_row = session.get(Policy, row.policy_id)
+                if policy_row is not None:
+                    session.flush()
+                    row.content_available = capture_content(
+                        session,
+                        interaction=row,
+                        policy=policy_row,
+                        input_messages=content.get("input"),
+                        output_messages=content.get("output"),
+                        matches=content.get("matches"),
+                    )
+
             session.commit()
+
+            if row.content_available:
+                self._maybe_purge(session)
+
+    # Rate limited: retention is a promise about disclosure, not about deleting
+    # within milliseconds, and purging on every write would put a delete in the
+    # hot path of every guarded request.
+    _last_purge: float = 0.0
+    _PURGE_INTERVAL_SECONDS = 60.0
+
+    def _maybe_purge(self, session: Session) -> None:
+        import time
+
+        from app.services.content_capture import purge_expired
+
+        now = time.monotonic()
+        if now - InteractionLog._last_purge < self._PURGE_INTERVAL_SECONDS:
+            return
+        InteractionLog._last_purge = now
+        try:
+            purge_expired(session)
+        except Exception as exc:
+            # Never fail a guarded request because housekeeping failed.
+            logger.warning("content retention purge failed: %s", describe(exc))
 
     def get_recent(
         self,
