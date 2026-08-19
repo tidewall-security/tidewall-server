@@ -276,16 +276,20 @@ class SendResult:
     status: int | None = None
     peer: str | None = None
     error: str | None = None
-    #: Whenever a result is RETURNED, the client is still open and closing it
-    #: is the caller's, as its own task with its own budget and its own
+    #: None whenever no client was ever built -- a payload over the size bound
+    #: returns before anything is constructed, and there is nothing to close.
+    #:
+    #: Whenever this IS set, the client behind it is still open, and closing it
+    #: is the caller's: its own task, its own budget, its own
     #: cancellation-resistant join. An unbounded plain await inside the
     #: submission would sit in a cancellable region where a cancellation can
     #: interrupt it and leak the connection.
     #:
     #: The one path that closes inside the submission is the one that returns
     #: no result at all: a cancellation mid-send propagates an exception, so
-    #: there is no `closer` for anyone to receive. That close is made bounded
-    #: and cancellation-resistant precisely because of the hazard above.
+    #: there is no result for anyone to receive a closer on. That close is made
+    #: bounded and cancellation-resistant precisely because of the hazard
+    #: above.
     closer: Any = None
 
 

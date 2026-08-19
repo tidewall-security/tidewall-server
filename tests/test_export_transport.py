@@ -929,10 +929,17 @@ def test_a_close_that_does_not_confirm_is_reported_not_swallowed(failure, expect
     """The honest half of the cancellation close.
 
     It is an attempt. If the client raises on close, or does not finish inside
-    its budget, the connection may still be open -- and this path has no result
-    to hand back and no attempt row to annotate, because it propagates an
-    exception instead. Reporting it is the only thing left, so a build that
-    stops reporting is a build where an operator cannot know.
+    its budget, the connection may still be open -- and this path propagates an
+    exception rather than a result, so there is no `closer` to hand back.
+
+    The caller does hold a committed attempt row; the evidence goes to the log
+    rather than onto that row because the row records the state of a
+    DISCLOSURE, and whether a socket was confirmed shut is a fact about this
+    process rather than about what the receiver got. An earlier version of this
+    docstring justified logging by claiming no row existed, which is simply
+    false: it is committed before the send.
+
+    So a build that stops reporting is a build where an operator cannot know.
     """
     import asyncio
     import logging
