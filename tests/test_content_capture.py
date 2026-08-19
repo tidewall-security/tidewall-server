@@ -489,7 +489,6 @@ def test_the_seed_rejects_an_unenforceable_retention(tmp_path):
 def test_a_persistence_failure_also_keeps_the_audit_event(db, monkeypatch):
     """Pre-serialising caught unsupported Python values and did nothing for a
     failure at persistence, which still destroyed the audit event."""
-    from app.services import content_capture
 
     policy_id = _policy(db, enabled=True)
 

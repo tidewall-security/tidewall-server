@@ -43,6 +43,45 @@ from app.utils import now_iso as _now_iso
 logger = logging.getLogger(__name__)
 
 
+def _build_collector(messages: list[dict]) -> Any:
+    """Set up exact-match capture, or give up on it.
+
+    Wrapped whole. Constructing the collector and its sources sits outside the
+    scan, so an exception here turned a request that capture-off would have
+    scanned into a 500 — optional audit deciding whether the guard runs at all.
+    """
+    try:
+        from app.services.audit_evidence import MatchCollector, SourceRef
+
+        collector = MatchCollector()
+        # Per message, with each one's offset into the flattened text, so a
+        # match is attributed to the message it actually came from rather than
+        # to the first one.
+        segments = []
+        cursor = 0
+        for index, message in enumerate(messages or []):
+            segment_text = str(message.get("content") or "")
+            segments.append(
+                (
+                    SourceRef(
+                        kind="message",
+                        index=index,
+                        field="content",
+                        # Roles are caller data, not internal discriminators.
+                        role=_safe_role(message.get("role")),
+                    ),
+                    segment_text,
+                    cursor,
+                )
+            )
+            cursor += len(segment_text) + 1  # the single space the flattening inserts
+        collector.register_flattened(segments)
+        return collector
+    except Exception as exc:
+        logger.warning("exact-match capture setup failed; continuing without it: %s", describe(exc))
+        return None
+
+
 def _safe_role(value: object) -> str | None:
     """A role that provenance can record, or nothing.
 
@@ -253,37 +292,7 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     # value report into it, and each match is validated against the text they
     # were given — provenance rather than a value copied out of a payload.
     capture_enabled = bool(getattr(policy, "raw_content_enabled", False))
-    match_collector = None
-    if capture_enabled:
-        from app.services.audit_evidence import MatchCollector, SourceRef
-
-        match_collector = MatchCollector()
-        # Per message, with each one's offset into the flattened text, so a
-        # match is attributed to the message it actually came from rather than
-        # to the first one.
-        segments = []
-        cursor = 0
-        for index, message in enumerate(messages or []):
-            # Not `body` — that is the request.
-            segment_text = str(message.get("content") or "")
-            segments.append(
-                (
-                    SourceRef(
-                        kind="message",
-                        index=index,
-                        field="content",
-                        # Roles are caller data, not internal discriminators.
-                        # Feeding an extension role straight into the identifier
-                        # rule made capture-on reject requests capture-off
-                        # accepts — capture changing what the API accepts.
-                        role=_safe_role(message.get("role")),
-                    ),
-                    segment_text,
-                    cursor,
-                )
-            )
-            cursor += len(segment_text) + 1  # the single space the flattening inserts
-        match_collector.register_flattened(segments)
+    match_collector = _build_collector(messages) if capture_enabled else None
 
     scan_result = await asyncio.to_thread(
         engine.scan, all_text, event_type, vault_id, vault, tools, messages, match_collector

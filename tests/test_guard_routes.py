@@ -370,3 +370,67 @@ def test_multiple_interactions_logged(setup):
     count = session.query(Interaction).count()
     assert count == 3
     session.close()
+
+
+def _enable_capture(session_factory):
+    session = session_factory()
+    policy = session.query(Policy).filter_by(name="test_policy").first()
+    policy.raw_content_enabled = True
+    session.commit()
+    session.close()
+
+
+def test_capture_setup_failure_does_not_change_the_enforcement_response(setup, monkeypatch):
+    """Optional audit capture must never decide whether the guard runs.
+
+    Collector construction and source registration happen in the route, before
+    the scan. Unwrapped, an exception there returned HTTP 500 for a request
+    that capture-off would have scanned and answered normally.
+    """
+    client, _admin_key, api_key, _viewer_key, session_factory = setup
+    headers = {"Authorization": f"Bearer {api_key}"}
+    payload = _guard_payload(
+        messages=[
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "Hello, how are you?"},
+        ]
+    )
+
+    # Baseline: capture off.
+    capture_off = client.post("/v1/guard_chat_completions", json=payload, headers=headers)
+
+    # Capture on, but every attempt to set it up fails.
+    _enable_capture(session_factory)
+    import app.services.audit_evidence as audit_evidence
+
+    def _explode(*args, **kwargs):
+        raise RuntimeError("collector unavailable")
+
+    monkeypatch.setattr(audit_evidence, "MatchCollector", _explode)
+    capture_on = client.post("/v1/guard_chat_completions", json=payload, headers=headers)
+
+    assert capture_on.status_code == capture_off.status_code == 200
+    on, off = capture_on.json(), capture_off.json()
+    for field in ("action", "detected", "results", "guard_output"):
+        assert on.get(field) == off.get(field), f"capture setup failure changed {field!r}"
+
+
+def test_registration_failure_also_falls_back_to_capture_off_scanning(setup, monkeypatch):
+    """The same for the second half of setup: registering the sources."""
+    client, _admin_key, api_key, _viewer_key, session_factory = setup
+    headers = {"Authorization": f"Bearer {api_key}"}
+    payload = _guard_payload()
+
+    capture_off = client.post("/v1/guard_chat_completions", json=payload, headers=headers)
+
+    _enable_capture(session_factory)
+    import app.services.audit_evidence as audit_evidence
+
+    def _explode(self, segments):
+        raise RuntimeError("registration failed")
+
+    monkeypatch.setattr(audit_evidence.MatchCollector, "register_flattened", _explode)
+    capture_on = client.post("/v1/guard_chat_completions", json=payload, headers=headers)
+
+    assert capture_on.status_code == capture_off.status_code == 200
+    assert capture_on.json().get("action") == capture_off.json().get("action")

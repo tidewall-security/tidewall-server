@@ -522,6 +522,21 @@ class ScannerEngine:
                 result.guard_output_text = current_text
                 result.summary_parts.append(f"{det_name}: redacted")
 
+                # Coordinate spaces have now diverged from the registered
+                # original. A later detector reports offsets into text that no
+                # longer matches, and if its value happens to equal the
+                # original slice at that stale coordinate — repeated tokens,
+                # duplicate secrets, equal text in a neighbouring message —
+                # validation succeeds and the match is stored against the wrong
+                # message. Offsets are dropped before storage, so that false
+                # attribution is undiscoverable afterwards.
+                #
+                # After this detector's own batch has settled, so its matches
+                # remain eligible.
+                if matches is not None:
+                    logger.debug("text mutated by %s; exact-match capture stops here", det_name)
+                    matches = None
+
             # --- reporting ---
             else:
                 result.summary_parts.append(f"{det_name}: detected")
