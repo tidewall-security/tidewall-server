@@ -614,9 +614,10 @@
     if (body.view !== view) return null;
     if (typeof body.captured_at !== 'string') return null;
     if (body.expires_at !== null && typeof body.expires_at !== 'string') return null;
-    if (!validMatches(body.matches)) return null;
+    var matches = projectMatches(body.matches);
+    if (matches === null) return null;
 
-    var out = { captured_at: body.captured_at, expires_at: body.expires_at, matches: body.matches };
+    var out = { captured_at: body.captured_at, expires_at: body.expires_at, matches: matches.value };
     if (view === 'full') {
       if (!nullOrArray(body.messages) || !nullOrArray(body.tools) || !nullOrArray(body.output)) return null;
       out.messages = body.messages;
@@ -630,10 +631,50 @@
 
   function nullOrArray(v) { return v === null || Array.isArray(v); }
 
-  function validMatches(m) {
-    if (m === null) return true;
-    if (typeof m !== 'object' || Array.isArray(m)) return false;
-    return typeof m.schema_version === 'number' && Array.isArray(m.matches);
+  /**
+   * Project the matches block, or reject it.
+   *
+   * Shallow "is it an object with an array in it" checking let an unknown
+   * schema version, an extra key, and a malformed group all render -- while the
+   * comment above claimed a malformed response is not displayed and that future
+   * fields must be added deliberately. The server accepts exactly version 1
+   * with exact keys, so anything else did not come from it.
+   *
+   * Returns the projected block, or null for "reject".
+   */
+  function projectMatches(m) {
+    if (m === null) return { value: null };
+    if (typeof m !== 'object' || Array.isArray(m)) return null;
+    if (m.schema_version !== 1) return null;
+    if (!Array.isArray(m.matches)) return null;
+
+    var groups = [];
+    for (var i = 0; i < m.matches.length; i++) {
+      var g = m.matches[i];
+      if (!g || typeof g !== 'object' || Array.isArray(g)) return null;
+      var src = g.source;
+      if (!src || typeof src !== 'object' || Array.isArray(src)) return null;
+      if (typeof g.detector !== 'string' || typeof g.match_type !== 'string') return null;
+      if (typeof g.value !== 'string' || typeof g.occurrences !== 'number') return null;
+      if (typeof src.kind !== 'string' || typeof src.field !== 'string') return null;
+      if (typeof src.index !== 'number') return null;
+      // Copied field by field, so an extra key on the group or the source is
+      // simply not carried rather than displayed.
+      groups.push({
+        detector: g.detector,
+        match_type: g.match_type,
+        rule_id: typeof g.rule_id === 'string' ? g.rule_id : null,
+        source: {
+          kind: src.kind,
+          index: src.index,
+          field: src.field,
+          role: typeof src.role === 'string' ? src.role : null
+        },
+        value: g.value,
+        occurrences: g.occurrences
+      });
+    }
+    return { value: { schema_version: 1, matches: groups } };
   }
 
   function findEventById(interactionId) {

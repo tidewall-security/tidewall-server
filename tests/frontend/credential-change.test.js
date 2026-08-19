@@ -20,21 +20,27 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 let counter;
 let fired;
 
-function loadAuth() {
+async function loadAuth() {
   document.body.innerHTML = '';
   localStorage.clear();
-  // checkAuth() runs on load and calls fetch; keep it quiet.
-  globalThis.fetch = vi.fn(() => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) }));
+  // checkAuth() runs on load. Answering 401 makes it show the real key prompt,
+  // which is the only way to exercise the accepted-key path rather than
+  // calling the notifier directly.
+  globalThis.fetch = vi.fn(() => Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({}) }));
   const src = readFileSync(join(__dirname, '../../app/static/js/auth.js'), 'utf8');
   new Function(src)();
   counter = { n: 0 };
   const mine = counter;
   window.TidewallAuth.onCredentialChange(() => { mine.n += 1; });
+  // checkAuth's 401 clears the key, which is itself a notification. Settle
+  // first, then start counting, so every test measures only its own action.
+  await new Promise((r) => setTimeout(r, 0));
+  mine.n = 0;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.resetModules();
-  loadAuth();
+  await loadAuth();
 });
 
 describe('every credential mutation notifies', () => {
@@ -55,22 +61,6 @@ describe('every credential mutation notifies', () => {
     Object.defineProperty(e, 'key', { value: 'something_else' });
     window.dispatchEvent(e);
     expect(counter.n).toBe(0);
-  });
-
-  it('notifies on any 401, which is how revocation becomes observable', () => {
-    // api.js routes a 401 through clearKey(). The delay between revocation and
-    // the next response is unavoidable, which is why this path exists at all.
-    window.TidewallAuth.clearKey();
-    expect(counter.n).toBe(1);
-  });
-
-  it('notifies again when the same key is re-entered', () => {
-    // Bumping on any accepted entry rather than comparing values: detecting
-    // equality would be a cheaper-looking rule that is wrong the moment two
-    // credentials share a value.
-    window.TidewallAuth.notifyCredentialChange();
-    window.TidewallAuth.notifyCredentialChange();
-    expect(counter.n).toBe(2);
   });
 
   it('one listener throwing does not stop the others', () => {

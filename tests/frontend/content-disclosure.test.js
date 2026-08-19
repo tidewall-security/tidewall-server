@@ -684,3 +684,87 @@ describe('the offered views match the capabilities exactly', () => {
     expect(offered).toEqual(expected);
   });
 });
+
+describe('the matches block is projected, not passed through', () => {
+  const group = (over) => Object.assign({
+    detector: 'custom_entity',
+    match_type: 'CUSTOM',
+    rule_id: null,
+    source: { kind: 'message', index: 0, field: 'content', role: 'user' },
+    value: 'matched-value',
+    occurrences: 1
+  }, over || {});
+
+  async function attempt(matches) {
+    contentResponse = {
+      ok: true,
+      status: 200,
+      body: { interaction_id: 1, view: 'matches', captured_at: 'x', expires_at: null, matches: matches }
+    };
+    capabilityResponse = { ok: true, status: 200, body: { content: { matches: true, full: false } } };
+    loadFindings();
+    await flush();
+    document.querySelector('[data-content-view="matches"]').click();
+    await flush();
+    return document.body.textContent;
+  }
+
+  it('rejects an unknown schema version', async () => {
+    // The server serves exactly version 1; rendering a version this code does
+    // not understand would be guessing at the meaning of forensic evidence.
+    const text = await attempt({ schema_version: 2, matches: [group({ value: CANARY })] });
+    expect(text).not.toContain(CANARY);
+    expect(text).toContain('could not be read');
+  });
+
+  it('rejects a malformed group', async () => {
+    const text = await attempt({ schema_version: 1, matches: [{ detector: CANARY }] });
+    expect(text).not.toContain(CANARY);
+  });
+
+  it.each(['detector', 'match_type', 'value'])('rejects a non-string %s', async (field) => {
+    // Everything else well-formed, so the earlier source and shape checks
+    // cannot be what rejects it -- an earlier version of this test used a group
+    // missing its source entirely, and the field-type guard survived removal.
+    const over = {};
+    over[field] = { nested: CANARY };
+    const text = await attempt({ schema_version: 1, matches: [group(over)] });
+    expect(text).not.toContain(CANARY);
+    expect(text).toContain('could not be read');
+  });
+
+  it('rejects a non-number occurrences', async () => {
+    const text = await attempt({ schema_version: 1, matches: [group({ occurrences: 'one', value: CANARY })] });
+    expect(text).not.toContain(CANARY);
+  });
+
+  it('rejects a group with a malformed source', async () => {
+    const text = await attempt({
+      schema_version: 1,
+      matches: [group({ source: { kind: 'message', index: 'zero', field: 'content', role: null }, value: CANARY })]
+    });
+    expect(text).not.toContain(CANARY);
+  });
+
+  it('does not carry an extra key on a group or its source', async () => {
+    const text = await attempt({
+      schema_version: 1,
+      matches: [group({ surprise: 'extra-' + CANARY, source: {
+        kind: 'message', index: 0, field: 'content', role: null, alsoSurprise: 'src-' + CANARY
+      } })]
+    });
+    expect(text).toContain('matched-value');   // the known fields are shown
+    expect(text).not.toContain('extra-' + CANARY);
+    expect(text).not.toContain('src-' + CANARY);
+  });
+
+  it('renders a well-formed block', async () => {
+    const text = await attempt({ schema_version: 1, matches: [group({ value: CANARY })] });
+    expect(text).toContain(CANARY);
+  });
+
+  it('accepts a null matches block', async () => {
+    const text = await attempt(null);
+    expect(text).toContain('"matches": null');
+  });
+});
