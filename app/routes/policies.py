@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictBool, StrictInt
 
 from app.auth.dependencies import require_role
 from app.config import OnDetectorFailure
@@ -24,8 +24,11 @@ class CreatePolicyRequest(BaseModel):
     on_detector_failure: OnDetectorFailure = OnDetectorFailure.REPORT
     # Capture is off by default: a fresh policy retains no prompts until
     # someone turns it on.
-    raw_content_enabled: bool = False
-    raw_content_retention_days: int | None = None
+    raw_content_enabled: StrictBool = False
+    # Strict: a plain `int | None` accepts True as 1, so `true` would have
+    # become a one-day retention window before service validation could reject
+    # it.
+    raw_content_retention_days: Annotated[StrictInt, Field(ge=1)] | None = None
     detectors: dict[str, Any] = {}
 
 
@@ -33,8 +36,8 @@ class UpdatePolicyRequest(BaseModel):
     name: str | None = None
     description: str | None = None
     on_detector_failure: OnDetectorFailure | None = None
-    raw_content_enabled: bool | None = None
-    raw_content_retention_days: int | None = None
+    raw_content_enabled: StrictBool | None = None
+    raw_content_retention_days: Annotated[StrictInt, Field(ge=1)] | None = None
     report_only: bool | None = None
 
 
@@ -356,6 +359,11 @@ async def import_policy(body: dict, request: Request) -> dict:
             report_only=report_only,
             detectors=detectors,
             on_detector_failure=body.get("on_detector_failure", "report"),
+            # Without these, exporting an enabled policy and importing it back
+            # silently turned capture off — a round trip that loses a security
+            # setting is worse than one that fails.
+            raw_content_enabled=body.get("raw_content_enabled", False),
+            raw_content_retention_days=body.get("raw_content_retention_days"),
         )
         return _policy_to_dict(policy)
     except Exception as e:
@@ -383,6 +391,10 @@ async def export_policy(policy_id: str, request: Request) -> Response:
             "name": policy.name,
             "type": policy.type,
             "report_only": policy.report_only,
+            "on_detector_failure": policy.on_detector_failure,
+            # Exported so a round trip does not silently turn capture off.
+            "raw_content_enabled": policy.raw_content_enabled,
+            "raw_content_retention_days": policy.raw_content_retention_days,
             "detectors": detectors,
         }
 

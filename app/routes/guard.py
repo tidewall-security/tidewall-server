@@ -183,6 +183,10 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             policy_id=policy.id,
             api_key_id=getattr(request.state, "api_key_id", None),
             evidence={},
+            # Blocking before detectors run is a normal outcome, not an error
+            # path — without this, capture-on quietly meant capture-on-except-
+            # when-an-access-rule-fired.
+            content={"input": messages, "output": None, "matches": None, "tools": tools},
             app_id=body.app_id,
             user_id=body.user_id,
             llm_provider=body.llm_provider,
@@ -420,6 +424,12 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
         content={
             "input": messages,
             "output": guard_output.get("messages") if guard_output else None,
+            # Tools are scanned, so a captured tool-input or tool-listing event
+            # without them is an incomplete record of what was evaluated.
+            "tools": tools,
+            # Exact matches await the detector wiring: the typed channel from
+            # step 1 exists but no detector reports through it yet, so this is
+            # null rather than pretending otherwise.
             "matches": None,
         },
         app_id=body.app_id,

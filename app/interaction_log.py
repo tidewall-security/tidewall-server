@@ -280,6 +280,7 @@ class InteractionLog:
                         input_messages=content.get("input"),
                         output_messages=content.get("output"),
                         matches=content.get("matches"),
+                        tools=content.get("tools"),
                     )
 
             session.commit()

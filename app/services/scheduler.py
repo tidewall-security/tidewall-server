@@ -73,17 +73,29 @@ class Scheduler:
             except TimeoutError:
                 continue
 
-    async def stop(self) -> None:
-        """Ask the loops to finish, then wait briefly for them.
+    async def stop(self, *, timeout_seconds: float = 30.0) -> None:
+        """Signal the loops and wait for any in-flight run to finish.
 
-        Shutdown waits rather than cancelling outright so a purge mid-delete
-        completes its transaction instead of leaving the work half done.
+        Deliberately does not cancel first. A retention run is awaiting
+        ``asyncio.to_thread``, and cancelling that await does not stop the
+        worker thread — it just detaches it, so ``gather`` returns and the
+        caller disposes the database engine underneath a live session. That is
+        the shutdown race this method previously claimed to prevent while
+        causing it.
+
+        Cancellation is the fallback if a job overruns the timeout, because a
+        stuck job must not hold shutdown open forever.
         """
         self._stopping.set()
-        for task in self._tasks:
+        if not self._tasks:
+            logger.info("Scheduler stopped")
+            return
+        done, pending = await asyncio.wait(self._tasks, timeout=timeout_seconds)
+        for task in pending:
+            logger.warning("scheduled job did not finish within %.0fs; cancelling", timeout_seconds)
             task.cancel()
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
         self._tasks.clear()
         logger.info("Scheduler stopped")
 

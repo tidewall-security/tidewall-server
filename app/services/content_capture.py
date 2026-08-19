@@ -54,6 +54,7 @@ def capture_content(
     input_messages: Any,
     output_messages: Any,
     matches: dict[str, Any] | None,
+    tools: Any = None,
 ) -> bool:
     """Write raw content for this event, if the policy asks for it.
 
@@ -73,10 +74,12 @@ def capture_content(
     session.add(
         InteractionContent(
             interaction_id=interaction.id,
-            input_json=input_messages,
+            # Tools travel with the input: they are scanned, so a captured
+            # tool-listing event without them records less than was evaluated.
+            input_json={"messages": input_messages, "tools": tools} if tools else input_messages,
             output_json=output_messages,
             matches_json=matches,
-            byte_size=_byte_size(input_messages, output_messages, matches),
+            byte_size=_byte_size(input_messages, output_messages, matches, tools),
             captured_at=datetime.now(UTC),
             expires_at=expires_at,
         )
@@ -121,8 +124,16 @@ def is_expired(content: InteractionContent, *, now: datetime | None = None) -> b
         return False
     expiry = content.expires_at
     if expiry.tzinfo is None:
+        # SQLite returns naive datetimes; they were written as UTC.
         expiry = expiry.replace(tzinfo=UTC)
-    return expiry <= (now or datetime.now(UTC))
+    moment = now or datetime.now(UTC)
+    if moment.tzinfo is None:
+        # Normalise the caller's clock too. Comparing one aware and one naive
+        # datetime raises, so a caller passing a naive `now` turned an expiry
+        # check into a TypeError — which fails the read rather than the
+        # disclosure decision.
+        moment = moment.replace(tzinfo=UTC)
+    return expiry <= moment
 
 
 def usage(session: Session) -> dict[str, Any]:

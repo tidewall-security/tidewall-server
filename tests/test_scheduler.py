@@ -165,3 +165,56 @@ def test_the_scheduler_is_documented_as_single_process():
     source = pathlib.Path("app/services/scheduler.py").read_text()
 
     assert "Single process only" in source
+
+
+def test_stop_waits_for_an_in_flight_threaded_job():
+    """Cancelling an await on asyncio.to_thread does not stop the worker
+    thread; it detaches it. So gather() returned and the caller disposed the
+    database engine underneath a live session — the exact shutdown race the
+    method claimed to prevent while causing it."""
+    import threading
+    import time
+
+    finished = threading.Event()
+    started = threading.Event()
+
+    async def _run() -> None:
+        def _slow() -> None:
+            started.set()
+            time.sleep(0.3)
+            finished.set()
+
+        await asyncio.to_thread(_slow)
+
+    async def _main() -> bool:
+        scheduler = Scheduler()
+        scheduler.start([Job(name="slow", interval_seconds=3600, run=_run)])
+        await asyncio.sleep(0.05)
+        assert started.is_set(), "the job did not start"
+        await scheduler.stop(timeout_seconds=5)
+        # Checked the moment stop() returns, not after the event loop has been
+        # torn down: a detached thread finishes on its own shortly afterwards,
+        # so asserting later passes even when stop() did not wait.
+        return finished.is_set()
+
+    assert asyncio.run(_main()), "stop() returned while the worker thread was still running"
+
+
+def test_stop_cancels_a_job_that_overruns_the_timeout():
+    """A stuck job must not hold shutdown open forever."""
+    import threading
+    import time
+
+    async def _run() -> None:
+        await asyncio.to_thread(lambda: time.sleep(5))
+
+    async def _main() -> float:
+        scheduler = Scheduler()
+        scheduler.start([Job(name="stuck", interval_seconds=3600, run=_run)])
+        await asyncio.sleep(0.05)
+        started = time.monotonic()
+        await scheduler.stop(timeout_seconds=0.1)
+        return time.monotonic() - started
+
+    elapsed = asyncio.run(_main())
+    assert elapsed < 2.0, f"stop() took {elapsed:.1f}s; it should give up on a stuck job"

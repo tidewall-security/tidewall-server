@@ -161,10 +161,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     logging.info("Tidewall ready")
 
-    yield
-
-    await scheduler.stop()
-    engine.dispose()
+    try:
+        yield
+    finally:
+        # In a finally: an exception thrown into the lifespan context would
+        # otherwise skip both, leaving the scheduler running against a disposed
+        # engine.
+        await scheduler.stop()
+        engine.dispose()
 
 
 def create_app() -> FastAPI:

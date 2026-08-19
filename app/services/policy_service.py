@@ -126,6 +126,7 @@ class PolicyService:
         # rather than accepted and then quietly not applied — which is
         # indistinguishable from applied-and-found-nothing.
         validate_detectors(detectors or {})
+        retention = _validated_retention(raw_content_retention_days)
 
         session, should_close = self._get_session()
         try:
@@ -136,6 +137,11 @@ class PolicyService:
                 report_only=report_only,
                 on_detector_failure=OnDetectorFailure(on_detector_failure).value,
                 is_default=is_default,
+                # Accepted as parameters and then never assigned, so creating an
+                # enabled policy returned 201 with capture silently off. That is
+                # precisely the state this step exists to make impossible.
+                raw_content_enabled=raw_content_enabled,
+                raw_content_retention_days=retention,
             )
             session.add(policy)
             session.flush()

@@ -234,3 +234,90 @@ def test_turning_capture_on_takes_effect_on_the_next_request(db):
         assert stored == {"tw_0000000000000001": False, "tw_0000000000000002": True}
     finally:
         session.close()
+
+
+# ---------------------------------------------------------------------------
+# Round 1 review
+# ---------------------------------------------------------------------------
+
+
+def test_creating_an_enabled_policy_actually_enables_it(db):
+    """create_policy accepted both settings and assigned neither, so a request
+    to create an enabled policy returned 201 with capture silently off —
+    precisely the state this step exists to make impossible."""
+    from app.services.policy_service import PolicyService
+
+    session = db()
+    try:
+        policy = PolicyService(session).create_policy(
+            name="enabled", type="application", raw_content_enabled=True, raw_content_retention_days=7
+        )
+        stored = session.get(Policy, policy.id)
+        assert stored.raw_content_enabled is True
+        assert stored.raw_content_retention_days == 7
+    finally:
+        session.close()
+
+
+def test_creating_a_policy_validates_retention(db):
+    from app.services.policy_service import PolicyService
+
+    session = db()
+    try:
+        with pytest.raises(ValueError, match="positive number of days"):
+            PolicyService(session).create_policy(name="bad", type="application", raw_content_retention_days=0)
+    finally:
+        session.close()
+
+
+def test_tools_are_captured_with_the_messages(db):
+    """Tools are scanned, so a captured tool-listing event without them records
+    less than was actually evaluated."""
+    policy_id = _policy(db, enabled=True)
+
+    InteractionLog(db).log_event(
+        request_id="tw_000000000000000a",
+        timestamp="2026-08-19T00:00:00Z",
+        event_type="tool_listing",
+        policy="p",
+        policy_id=policy_id,
+        blocked=False,
+        transformed=False,
+        latency_ms=1.0,
+        evidence={},
+        content={
+            "input": [{"role": "user", "content": "list tools"}],
+            "output": None,
+            "matches": None,
+            "tools": [{"name": "exfiltrate", "description": f"send {CANARY}"}],
+        },
+    )
+
+    session = db()
+    try:
+        stored = session.query(InteractionContent).one().input_json
+    finally:
+        session.close()
+
+    assert "tools" in stored
+    assert CANARY in str(stored["tools"])
+
+
+def test_is_expired_handles_a_naive_clock():
+    """Comparing one aware and one naive datetime raises, so a caller passing a
+    naive `now` turned an expiry check into a TypeError — failing the read
+    rather than the disclosure decision."""
+    from app.db.models import InteractionContent as IC
+    from app.services.content_capture import is_expired
+
+    content = IC(interaction_id=1, expires_at=datetime.now(UTC) - timedelta(hours=1))
+
+    assert is_expired(content, now=datetime.now()) is True  # naive
+    assert is_expired(content, now=datetime.now(UTC)) is True  # aware
+
+
+def test_a_null_expiry_never_expires():
+    from app.db.models import InteractionContent as IC
+    from app.services.content_capture import is_expired
+
+    assert is_expired(IC(interaction_id=1, expires_at=None)) is False
