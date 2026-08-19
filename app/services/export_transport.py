@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import socket
 import ssl
 from dataclasses import dataclass
@@ -24,6 +25,9 @@ import httpcore
 import httpx
 
 from app.services.cancellation import join_and_drain
+from app.services.safe_logging import report
+
+logger = logging.getLogger(__name__)
 
 #: How long a client may take to close on the cancellation path. Bounded
 #: because the cancellation behind it is already waiting on this.
@@ -454,18 +458,35 @@ async def send_payload(
             # cancellation landing mid-submission would leave the connection
             # that is carrying the content open for the process's lifetime.
             #
-            # So the close happens here, under the same protocol the route uses
-            # for its own joins: its own task, bounded, joined through shields
-            # so this second cancellation cannot abandon it either. Then the
-            # original cancellation is re-propagated -- deferred by exactly as
-            # long as closing one client takes, and no longer.
+            # So a close is ATTEMPTED here, under the same protocol the route
+            # uses for its own joins: its own task, bounded, joined through
+            # shields so this second cancellation cannot abandon it either.
+            # Then the original cancellation is re-propagated -- deferred by
+            # exactly as long as closing one client takes, and no longer.
+            #
+            # An attempt, not a guarantee, and the difference is worth stating.
+            # If aclose() raises, or does not finish inside the budget, the
+            # connection may still be open and there is no one left to tell:
+            # this path returns an exception rather than a result, so it has no
+            # `closer` to hand back and no attempt row to annotate. All it can
+            # do is say so where an operator will see it, which is why the
+            # failure is reported rather than swallowed.
             close_errors: list[Exception] = []
 
             async def _close_bounded() -> None:
                 async with asyncio.timeout(CLOSE_BUDGET_SECONDS):
                     await client.aclose()
 
-            await join_and_drain(asyncio.create_task(_close_bounded()), on_error=close_errors.append)
+            close_task = asyncio.create_task(_close_bounded())
+            await join_and_drain(close_task, on_error=close_errors.append)
+            if close_errors or close_task.cancelled():
+                reason = type(close_errors[0]).__name__ if close_errors else "TimeoutError"
+                report(
+                    logger,
+                    "warning",
+                    f"content export client was not confirmed closed after a cancellation "
+                    f"during submission ({reason}); the connection may remain open",
+                )
             raise
     result.closer = client.aclose
     return result

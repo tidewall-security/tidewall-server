@@ -133,7 +133,12 @@ def _samples(cidr):
     ],
 )
 def test_a_non_public_address_literal_is_refused(literal, monkeypatch):
-    """The whole not-globally-reachable space, not a selection from it.
+    """Every prefix the registry marks unreachable, sampled at its edges.
+
+    Not "every address in that space": the registry itself nests globally
+    reachable children under unreachable parents -- 2001:1::1 sits inside
+    2001::/23 -- so that claim would be false about the registry before it was
+    false about the code.
 
     A negative rule ("not private, not reserved") is the wrong shape for this
     question: it admitted 100.64.0.0/10, which is carrier-grade NAT space and
@@ -192,14 +197,27 @@ def test_an_address_that_wears_a_disguise_is_refused(literal, why, monkeypatch):
         # cryptographic identifiers rather than destinations, so this refuses
         # them; the registry's column is not the whole question.
         ("[2001:20::1]", False, "ORCHIDv2, refused as policy"),
+        # The one that is NOT a decision. IANA marks the DNS-SD Service
+        # Registration Protocol anycast address globally reachable; every
+        # supported Python reports it is_private, so the general rule refuses
+        # it and no policy here says anything about it. Pinned so that a
+        # runtime correcting its table shows up as a failing test rather than
+        # a silent change in what this server will connect to. Accepting it
+        # would also be defensible -- it is an anycast service address, not a
+        # webhook receiver -- which is exactly why the change should be
+        # noticed and decided rather than inherited.
+        ("[2001:1::3]", False, "DNS-SD SRP anycast: refused by the runtime's table, not by policy"),
     ],
 )
 def test_the_places_this_policy_and_the_registry_disagree(literal, accepted, why, monkeypatch):
     """Stated, not buried.
 
-    Three prefixes get an answer the IANA reachability column would not give on
-    its own. Each is a deliberate choice, and writing them down here is what
-    stops the table above quietly claiming to be the registry.
+    Four prefixes get an answer the IANA reachability column would not give on
+    its own. Three are deliberate choices; the fourth is inherited from the
+    runtime's tables and is labelled as such, because "we decided this" and "we
+    happened to get this" are different claims and only one of them should be
+    made by a comment. Writing them down here is what stops the table above
+    quietly claiming to be the registry.
     """
     import app.services.export_transport as t
 
@@ -892,3 +910,63 @@ def test_a_cancellation_during_submission_does_not_wait_forever_to_close():
                     await asyncio.wait_for(asyncio.shield(task), 5)
 
     asyncio.run(_go())
+
+
+@pytest.mark.parametrize(
+    "failure,expected",
+    [("raises", "RuntimeError"), ("hangs", "TimeoutError")],
+)
+def test_a_close_that_does_not_confirm_is_reported_not_swallowed(failure, expected, caplog):
+    """The honest half of the cancellation close.
+
+    It is an attempt. If the client raises on close, or does not finish inside
+    its budget, the connection may still be open -- and this path has no result
+    to hand back and no attempt row to annotate, because it propagates an
+    exception instead. Reporting it is the only thing left, so a build that
+    stops reporting is a build where an operator cannot know.
+    """
+    import asyncio
+    import logging
+
+    import app.services.export_transport as t
+
+    sending = asyncio.Event()
+
+    class _Client:
+        def build_request(self, *args, **kwargs):
+            return object()
+
+        async def send(self, request, stream=False):
+            sending.set()
+            await asyncio.Event().wait()
+
+        async def aclose(self):
+            if failure == "raises":
+                raise RuntimeError("the socket is gone")
+            await asyncio.Event().wait()
+
+    async def _go():
+        with patch.object(t, "CLOSE_BUDGET_SECONDS", 0.05):
+            with patch.object(t.httpx, "AsyncClient", lambda **kwargs: _Client()):
+                task = asyncio.create_task(
+                    t.send_payload(
+                        url="https://pinned.invalid/hook",
+                        headers={},
+                        body=b"{}",
+                        addresses=["203.0.113.1"],
+                        deadline_seconds=30,
+                    )
+                )
+                await asyncio.wait_for(sending.wait(), 5)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(asyncio.shield(task), 5)
+
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(_go())
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any(
+        "not confirmed closed" in m for m in messages
+    ), f"an unconfirmed close was silent; records were {messages!r}"
+    assert any(expected in m for m in messages), f"the reason was not reported: {messages!r}"

@@ -1,6 +1,6 @@
 """Cancelling the request must not cancel the disclosure record or the cleanup.
 
-`_join_and_drain` has its own unit tests. These are different: they prove the
+`join_and_drain` has its own unit tests. These are different: they prove the
 ROUTE uses it, at both of its load-bearing call sites, by cancelling a real
 in-flight request through the real handler.
 
@@ -347,7 +347,7 @@ def test_the_settlement_task_is_always_owned_by_the_process(monkeypatch):
 
 
 def test_a_cancelled_export_never_emits_a_success_response(monkeypatch):
-    """The route's own re-raise, where nothing else can supply one.
+    """A cancelled export is never answered with a success status.
 
     `pytest.raises(CancelledError)` above proves less than it looks like it
     proves: removing the route's final `if cancelled: raise` leaves those tests
