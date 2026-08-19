@@ -83,7 +83,34 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # service construction, so an invalid configuration created and migrated a
     # database and only then refused to serve — a rejected config should not
     # leave persistent state behind.
-    if not settings.BOOTSTRAP_KEY and not _has_existing_api_keys(settings.DB_URL):
+    # Before ANY database access, including the read-only probe below and the
+    # Alembic migration further down. A migration running before the lock is a
+    # second writer by another name, and a read taken while another process
+    # writes is exactly what the lock exists to order.
+    #
+    # Acquired here rather than at import so a forked worker takes its own: a
+    # lock inherited from a pre-fork parent is shared through the same open file
+    # description and excludes nothing.
+    #
+    # It does create a lockfile beside the database even for a configuration
+    # that is about to be refused. That is one empty file rather than the
+    # migrated, seeded database the refusal below exists to avoid.
+    from app.services.process_lock import ProcessLock
+
+    process_lock = ProcessLock()
+    process_lock.acquire(settings.DB_URL)
+    app.state.process_lock = process_lock
+    app.state.boot_id = process_lock.boot_id
+
+    try:
+        refuse = not settings.BOOTSTRAP_KEY and not _has_existing_api_keys(settings.DB_URL)
+    except Exception:
+        process_lock.release()
+        raise
+    if refuse:
+        # Released before raising: a refused startup must not leave the database
+        # locked against the next attempt.
+        process_lock.release()
         # Checked before any database work: a configuration that will be
         # refused must not leave a migrated, seeded database behind.
         raise RuntimeError(
@@ -98,18 +125,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.db.seed import seed_from_yaml
 
     os.makedirs(_PROJECT_ROOT / "data", exist_ok=True)
-
-    # Before anything touches the database, including the Alembic migration
-    # below: a migration running before the lock is a second writer by another
-    # name. Acquired here rather than at import, so a forked worker takes its
-    # own -- a lock inherited from a pre-fork parent is shared through the same
-    # open file description and excludes nothing.
-    from app.services.process_lock import ProcessLock
-
-    process_lock = ProcessLock()
-    process_lock.acquire(settings.DB_URL)
-    app.state.process_lock = process_lock
-    app.state.boot_id = process_lock.boot_id
 
     engine = get_engine(settings.DB_URL)
     SessionLocal = get_session_factory(engine)

@@ -75,11 +75,17 @@ class Scheduler:
     async def run_in_worker(self, fn: Callable[[], object]) -> object:
         """Run blocking work off the loop, tracked so shutdown can wait for it.
 
-        The bookkeeping happens *inside* the thread. A ``finally`` around the
-        await would run when the awaiting task is cancelled — which is exactly
-        the moment the thread is still running — so the counter would drop to
-        zero while a worker still held a session, and shutdown would stop
-        waiting for the thing it is meant to wait for.
+        Registration happens on the event loop *before* dispatch, and
+        deregistration *inside* the thread. Both halves matter, and an earlier
+        version of this docstring claimed both happened in the thread:
+
+        - registering before dispatch leaves no window in which the work exists
+          but is uncounted;
+        - decrementing inside the thread is what stops a cancelled await
+          dropping the count while the thread runs on. A ``finally`` around the
+          await would fire at exactly the moment the worker is still running,
+          so the counter would reach zero while a session was still held and
+          shutdown would stop waiting for the thing it is meant to wait for.
         """
         self._worker_started()
 

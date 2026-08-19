@@ -580,12 +580,23 @@ def test_an_advisory_false_from_stop_still_releases_the_lock(tmp_path):
     async def _not_drained(self, **kwargs):
         return False
 
+    from sqlalchemy.engine import Engine
+
+    disposed: list[int] = []
+    real_dispose = Engine.dispose
+
+    def _count(self, *a, **k):
+        disposed.append(1)
+        return real_dispose(self, *a, **k)
+
     async def _run():
         app = create_app()
         ctx = lifespan(app)
         await ctx.__aenter__()
         lock = app.state.process_lock
-        await ctx.__aexit__(None, None, None)
+        disposed.clear()  # ignore anything migrations disposed during startup
+        with patch.object(Engine, "dispose", _count):
+            await ctx.__aexit__(None, None, None)
         return lock
 
     with patch.dict(os.environ, env, clear=False):
@@ -593,3 +604,4 @@ def test_an_advisory_false_from_stop_still_releases_the_lock(tmp_path):
             lock = asyncio.run(_run())
 
     assert not lock.held, "an advisory False held the lock"
+    assert disposed, "an advisory False withheld engine disposal"
