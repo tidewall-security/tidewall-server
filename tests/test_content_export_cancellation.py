@@ -19,9 +19,11 @@ What cancellation must not be allowed to do:
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from datetime import UTC, datetime
 
+import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import create_engine
@@ -123,12 +125,40 @@ def _attempt(Session):
         session.close()
 
 
-def test_cancelling_during_settlement_still_settles_and_still_cleans_up(monkeypatch):
+def _state(Session):
+    attempt = _attempt(Session)
+    return None if attempt is None else attempt.state
+
+
+#: How long the handler must stay unfinished to count as still joining. The
+#: thing it is waiting on is held for 10s, so a build that defers cancellation
+#: blocks for the full 10 and a build that obeys it returns immediately; this
+#: sits an order of magnitude away from both. Its failure direction is a
+#: spurious pass on a badly overloaded machine, never a spurious failure.
+_STILL_JOINING_SECONDS = 0.75
+
+
+async def _stays_pending(task):
+    """Whether the task is STILL RUNNING after the wait above.
+
+    The load-bearing assertion in this module. Checking effects after
+    asyncio.run() has returned cannot distinguish a drained join from a
+    detached one: loop shutdown waits for the executor, so a settlement that
+    the handler abandoned still lands in the database before any post-run
+    assertion reads it. The question has to be asked while the loop is running,
+    and it has to be asked of the HANDLER: is it still here?
+    """
+    done, _pending = await asyncio.wait({task}, timeout=_STILL_JOINING_SECONDS)
+    return not done
+
+
+def test_cancelling_during_settlement_defers_until_it_and_the_cleanup_are_done(monkeypatch):
     """Cancel the handler while the settlement is inside its database worker.
 
-    The settlement is the record that this content left the building. A
+    The settlement is the record that this content left the building, so a
     cancellation arriving mid-flight must be deferred until it and the cleanup
-    that follows it have run, not obeyed at the join.
+    behind it have run -- not obeyed at the join, and not merely "eventually
+    completed by something".
     """
     import app.routes.content_export as route
     import app.services.content_export as service
@@ -161,35 +191,38 @@ def test_cancelling_during_settlement_still_settles_and_still_cleans_up(monkeypa
             request = asyncio.create_task(client.post(path, json=body, headers=headers))
             await asyncio.to_thread(entered.wait, 10)
 
-            request.cancel()
-            await asyncio.sleep(0)
+            assert not request.done()
+            assert request.cancel() is True, "nothing live was cancelled, so this proves nothing"
+            # Repeatedly, and through the real route: one absorbed cancellation
+            # is a weaker claim than a handler that keeps absorbing them.
+            for _ in range(3):
+                await asyncio.sleep(0)
+                request.cancel()
+
+            assert await _stays_pending(request), "the handler returned while its settlement was still writing"
+            assert not closed.is_set(), "cleanup ran before the settlement had been joined"
+            assert _state(Session) == "pending", "settled while the worker was still blocked"
+
             release.set()
 
-            try:
+            with pytest.raises(asyncio.CancelledError):
                 await request
-            except (asyncio.CancelledError, Exception):
-                pass
+
+            # In the loop, before it is torn down: the evidence has to be here
+            # already, not merely arrive during shutdown.
+            assert closed.is_set(), "the handler exited without draining cleanup"
+            assert _state(Session) == "succeeded", "the disclosure has no terminal record"
 
     asyncio.run(_go())
 
-    attempt = _attempt(Session)
-    assert attempt is not None, "no attempt row at all"
-    assert attempt.state == "succeeded", (
-        f"the disclosure was not recorded as settled: state={attempt.state!r}. "
-        "A cancellation obeyed at the settlement join leaves the attempt pending "
-        "while the content has already been sent."
-    )
-    assert closed.is_set(), (
-        "cleanup never ran: the cancellation was obeyed at the settlement join, "
-        "so the connection that carried the content was never closed"
-    )
+    assert _state(Session) == "succeeded"
 
 
-def test_cancelling_during_cleanup_still_finishes_the_cleanup(monkeypatch):
+def test_cancelling_during_cleanup_defers_until_the_closer_finishes(monkeypatch):
     """Cancel the handler while the closer is running.
 
-    The settlement is already done here, so only the second join is under test.
-    An interrupted closer leaks the connection the content went out on.
+    Settlement is already done here, so only the second join is under test. An
+    interrupted closer leaks the connection the content went out on.
     """
     import app.routes.content_export as route
 
@@ -215,23 +248,28 @@ def test_cancelling_during_cleanup_still_finishes_the_cleanup(monkeypatch):
             request = asyncio.create_task(client.post(path, json=body, headers=headers))
             await asyncio.wait_for(started.wait(), 10)
 
-            request.cancel()
-            await asyncio.sleep(0)
+            assert not request.done()
+            assert request.cancel() is True, "nothing live was cancelled, so this proves nothing"
+            for _ in range(3):
+                await asyncio.sleep(0)
+                request.cancel()
+
+            assert await _stays_pending(request), "the handler returned while its cleanup was still running"
+            # The gate is still shut, so nothing incidental can have finished
+            # the closer -- if it is done here, the handler did not wait for it.
+            assert not finished.is_set()
+
             proceed.set()
 
-            try:
+            with pytest.raises(asyncio.CancelledError):
                 await request
-            except (asyncio.CancelledError, Exception):
-                pass
+
+            assert finished.is_set(), (
+                "the closer was interrupted, so the connection that carried the content " "was left open"
+            )
 
     asyncio.run(_go())
-
-    assert finished.is_set(), (
-        "the closer was interrupted by the handler's cancellation, so the "
-        "connection that carried the content was left open"
-    )
-    attempt = _attempt(Session)
-    assert attempt is not None and attempt.state == "succeeded"
+    assert _state(Session) == "succeeded"
 
 
 def test_an_uncancelled_request_is_unaffected(monkeypatch):
@@ -305,3 +343,96 @@ def test_the_settlement_task_is_always_owned_by_the_process(monkeypatch):
     assert resp.status_code == 202, resp.text
     assert observed == [1], f"the in-flight settlement was not owned by the process: {observed}"
     assert not app.state.export_settlements, "the done callback did not discard it"
+
+
+def test_a_cancelled_export_never_emits_a_success_response(monkeypatch):
+    """The route's own re-raise, where nothing else can supply one.
+
+    `pytest.raises(CancelledError)` above proves less than it looks like it
+    proves: removing the route's final `if cancelled: raise` leaves those tests
+    green, because asyncio delivers the pending cancellation at the next await
+    inside the HTTP client anyway. The distinction only becomes visible with
+    nothing awaiting after the handler -- so this drives the app as a raw ASGI
+    callable and asks a different question: what did it SEND?
+
+    Note what this does and does not establish. It proves the observable
+    property -- a cancelled export is never answered with a success status.
+    It does NOT kill removing the route's re-raise, because the pending
+    cancellation fires at Starlette's send() before the response goes out, so
+    both builds send nothing. That statement is unkillable and the route says
+    so at the point it appears.
+    """
+    import app.routes.content_export as route
+    import app.services.content_export as service
+
+    app, Session, path, body, headers = _build(monkeypatch)
+
+    entered = threading.Event()
+    release = threading.Event()
+    real_settle = service.settle
+
+    def _blocking_settle(*args, **kwargs):
+        entered.set()
+        release.wait(10)
+        return real_settle(*args, **kwargs)
+
+    async def _closer():
+        return None
+
+    async def _send_payload(**kwargs):
+        return SendResult(phase="headers_received", status=204, peer="127.0.0.1", closer=_closer)
+
+    monkeypatch.setattr(route.attempts, "settle", _blocking_settle)
+    monkeypatch.setattr(route, "send_payload", _send_payload)
+
+    payload = json.dumps(body).encode()
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.1"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "root_path": "",
+        "headers": [
+            (b"host", b"test"),
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(payload)).encode()),
+            (b"authorization", headers["Authorization"].encode()),
+        ],
+        "client": ("127.0.0.1", 51234),
+        "server": ("test", 80),
+    }
+
+    sent: list[dict] = []
+
+    async def _receive():
+        return {"type": "http.request", "body": payload, "more_body": False}
+
+    async def _send(message):
+        sent.append(message)
+
+    async def _go():
+        call = asyncio.create_task(app(scope, _receive, _send))
+        await asyncio.to_thread(entered.wait, 10)
+
+        assert not call.done()
+        assert call.cancel() is True, "nothing live was cancelled, so this proves nothing"
+        assert await _stays_pending(call), "the handler returned while its settlement was writing"
+
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+
+    asyncio.run(_go())
+
+    starts = [m for m in sent if m["type"] == "http.response.start"]
+    assert not starts, (
+        f"the cancelled request was answered with {starts[0].get('status')}; a handler "
+        "that has absorbed a cancellation must not then report success"
+    )
+    # The disclosure still has its terminal record: absorbing the cancellation
+    # is about the RESPONSE, never about the evidence.
+    assert _state(Session) == "succeeded"

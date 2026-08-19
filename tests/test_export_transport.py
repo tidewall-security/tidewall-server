@@ -7,6 +7,8 @@ primitive, and every control here exists so it does not become one.
 
 from __future__ import annotations
 
+import ipaddress
+
 import pytest
 
 from app.services.export_transport import (
@@ -49,42 +51,104 @@ def test_a_refused_url_shape_never_resolves(url, why, monkeypatch):
         validate_destination(url)
 
 
+#: Every entry in the IANA IPv4 and IPv6 Special-Purpose Address Registries
+#: that is marked "Globally Reachable: False", plus the deprecated site-local
+#: range. Sampled at the first, second and last address of each prefix so an
+#: off-by-one at either edge is caught.
+#:
+#: The point of enumerating the whole set rather than a few interesting cases:
+#: only three of these are actually admitted by a naive "not private and not
+#: reserved" rule (100.64/10, 192.88.99/24 and fec0::/10, plus ORCHIDv2), and
+#: which three depends on the runtime's tables. A runtime that moves an entry
+#: out of is_reserved should fail a test, not silently open a hole.
+_NOT_GLOBALLY_REACHABLE = [
+    ("0.0.0.0/8", "this network"),
+    ("10.0.0.0/8", "private"),
+    ("100.64.0.0/10", "shared address space, RFC 6598 -- CGNAT and Tailscale"),
+    ("127.0.0.0/8", "loopback"),
+    ("169.254.0.0/16", "link local, includes the cloud metadata address"),
+    ("172.16.0.0/12", "private"),
+    ("192.0.0.0/24", "IETF protocol assignments"),
+    ("192.0.2.0/24", "TEST-NET-1"),
+    ("192.88.99.0/24", "6to4 relay anycast, deprecated by RFC 7526"),
+    ("192.168.0.0/16", "private"),
+    ("198.18.0.0/15", "benchmarking"),
+    ("198.51.100.0/24", "TEST-NET-2"),
+    ("203.0.113.0/24", "TEST-NET-3"),
+    ("240.0.0.0/4", "reserved for future use"),
+    ("255.255.255.255/32", "limited broadcast"),
+    ("::/128", "unspecified"),
+    ("::1/128", "loopback"),
+    ("64:ff9b:1::/48", "local-use NAT64, RFC 8215"),
+    ("100::/64", "discard only"),
+    ("2001::/32", "Teredo"),
+    ("2001:2::/48", "benchmarking"),
+    ("2001:20::/28", "ORCHIDv2, RFC 7343 -- not routable at all"),
+    ("2001:db8::/32", "documentation"),
+    ("3fff::/20", "documentation, RFC 9637"),
+    ("5f00::/16", "SRv6 SIDs"),
+    ("fc00::/7", "unique local"),
+    ("fe80::/10", "link local"),
+    ("fec0::/10", "site local, deprecated by RFC 3879 but still deployed"),
+    ("ff00::/8", "multicast"),
+]
+
+
+def _samples(cidr):
+    net = ipaddress.ip_network(cidr)
+    out = [net.network_address, net.broadcast_address]
+    if net.num_addresses > 2:
+        out.append(net.network_address + 1)
+    return out
+
+
 @pytest.mark.parametrize(
     "literal",
     [
-        "127.0.0.1",
-        "[::1]",
-        "10.0.0.5",
-        "192.168.1.1",
-        "172.16.0.1",
-        "169.254.169.254",  # cloud instance metadata
-        "[fd00::1]",
-        "[::ffff:127.0.0.1]",  # loopback wearing an IPv6 hat
-        "0.0.0.0",
-        "224.0.0.1",  # globally SCOPED multicast: Python calls this is_global
-        # Special-use ranges that are neither private nor reserved, so a
-        # negative "not private and not reserved" rule admits every one of
-        # them. 100.64/10 is the one that mattered: carrier-grade NAT space,
-        # and the range Tailscale hands out.
-        "100.64.0.1",
-        "[::ffff:100.64.0.1]",
-        "192.0.0.1",  # IETF protocol assignments
-        "192.0.2.1",  # TEST-NET-1
-        "198.18.0.1",  # benchmarking
-        "198.51.100.1",  # TEST-NET-2
-        "203.0.113.1",  # TEST-NET-3
-        "240.0.0.1",  # future use
-        "255.255.255.255",  # broadcast
-        "[64:ff9b::808:808]",  # NAT64 well-known prefix
-        "[2001:db8::1]",  # documentation
-        "[2002:808:808::1]",  # 6to4 wrapping a public v4 address
+        pytest.param(
+            f"[{addr}]" if addr.version == 6 else str(addr),
+            id=f"{cidr}-{addr}",
+        )
+        for cidr, _why in _NOT_GLOBALLY_REACHABLE
+        for addr in _samples(cidr)
     ],
 )
 def test_a_non_public_address_literal_is_refused(literal, monkeypatch):
+    """The whole not-globally-reachable space, not a selection from it.
+
+    A negative rule ("not private, not reserved") is the wrong shape for this
+    question: it admitted 100.64.0.0/10, which is carrier-grade NAT space and
+    the range Tailscale hands out. A positive rule alone is also wrong -- this
+    runtime calls 224.0.0.1 global, because it is globally *scoped* multicast.
+    Hence both, plus an explicit list for what the runtime's own tables place
+    on the wrong side.
+    """
     import app.services.export_transport as t
 
     # A literal still goes through getaddrinfo, which returns it unchanged; the
     # stub keeps the test off the network without changing what is checked.
+    monkeypatch.setattr(t, "_resolve", lambda host, port: [host.strip("[]")])
+    with pytest.raises(DestinationRefused):
+        validate_destination(f"https://{literal}/hook")
+
+
+@pytest.mark.parametrize(
+    "literal,why",
+    [
+        ("224.0.0.1", "globally scoped multicast: this runtime calls it is_global"),
+        ("[ff02::1]", "link-local multicast"),
+        ("[::ffff:127.0.0.1]", "loopback wearing an IPv6 hat"),
+        ("[::ffff:10.0.0.1]", "private, mapped"),
+        ("[::ffff:100.64.0.1]", "shared address space, mapped"),
+        ("[64:ff9b::808:808]", "NAT64 well-known prefix: refused as a matter of policy"),
+        ("[2002:808:808::1]", "6to4 wrapping a public v4 address"),
+        ("[::8.8.8.8]", "IPv4-compatible IPv6, deprecated"),
+    ],
+)
+def test_an_address_that_wears_a_disguise_is_refused(literal, why, monkeypatch):
+    """Forms that carry another address family, or another scope, inside them."""
+    import app.services.export_transport as t
+
     monkeypatch.setattr(t, "_resolve", lambda host, port: [host.strip("[]")])
     with pytest.raises(DestinationRefused):
         validate_destination(f"https://{literal}/hook")
@@ -541,10 +605,19 @@ def test_every_address_failing_raises_rather_than_connecting_by_name():
         {"Idempotency-Key": "attacker-chosen"},
         {"IDEMPOTENCY-KEY": "attacker-chosen"},
         {"IdEmPoTeNcY-kEy": "attacker-chosen"},
+        {"Idempotency_Key": "attacker-chosen"},
+        {"IDEMPOTENCY_KEY": "attacker-chosen"},
+        {"idempotency_key": "attacker-chosen"},
         {"content-type": "text/plain"},
         {"Content-Type": "text/plain"},
         {"CONTENT-TYPE": "text/plain"},
         {"cOnTeNt-TyPe": "text/plain"},
+        {"Content_Type": "text/plain"},
+        # Hop-by-hop names alias the same way.
+        {"Content_Length": "0"},
+        {"Transfer_Encoding": "chunked"},
+        {"Proxy_Authorization": "Basic x"},
+        {"Keep_Alive": "timeout=5"},
     ],
 )
 def test_a_header_this_server_sets_itself_cannot_be_configured(headers):
@@ -608,3 +681,58 @@ def test_a_case_variant_header_would_otherwise_reach_the_wire_twice():
         "collapses them, the reservation in _SERVER_OWNED_HEADERS needs a new rationale"
     )
     assert "attacker-chosen" in seen[0]
+
+
+def test_an_underscore_alias_would_otherwise_merge_at_the_gateway():
+    """Why the underscore fold exists, checked against a real WSGI gateway.
+
+    `Idempotency_Key` and `Idempotency-Key` are distinct HTTP fields and both
+    reach the wire intact. The collision happens one layer further in: CGI and
+    WSGI map both to the same environ key, so the receiving application reads a
+    single value containing both. This asserts the hazard, not a guard --
+    nothing in production sends unvalidated headers.
+    """
+    import asyncio
+    import threading
+    from wsgiref.simple_server import WSGIRequestHandler, make_server
+
+    import app.services.export_transport as t
+
+    seen: list[str] = []
+
+    def _app(environ, start_response):
+        environ["wsgi.input"].read(int(environ.get("CONTENT_LENGTH") or 0))
+        seen.append(environ.get("HTTP_IDEMPOTENCY_KEY", ""))
+        start_response("204 No Content", [("Content-Length", "0")])
+        return [b""]
+
+    class _Quiet(WSGIRequestHandler):
+        def log_message(self, *args):
+            pass
+
+    server = make_server("127.0.0.1", 0, _app, handler_class=_Quiet)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    async def _go():
+        return await t.send_payload(
+            url=f"http://127.0.0.1:{port}/hook",
+            headers={"Idempotency_Key": "attacker-chosen"},
+            body=b"{}",
+            addresses=["127.0.0.1"],
+            deadline_seconds=5,
+        )
+
+    try:
+        result = asyncio.run(_go())
+    finally:
+        server.shutdown()
+
+    if result.closer is not None:
+        asyncio.run(result.closer())
+
+    assert seen, "the receiver was never reached, so this proves nothing"
+    assert "attacker-chosen" in seen[0], (
+        f"the gateway did not merge the underscore alias (saw {seen[0]!r}); if that is "
+        "now true of gateways generally, the underscore fold needs a new rationale"
+    )

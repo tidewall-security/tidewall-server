@@ -47,6 +47,37 @@ _FORBIDDEN_HEADERS = frozenset(
     }
 )
 
+#: Prefixes the IANA special-purpose registries mark as not globally
+#: reachable, which this Python's `ipaddress` tables nonetheless report as
+#: global. Determined by sweeping both registries against the predicate below;
+#: everything else in them is already rejected by it.
+#:
+#: This list is a snapshot of a registry that changes. It is not a substitute
+#: for the general rule beneath it, and it needs revisiting when either the
+#: registry or the runtime's tables move.
+_REFUSED_NETWORKS = (
+    # 6to4 relay anycast, deprecated by RFC 7526. Reaches whichever relay the
+    # local network routes it to.
+    ipaddress.ip_network("192.88.99.0/24"),
+    # ORCHIDv2 (RFC 7343): not routable addresses at all.
+    ipaddress.ip_network("2001:20::/28"),
+)
+
+#: NAT64, stated rather than implied.
+#:
+#: 64:ff9b::/96 (RFC 6052 well-known prefix) and 64:ff9b:1::/48 (RFC 8215
+#: local use) are refused, the first because this Python marks it reserved and
+#: the second because it is local by definition. That is deliberately
+#: conservative: a NAT64-only deployment cannot export through the well-known
+#: prefix and needs an IPv4 or dual-stack route to its receiver.
+#:
+#: What this predicate CANNOT see is a Network-Specific Prefix. An operator's
+#: own NAT64 prefix is ordinary global IPv6 as far as any classification can
+#: tell, and the IPv4 address behind it may be internal. No address predicate
+#: can close that; it is a property of the network the server runs on, not of
+#: the address. It is a residual risk, and the runbook says so rather than
+#: this module implying otherwise.
+
 #: Headers this server sets itself on a content export. They are refused in a
 #: target's configuration rather than allowed to lose a merge, because HTTP
 #: field names are case-insensitive while dict keys are not: a configured
@@ -90,6 +121,8 @@ def _is_public(addr: str) -> bool:
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         # ::ffff:127.0.0.1 is loopback wearing an IPv6 hat.
         ip = ip.ipv4_mapped
+    if any(ip in net for net in _REFUSED_NETWORKS):
+        return False
     # Both halves are load-bearing, and neither is sufficient alone.
     #
     # The negative list alone admitted 100.64.0.0/10 (RFC 6598 shared address
@@ -109,6 +142,11 @@ def _is_public(addr: str) -> bool:
         or ip.is_multicast
         or ip.is_unspecified
         or ip.is_reserved
+        # IPv6 only; IPv4Address has no such attribute. fec0::/10 is deprecated
+        # (RFC 3879) but existing deployments were explicitly allowed to keep
+        # using it, and Python reports it as global, private=False,
+        # reserved=False -- so nothing else here rejects it.
+        or getattr(ip, "is_site_local", False)
     )
 
 
@@ -181,9 +219,17 @@ def validate_headers(headers: dict[str, str] | None) -> dict[str, str]:
     for name, value in (headers or {}).items():
         if not isinstance(name, str) or not isinstance(value, str):
             raise DestinationRefused("header names and values must be strings")
-        if name.lower() in _FORBIDDEN_HEADERS:
+        # Underscore folds to hyphen before either comparison. `Idempotency_Key`
+        # is a DIFFERENT field from `Idempotency-Key` under HTTP, so it does not
+        # collide on the wire -- but CGI and WSGI gateways canonicalise hyphens
+        # to underscores before the application sees anything, so the receiving
+        # application reads one HTTP_IDEMPOTENCY_KEY holding both values. A
+        # receiver that takes the first is back to a configured token deciding
+        # idempotency for a disclosure this server thinks it owns.
+        canonical = name.lower().replace("_", "-")
+        if canonical in _FORBIDDEN_HEADERS:
             raise DestinationRefused(f"header {name!r} is not permitted")
-        if name.lower() in _SERVER_OWNED_HEADERS:
+        if canonical in _SERVER_OWNED_HEADERS:
             raise DestinationRefused(f"header {name!r} is set by this server and cannot be configured")
         if not name or any(c not in _TOKEN_CHARS for c in name):
             raise DestinationRefused(f"header name {name!r} is not a valid HTTP token")

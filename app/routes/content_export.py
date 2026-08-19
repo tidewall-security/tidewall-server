@@ -562,6 +562,16 @@ async def _reserve_and_send(*, request: Request, **ctx: Any) -> Response:
                 raise asyncio.CancelledError
             return _json_response(502, {"attempt_id": attempt_id, "state": stored_state})
 
+        # Deliberate, and NOT independently killable by a test -- worth saying
+        # rather than implying otherwise. Removing this leaves every test green,
+        # because asyncio still has the cancellation pending and delivers it at
+        # the next await, which is Starlette's send(); the response never
+        # reaches the wire either way. It stays because that redelivery is an
+        # asyncio implementation detail that has already changed once (3.11's
+        # uncancel/cancelling), while "a handler that absorbed a cancellation
+        # does not then report success" is a property this route should state
+        # for itself. The observable half has a test:
+        # test_a_cancelled_export_never_emits_a_success_response.
         if cancelled:
             raise asyncio.CancelledError
 

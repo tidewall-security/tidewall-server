@@ -1,9 +1,11 @@
 """The cancellation-resistant join used for settlement and cleanup.
 
-Rendezvous is by event where the ordering matters -- "the task has started",
-"the joiner is waiting" -- so those points are exact. Some tasks then run for a
-short fixed sleep to give the joiner something to wait on; that is duration,
-not synchronisation, and no assertion depends on how long it takes.
+On timing, accurately: "the task has started" is an event, but "the joiner is
+now waiting" is a scheduling yield (`await asyncio.sleep(0)`), and the tasks
+being joined run a fixed 50ms sleep that has to still be pending when the
+cancellation lands. So the assertions do depend on a timing relationship, even
+though none of them measures elapsed time. Two earlier versions of this note
+claimed the file was event-driven throughout; it is not.
 
 These test the helper. They say nothing about whether the route calls it:
 that is tests/test_content_export_cancellation.py, and the two were separately
@@ -158,44 +160,23 @@ def test_a_task_that_completes_on_the_cancelling_tick_still_has_its_result_drain
     assert len(errors) == 1, "the task's exception was never retrieved"
 
 
-def test_the_join_holds_its_own_reference_to_the_task():
-    """A bare create_task is owned by nothing but the loop's weak set.
-
-    An earlier version of this test kept the task in a local of its own and
-    then called gc.collect(), which could only ever prove that a strongly
-    referenced object is not collected. The caller here drops every reference
-    it has before collecting, so the only thing keeping the task alive is the
-    join's own parameter.
-
-    Ownership by the *process* is a different property with a different test:
-    test_the_settlement_task_is_always_owned_by_the_process, in
-    tests/test_content_export_cancellation.py.
-    """
-    import gc
-
-    async def _go():
-        errors: list[Exception] = []
-        result: list[object] = []
-
-        async def _work():
-            await asyncio.sleep(0.01)
-            result.append("kept")
-
-        async def _join_only(task):
-            # The task is now reachable from this frame's argument and from
-            # nowhere else the caller controls.
-            gc.collect()
-            gc.collect()
-            return await _join_and_drain(task, on_error=errors.append)
-
-        joiner = _join_only(asyncio.create_task(_work()))
-        cancelled = await joiner
-        return cancelled, errors, result
-
-    cancelled, errors, result = _run(_go())
-    assert result == ["kept"], "the task did not run to completion"
-    assert errors == []
-    assert cancelled is False
+# There is no test here for "the join is what keeps the task alive", and that
+# is a deliberate omission rather than an oversight.
+#
+# Two attempts were made. The first held the task in a local of its own and
+# then called gc.collect(), which can only ever show that a strongly
+# referenced object is not collected. The second passed the task straight into
+# a function and collected from inside it, which is no better: the running
+# loop holds its own strong reference to every scheduled task, so a control
+# that keeps NO reference at all also survives collection. Anything asserting
+# otherwise would pass for a reason that has nothing to do with the join.
+#
+# The property that does matter, and that can be tested, is ownership by the
+# PROCESS rather than by the loop: a settlement must be reachable from
+# app.state.export_settlements while it is in flight, so shutdown can wait for
+# it. That is
+# test_the_settlement_task_is_always_owned_by_the_process, in
+# tests/test_content_export_cancellation.py.
 
 
 @pytest.mark.parametrize("attempts_count", [1, 5])
