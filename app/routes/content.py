@@ -525,7 +525,14 @@ async def _authorize_and_read(request: Request) -> Response:
             audit(DENIED_CORRUPT, reason=None, grant_used=grant_used, interaction=interaction_id)
             return _error(500, "Stored content is unreadable")
     finally:
-        session.close()
+        # Guarded for the same reason the audit session's close is: by this
+        # point the projection is already built, and failing to release a
+        # session is not a reason to turn an answered request into a 500 the
+        # caller cannot distinguish from a real fault.
+        try:
+            session.close()
+        except Exception as exc:
+            report(logger, "error", "could not close the content read session", exc)
 
     # 7. The audit is the precondition. No content without it.
     if not audit(AUTHORIZED, reason=None, grant_used=grant_used, interaction=interaction_id):

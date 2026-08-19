@@ -717,6 +717,31 @@ def test_an_audit_session_failure_on_a_denial_keeps_the_denial(env):
     assert resp.status_code == 403, "an audit session failure replaced the denial"
 
 
+def test_a_read_session_close_failure_does_not_become_a_500(env, monkeypatch):
+    """The same as the audit session's close, one step earlier. By that point
+    the projection is already built, so failing to release a session is not a
+    reason to turn an answered request into a 500."""
+    client, Session = env
+    headers = _key(Session, role="viewer", policy_id="policy-a", grants=[CONTENT_READ])
+    interaction_id = _interaction(Session)
+
+    real_close = Session.class_.close
+    state = {"closes": 0}
+
+    def _close(self):
+        # 1 = authentication, 2 = the scoped read.
+        state["closes"] += 1
+        if state["closes"] == 2:
+            raise RuntimeError("close failed")
+        return real_close(self)
+
+    monkeypatch.setattr(Session.class_, "close", _close)
+    resp = client.get(f"/v1/logs/{interaction_id}/content?view=full", headers=headers)
+    assert resp.status_code == 200, "a read-session close failure became an internal error"
+    assert resp.json()["messages"][0]["content"] == CANARY
+    assert _audits(Session)[-1].outcome == "authorized", "the read was disclosed without its audit"
+
+
 def test_a_close_failure_after_a_successful_audit_does_not_become_a_500(env, monkeypatch):
     """close() sat in a finally outside the handler, so a close failure after a
     successful commit escaped and turned an authorized read into a 500 the

@@ -52,29 +52,21 @@ def upgrade() -> None:
         batch.drop_column("detectors_json")
         batch.drop_column("summary")
         batch.add_column(sa.Column("evidence_json", sa.JSON(), nullable=True))
-        batch.add_column(
-            sa.Column("evidence_schema_version", sa.Integer(), nullable=False, server_default="1")
-        )
-        batch.add_column(
-            sa.Column("content_available", sa.Boolean(), nullable=False, server_default=sa.false())
-        )
+        batch.add_column(sa.Column("evidence_schema_version", sa.Integer(), nullable=False, server_default="1"))
+        batch.add_column(sa.Column("content_available", sa.Boolean(), nullable=False, server_default=sa.false()))
         # Reads are scoped by policy, so a null makes the row invisible to every
         # viewer — a silent audit gap. The table is empty at this point, so the
         # NOT NULL costs nothing.
         batch.alter_column("policy_id", existing_type=sa.String(), nullable=False)
 
     op.create_index("ix_interactions_policy_timestamp", "interactions", ["policy_id", "timestamp"])
-    op.create_index(
-        "ix_interactions_policy_status_timestamp", "interactions", ["policy_id", "status", "timestamp"]
-    )
+    op.create_index("ix_interactions_policy_status_timestamp", "interactions", ["policy_id", "status", "timestamp"])
     op.create_index("ix_interactions_device_id", "interactions", ["device_id"])
 
     # Capture settings. Off by default: a fresh install retains no prompts
     # until an operator turns it on.
     with op.batch_alter_table("policies", schema=None) as batch:
-        batch.add_column(
-            sa.Column("raw_content_enabled", sa.Boolean(), nullable=False, server_default=sa.false())
-        )
+        batch.add_column(sa.Column("raw_content_enabled", sa.Boolean(), nullable=False, server_default=sa.false()))
         batch.add_column(sa.Column("raw_content_retention_days", sa.Integer(), nullable=True))
 
     # Content grants, orthogonal to the role rather than implied by it.

@@ -77,10 +77,12 @@ def upgrade() -> None:
         """
     )
 
-    # Belt and braces: the pre-check above should make this unreachable. If it
-    # is ever reached, undo the column before raising, so the refusal still
-    # leaves the previous schema and a retry re-reports the real problem rather
-    # than failing at ADD COLUMN.
+    # Defence in depth, and unreachable as written: the pre-check above rejects
+    # every row this could catch, so no test can force this branch without
+    # disabling that check. It stays because the pre-check and the backfill
+    # could drift apart, and if it ever does fire it undoes its own column
+    # before raising -- so the refusal still leaves the previous schema and a
+    # retry re-reports the real problem rather than failing at ADD COLUMN.
     unresolved = conn.execute(sa.text("SELECT COUNT(*) FROM interaction_contents WHERE policy_id IS NULL")).scalar()
     if unresolved:
         op.drop_column("interaction_contents", "policy_id")
