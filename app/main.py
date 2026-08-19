@@ -199,7 +199,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     scheduler = None
     try:
-        from app.services.scheduler import Scheduler, retention_job
+        from app.services.scheduler import Scheduler, export_abandon_job, retention_job
 
         # Assigned before start(), so a partial start is still stoppable. If
         # start() creates one task and then fails, dropping the reference would
@@ -207,7 +207,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # background work — and decides whether to dispose the engine on that
         # belief.
         scheduler = Scheduler()
-        scheduler.start([retention_job(SessionLocal, scheduler=scheduler)])
+        scheduler.start(
+            [
+                retention_job(SessionLocal, scheduler=scheduler),
+                # Resolves export attempts left pending by a process that is
+                # gone. It never sends anything.
+                export_abandon_job(SessionLocal, boot_id=process_lock.boot_id, scheduler=scheduler),
+            ]
+        )
     except Exception:
         report(
             logging.getLogger(__name__),

@@ -194,6 +194,46 @@ class Scheduler:
         return True
 
 
+def export_abandon_job(
+    session_factory: Callable[[], object],
+    *,
+    boot_id: str,
+    interval_seconds: float = 300.0,
+    scheduler: Scheduler | None = None,
+) -> Job:
+    """Terminate export attempts left pending by a process that is gone.
+
+    **Never sends anything.** An attempt whose delivery is unknown must not be
+    retried: that is how one disclosure becomes two.
+
+    A pending row from the CURRENT boot is left alone however old. It is owned
+    by a live coroutine that will settle it, or it is genuinely stuck -- and a
+    stuck row surfaces through the derived pending-health signal and resolves on
+    the next restart. Age has no role here, because no wall-clock bound on a
+    synchronous SQLite operation exists to build one on.
+    """
+
+    async def _run() -> None:
+        from app.services.content_export import abandon_foreign_pending
+
+        def _sweep() -> int:
+            with session_factory() as session:  # type: ignore[attr-defined]
+                count = abandon_foreign_pending(session, boot_id=boot_id)
+                session.commit()
+                return count
+
+        abandoned = await (scheduler.run_in_worker(_sweep) if scheduler else asyncio.to_thread(_sweep))
+        if abandoned:
+            report(
+                logger,
+                "warning",
+                f"abandoned {abandoned} export attempt(s) left pending by a previous process; "
+                "their delivery is unknown and nothing has been retried",
+            )
+
+    return Job(name="content-export-abandon", interval_seconds=interval_seconds, run=_run)
+
+
 def retention_job(
     session_factory: Callable[[], object],
     *,

@@ -215,3 +215,46 @@ def test_two_concurrent_reservations_with_one_key_produce_one_attempt(tmp_path):
     assert results[0][0] == results[1][0], "the two calls disagree about the attempt"
     with factory() as s:
         assert s.query(ContentExportAttempt).count() == 1
+
+
+def test_the_sweep_abandons_a_dead_process_and_sends_nothing(factory):
+    """It abandons; it does not retry. Retrying an export whose delivery is
+    unknown is how one disclosure becomes two."""
+    import asyncio
+
+    from app.services.scheduler import export_abandon_job
+
+    svc.reserve(factory, attempt=_attempt(boot_id="boot-old"))
+    job = export_abandon_job(factory, boot_id="boot-current")
+
+    import app.services.export_transport as transport
+
+    sent: list[object] = []
+    original = transport.send_payload
+
+    async def _spy(**kwargs):
+        sent.append(kwargs)
+        return None
+
+    transport.send_payload = _spy  # type: ignore[assignment]
+    try:
+        asyncio.run(job.run())
+    finally:
+        transport.send_payload = original  # type: ignore[assignment]
+
+    assert sent == [], "the sweep sent something"
+    with factory() as s:
+        row = s.query(ContentExportAttempt).one()
+        assert row.state == "abandoned_indeterminate"
+        assert row.settled_at is not None
+
+
+def test_the_sweep_leaves_this_process_alone(factory):
+    import asyncio
+
+    from app.services.scheduler import export_abandon_job
+
+    svc.reserve(factory, attempt=_attempt(boot_id="boot-current"))
+    asyncio.run(export_abandon_job(factory, boot_id="boot-current").run())
+    with factory() as s:
+        assert s.query(ContentExportAttempt).one().state == "pending"
