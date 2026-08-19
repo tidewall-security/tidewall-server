@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Interaction, InteractionContent
 from app.services.audit_evidence import MAX_MATCHES_JSON_BYTES
+from app.services.safe_logging import report
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +145,7 @@ def purge_expired(session: Session, *, now: datetime | None = None) -> int:
             ~Interaction.id.in_(session.query(InteractionContent.interaction_id)),
         ).update({"content_available": False}, synchronize_session=False)
         session.commit()
-        logger.info("Purged %d expired content row(s)", deleted)
+        report(logger, "info", f"Purged {deleted} expired content row(s)")
     return deleted
 
 

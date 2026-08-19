@@ -342,3 +342,52 @@ def test_a_scheduler_that_cannot_stop_does_not_break_shutdown(tmp_path):
 
     assert any("did not stop cleanly" in m for m in records), "a failing stop() was swallowed quietly"
     assert not disposals, "disposed the engine while a worker may still have owned a session"
+
+
+def test_a_scheduler_that_fails_midway_through_start_is_still_stopped(tmp_path):
+    """A partial start must not orphan its tasks.
+
+    start() creates the job tasks and then reports. If anything after the first
+    create_task() raises, dropping the scheduler reference would leave that
+    task running while shutdown concludes there is no background work — and
+    the decision about disposing the database engine is made on that belief.
+    """
+    import asyncio
+    import os
+    from unittest.mock import patch
+
+    import app.services.scheduler as scheduler_module
+    from app.main import create_app, lifespan
+
+    db = tmp_path / "sched_partial.db"
+    env = {"DB_URL": f"sqlite:///{db}", "BOOTSTRAP_KEY": "test-bootstrap-key-0123456789"}
+
+    real_start = scheduler_module.Scheduler.start
+
+    def _start_then_fail(self, jobs):
+        real_start(self, jobs)  # tasks now exist
+        raise RuntimeError("reporting blew up after the tasks were created")
+
+    stopped: list[bool] = []
+    real_stop = scheduler_module.Scheduler.stop
+
+    async def _record_stop(self, **kwargs):
+        stopped.append(True)
+        return await real_stop(self, **kwargs)
+
+    async def _startup_then_shutdown():
+        app = create_app()
+        ctx = lifespan(app)
+        await ctx.__aenter__()
+        scheduler = app.state.scheduler
+        assert scheduler is not None, "a partially started scheduler was dropped"
+        assert scheduler._tasks, "the test did not actually create any tasks"
+        await ctx.__aexit__(None, None, None)
+        assert not [t for t in scheduler._tasks if not t.done()], "a job task outlived shutdown"
+
+    with patch.dict(os.environ, env, clear=False):
+        with patch.object(scheduler_module.Scheduler, "start", _start_then_fail):
+            with patch.object(scheduler_module.Scheduler, "stop", _record_stop):
+                asyncio.run(_startup_then_shutdown())
+
+    assert stopped, "shutdown never stopped the partially started scheduler"

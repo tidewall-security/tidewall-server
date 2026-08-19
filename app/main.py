@@ -172,6 +172,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         from app.services.scheduler import Scheduler, retention_job
 
+        # Assigned before start(), so a partial start is still stoppable. If
+        # start() creates one task and then fails, dropping the reference would
+        # leave that task running while shutdown believes there is no
+        # background work — and decides whether to dispose the engine on that
+        # belief.
         scheduler = Scheduler()
         scheduler.start([retention_job(SessionLocal, scheduler=scheduler)])
     except Exception:
@@ -184,7 +189,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # content and is the most useful thing here.
             exc_info=True,
         )
-        scheduler = None
+        # Deliberately not reset to None: if start() got far enough to create a
+        # task, that task is running and shutdown must still stop and drain it.
     app.state.scheduler = scheduler
 
     logging.info("Tidewall ready")
@@ -232,7 +238,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # general case wrongly. Withholding it costs an idle pool on a path
             # where the process is about to exit anyway, and is correct for
             # both.
-            logging.getLogger(__name__).error("not disposing the database engine: background work is still running")
+            report(
+                logging.getLogger(__name__),
+                "error",
+                "not disposing the database engine: background work is still running",
+            )
 
 
 def create_app() -> FastAPI:

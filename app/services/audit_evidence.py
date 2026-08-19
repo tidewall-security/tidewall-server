@@ -68,6 +68,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from app.services.safe_logging import report
+
 # Overflow fails capture closed rather than truncating.
 MAX_MATCH_GROUPS = 100
 MAX_OCCURRENCES_PER_GROUP = 100
@@ -85,6 +87,7 @@ MATCHES_SCHEMA_VERSION = 1
 SOURCE_KINDS = ("message", "tool")
 SOURCE_FIELDS = ("content", "name", "description", "parameters")
 _MAX_IDENTIFIER_LENGTH = 64
+
 
 logger = logging.getLogger(__name__)
 
@@ -426,7 +429,7 @@ class MatchCollector:
                 # the whole batch silently — the caller is a detector mid-scan
                 # and bookkeeping is not its job, but a partial set must never
                 # be stored.
-                logger.debug("discarding poisoned capture batch for %s", detector)
+                report(logger, "debug", f"discarding poisoned capture batch for {detector}")
                 return
 
             commit_failure: str | None = None
@@ -642,7 +645,9 @@ def report_match(
             # Cannot be attributed to one message: drop the batch rather than
             # record a fabricated origin.
             batch.poisoned = True
-            logger.debug("exact match for %s could not be attributed to one message; discarding batch", detector)
+            report(
+                logger, "debug", f"exact match for {detector} could not be attributed to one message; discarding batch"
+            )
             return
         source, local_start, local_end = resolved
         batch.add(
@@ -663,4 +668,4 @@ def report_match(
         # and become the detector's verdict. Poisoning still discards the whole
         # batch, so a partial set is never stored.
         batch.poisoned = True
-        logger.debug("exact match capture failed for %s; discarding this detector's batch", detector)
+        report(logger, "debug", f"exact match capture failed for {detector}; discarding this detector's batch")

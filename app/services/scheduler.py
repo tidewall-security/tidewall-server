@@ -92,9 +92,17 @@ class Scheduler:
         return await asyncio.to_thread(_tracked)
 
     def start(self, jobs: list[Job]) -> None:
+        """Create the job tasks.
+
+        Anything after the first create_task() must be non-raising, or the
+        caller concludes the scheduler never started while its tasks are
+        already running — orphaned, never stopped, never drained, and the
+        shutdown decision about disposing the engine made on the belief that
+        no background work exists.
+        """
         for job in jobs:
             self._tasks.append(asyncio.create_task(self._loop(job), name=f"scheduler:{job.name}"))
-        logger.info("Scheduler started with %d job(s)", len(jobs))
+        report(logger, "info", f"Scheduler started with {len(jobs)} job(s)")
 
     async def _loop(self, job: Job) -> None:
         # Run once immediately: after a restart there may already be expired
@@ -130,11 +138,11 @@ class Scheduler:
         """
         self._stopping.set()
         if not self._tasks:
-            logger.info("Scheduler stopped")
+            report(logger, "info", "Scheduler stopped")
             return True
         done, pending = await asyncio.wait(self._tasks, timeout=timeout_seconds)
         for task in pending:
-            logger.warning("scheduled job did not finish within %.0fs; cancelling", timeout_seconds)
+            report(logger, "warning", f"scheduled job did not finish within {timeout_seconds:.0f}s; cancelling")
             task.cancel()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
@@ -148,19 +156,21 @@ class Scheduler:
             # loop may take to notice the stop signal; this one is about not
             # disposing the database engine underneath a thread that still owns
             # a session, which is the harm being prevented.
-            logger.info("waiting for %d background worker(s) to finish", self._worker_count)
+            report(logger, "info", f"waiting for {self._worker_count} background worker(s) to finish")
             await asyncio.to_thread(self._workers_idle.wait, worker_drain_seconds)
             if not self._workers_idle.is_set():
                 # Reported, not just logged. Saying "disposal may race them" and
                 # returning anyway left the caller to dispose regardless, which
                 # is the outcome this is meant to prevent — the caller needs to
                 # be able to decide.
-                logger.error(
-                    "background worker(s) still running after %.0fs; not safe to dispose the engine",
-                    worker_drain_seconds,
+                report(
+                    logger,
+                    "error",
+                    f"background worker(s) still running after {worker_drain_seconds:.0f}s; "
+                    "not safe to dispose the engine",
                 )
                 return False
-        logger.info("Scheduler stopped")
+        report(logger, "info", "Scheduler stopped")
         return True
 
 
@@ -184,6 +194,6 @@ def retention_job(
         # scheduler so shutdown can wait for the thread, not just the task.
         purged = await (scheduler.run_in_worker(_purge) if scheduler else asyncio.to_thread(_purge))
         if purged:
-            logger.info("Retention purged %d expired content row(s)", purged)
+            report(logger, "info", f"Retention purged {purged} expired content row(s)")
 
     return Job(name="content-retention", interval_seconds=interval_seconds, run=_run)
