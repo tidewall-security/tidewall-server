@@ -4,6 +4,36 @@
 (function () {
   'use strict';
 
+  /**
+   * Say what happens to what is typed here.
+   *
+   * Worded from the policy in effect rather than asserted unconditionally:
+   * capture is off by default, and telling an operator their prompts are
+   * retained when they are not would be as wrong as the reverse. It also does
+   * not suggest that being an admin grants access to what is retained -- that
+   * needs an explicit grant, which is the whole point of step 6.
+   */
+  function renderRetentionNotice() {
+    var el = document.getElementById('retentionNotice');
+    if (!el || !window.API || !API.getPolicies) return;
+    API.getPolicies().then(function (policies) {
+      var capturing = (policies || []).filter(function (p) { return p && p.raw_content_enabled; });
+      if (capturing.length) {
+        el.textContent =
+          'Raw content capture is enabled on ' + capturing.length + ' policy' +
+          (capturing.length === 1 ? '' : ' policies') +
+          '. Prompts and responses evaluated against those policies are retained for the ' +
+          'configured period and can be read by a holder of an explicit content grant.';
+      } else {
+        el.textContent = 'Raw content capture is off. Prompts and responses evaluated here are not retained.';
+      }
+    }).catch(function () {
+      el.textContent = 'Retention settings could not be checked.';
+    });
+  }
+
+  'use strict';
+
   var PRESETS = [
     {
       label: 'Prompt Injection',
@@ -180,6 +210,7 @@
 
   // ---- Input event listeners ----
   function init() {
+    renderRetentionNotice();
     renderPresets();
 
     sendBtn.addEventListener('click', sendMessage);

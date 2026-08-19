@@ -293,6 +293,7 @@ def create_app() -> FastAPI:
         guard,
         keys,
         logs,
+        me,
         policies,
         registration,
         settings,
@@ -303,6 +304,7 @@ def create_app() -> FastAPI:
     app.include_router(unredact.router)
     app.include_router(logs.router)
     app.include_router(content.router)
+    app.include_router(me.router)
     app.include_router(dashboard.router)
     app.include_router(policies.router)
     app.include_router(keys.router)

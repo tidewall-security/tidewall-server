@@ -10,6 +10,19 @@
   var STORAGE_KEY = 'tidewall_api_key';
   var _readyCallbacks = [];
   var _isReady = false;
+  var _credentialCallbacks = [];
+
+  // Anything holding data fetched under one credential needs to know when the
+  // credential changes, because a value read as one principal must not be shown
+  // as another. There was no way to observe that: setStoredKey and
+  // clearStoredKey are private and notified nobody, a storage event does not
+  // fire for same-tab writes, and re-entering the same key emits nothing at
+  // all. So every mutation routes through here.
+  function _notifyCredentialChange() {
+    _credentialCallbacks.forEach(function (cb) {
+      try { cb(); } catch (e) { /* one listener must not stop the others */ }
+    });
+  }
 
   function getStoredKey() {
     return localStorage.getItem(STORAGE_KEY);
@@ -17,11 +30,21 @@
 
   function setStoredKey(key) {
     localStorage.setItem(STORAGE_KEY, key);
+    // On any accepted entry, including re-entering the same key. Detecting
+    // equality would be a cheaper-looking rule that is wrong the moment two
+    // keys share a value.
+    _notifyCredentialChange();
   }
 
   function clearStoredKey() {
     localStorage.removeItem(STORAGE_KEY);
+    _notifyCredentialChange();
   }
+
+  // Another tab replacing or clearing the key.
+  window.addEventListener('storage', function (e) {
+    if (e.key === STORAGE_KEY) _notifyCredentialChange();
+  });
 
   function _notifyReady() {
     _isReady = true;
@@ -119,6 +142,17 @@
       if (_isReady) { cb(); }
       else { _readyCallbacks.push(cb); }
     },
+    /**
+     * Register a callback for when the stored credential changes.
+     *
+     * Fires on a key being written, cleared, or re-entered, on a storage event
+     * from another tab, and on any 401 -- which is the only way an expired or
+     * revoked key becomes observable, so there is an unavoidable delay between
+     * revocation and the next response.
+     */
+    onCredentialChange: function (cb) { _credentialCallbacks.push(cb); },
+    /** Called by api.js on any 401. */
+    notifyCredentialChange: _notifyCredentialChange,
   };
 
   // Auto-check on page load
