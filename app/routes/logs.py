@@ -5,9 +5,44 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
+from pydantic import BaseModel, ConfigDict
 from starlette.responses import Response
 
 from app.auth.dependencies import require_role
+
+
+class LogEvent(BaseModel):
+    """The only shape /v1/logs may return.
+
+    ``extra="forbid"`` is the point: building the dict field by field is a
+    convention, and a convention does not fail. A column added later and
+    accidentally included makes response validation raise instead of quietly
+    serving whatever it is.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int
+    request_id: str
+    timestamp: str
+    event_type: str
+    policy: str
+    policy_id: str
+    api_key_id: str | None = None
+    blocked: bool
+    transformed: bool
+    status: str | None = None
+    latency_ms: float
+    evidence: dict[str, Any]
+    evidence_schema_version: int
+    content_available: bool
+    app_id: str | None = None
+    user_id: str | None = None
+    llm_provider: str | None = None
+    model: str | None = None
+    source_ip: str | None = None
+    device_id: str | None = None
+
 
 router = APIRouter()
 
@@ -33,7 +68,7 @@ def _read_scope(request: Request) -> tuple[bool, str | None]:
     return True, bound
 
 
-@router.get("/v1/logs", dependencies=[Depends(require_role("viewer"))])
+@router.get("/v1/logs", response_model=list[LogEvent], dependencies=[Depends(require_role("viewer"))])
 async def get_logs(
     request: Request,
     limit: int = Query(default=50, ge=1, le=100),

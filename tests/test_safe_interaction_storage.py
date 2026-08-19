@@ -555,3 +555,119 @@ def test_filters_are_applied_before_the_limit(scoped_app):
     rows = client.get("/v1/logs?action=blocked&limit=5", headers={"Authorization": f"Bearer {keys['admin']}"}).json()
 
     assert any(r["request_id"] == "tw_old_blocked" for r in rows), "a match beyond the first page was filtered away"
+
+
+def test_alembic_head_matches_the_orm_schema(tmp_path):
+    """Two sources of truth that disagree are one source of surprise.
+
+    A fresh install uses create_all; an upgraded one uses the migrations. When
+    they differ, a constraint that holds in tests does not hold in production,
+    or the reverse.
+    """
+    from app.db.models import Base
+
+    migrated_path = tmp_path / "migrated.db"
+    _alembic(migrated_path, "upgrade", "head")
+    migrated = create_engine(f"sqlite:///{migrated_path}")
+    orm = create_engine(f"sqlite:///{tmp_path / 'orm.db'}")
+    Base.metadata.create_all(orm)
+
+    try:
+        im, io = inspect(migrated), inspect(orm)
+        differences: list[str] = []
+        for table in sorted(set(im.get_table_names()) | set(io.get_table_names())):
+            if table == "alembic_version":
+                continue
+            if table not in im.get_table_names() or table not in io.get_table_names():
+                differences.append(f"{table}: present in only one schema")
+                continue
+            cm = {c["name"]: c for c in im.get_columns(table)}
+            co = {c["name"]: c for c in io.get_columns(table)}
+            for name in sorted(set(cm) | set(co)):
+                if name not in cm or name not in co:
+                    differences.append(f"{table}.{name}: present in only one schema")
+                elif cm[name]["nullable"] != co[name]["nullable"]:
+                    differences.append(f"{table}.{name}: nullability differs")
+            ixm = {i["name"] for i in im.get_indexes(table)}
+            ixo = {i["name"] for i in io.get_indexes(table)}
+            for name in sorted(ixm ^ ixo):
+                differences.append(f"{table}: index {name} present in only one schema")
+    finally:
+        migrated.dispose()
+        orm.dispose()
+
+    assert not differences, "migrated and ORM schemas diverge:\n" + "\n".join(differences)
+
+
+def test_the_response_model_rejects_an_unexpected_field(scoped_app):
+    """Building the dict field by field is a convention, and a convention does
+    not fail. extra=forbid does."""
+    from app.routes.logs import LogEvent
+
+    with pytest.raises(Exception):
+        LogEvent(
+            id=1,
+            request_id="r",
+            timestamp="t",
+            event_type="input",
+            policy="p",
+            policy_id="policy-a",
+            blocked=False,
+            transformed=False,
+            latency_ms=1.0,
+            evidence={},
+            evidence_schema_version=1,
+            content_available=False,
+            input_messages=[{"content": CANARY}],  # the field that must not exist
+        )
+
+
+def test_exports_get_a_fixed_summary_built_from_codes():
+    """The summary was an f-string over the matched access-rule name — an
+    arbitrary control-plane value that crossed webhook, syslog, OCSF message
+    and AIDR Vendor.summary."""
+    from app.services.export_service import _fixed_summary
+
+    assert _fixed_summary("blocked", {"malicious_prompt": {"detected": True}}) == "blocked: malicious_prompt"
+    assert _fixed_summary("allowed", {}) == "allowed"
+    assert CANARY not in _fixed_summary(f"status-{CANARY}", {f"{CANARY}": {"detected": True}})
+
+
+def test_emit_normalises_every_textual_field():
+    """Normalising at one call site leaves the invariant one caller away."""
+    import asyncio
+
+    from app.services.export_service import ExportService
+
+    captured: list = []
+
+    class _Svc(ExportService):
+        def _get_matching_targets(self, status):  # type: ignore[override]
+            return [type("T", (), {"id": "t", "name": "t", "type": "webhook", "format": "raw",
+                                   "config": {"url": "https://x.test"}, "events": ["blocked"], "enabled": True})()]
+
+        def _build_event(self, format, **kwargs):  # type: ignore[override]
+            captured.append(kwargs)
+            return {}
+
+        async def _dispatch(self, target, event):  # type: ignore[override]
+            return None
+
+    svc = _Svc(session_factory=lambda: None)
+    try:
+        asyncio.run(
+            svc.emit(
+                status="blocked",
+                request_id="r",
+                summary=f"Blocked by access rule: {CANARY}",
+                policy_name=f"policy {CANARY}",
+                user_id=f"prompt {CANARY}",
+                source_ip=f"not-an-ip {CANARY}",
+                detectors={},
+            )
+        )
+    except Exception:
+        pass
+
+    assert captured, "emit did not reach the builder"
+    assert CANARY not in json.dumps(captured[0], default=str)
