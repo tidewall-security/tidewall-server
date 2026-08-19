@@ -382,6 +382,15 @@ class MatchCollector:
             # again rather than trust what was true on entry.
             if self._finalized:
                 raise EvidenceError("collector.finalized")
+
+            if staged.poisoned:
+                # A match failed validation or could not be attributed. Discard
+                # the whole batch silently — the caller is a detector mid-scan
+                # and bookkeeping is not its job, but a partial set must never
+                # be stored.
+                logger.debug("discarding poisoned capture batch for %s", detector)
+                return
+
             commit_failure: str | None = None
             for match in staged._staged:
                 # Re-validate rather than trust that add() saw every match.
@@ -523,6 +532,10 @@ class _DetectorCapture:
     _collector: MatchCollector = field(repr=False)
     _staged: list[ExactMatch] = field(default_factory=list, repr=False)
     _closed: bool = field(default=False, repr=False)
+    # Set when a match could not be validated. The batch is then discarded
+    # whole, rather than raising into the detector — optional audit capture
+    # must never change the security decision it is observing.
+    poisoned: bool = field(default=False, repr=False)
 
     def add(self, match: ExactMatch) -> None:
         # Continuing to accept matches after the block exits produced a
@@ -587,7 +600,10 @@ def report_match(
         return
     resolved = batch._collector.resolve_flattened(start, end)
     if resolved is None:
-        logger.debug("exact match for %s could not be attributed to one message; dropped", detector)
+        # Cannot be attributed to one message: drop the batch rather than
+        # record a fabricated origin.
+        batch.poisoned = True
+        logger.debug("exact match for %s could not be attributed to one message; discarding batch", detector)
         return
     source, local_start, local_end = resolved
     try:
@@ -603,6 +619,10 @@ def report_match(
             )
         )
     except EvidenceError:
-        # Re-raised so the surrounding capture discards this detector's whole
-        # batch. Swallowing it here is what made partial capture silent.
-        raise
+        # Poison rather than raise. Raising propagated out of the detector and
+        # the engine converted it to SCAN_FAILED, so turning capture on could
+        # skip a redaction that would otherwise have happened — audit changing
+        # enforcement, which is exactly backwards. Poisoning still discards the
+        # whole batch, so a partial set is never stored.
+        batch.poisoned = True
+        logger.debug("exact match for %s failed validation; discarding this detector's batch", detector)

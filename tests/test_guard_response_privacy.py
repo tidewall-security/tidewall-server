@@ -377,3 +377,67 @@ def test_a_match_spanning_the_join_boundary_is_dropped(client_and_key):
     # Wholly inside the second message.
     resolved = collector.resolve_flattened(4, 7)
     assert resolved is not None and resolved[0].index == 1
+
+
+def _post(client, key, messages):
+    return client.post(
+        "/v1/guard_chat_completions",
+        json={"guard_input": {"messages": messages}, "event_type": "input"},
+        headers={"Authorization": f"Bearer {key}"},
+    )
+
+
+def test_capture_does_not_change_the_security_decision(client_and_key):
+    """The governing rule.
+
+    Reporting a match used to raise into detector execution, and the engine
+    turned that into SCAN_FAILED — so enabling capture could skip a redaction
+    that would otherwise have happened. Optional audit must never alter what
+    the guard does.
+    """
+    from app.db.models import Policy
+
+    client, key = client_and_key
+    messages = [
+        {"role": "user", "content": f"first {CANARY} here"},
+        {"role": "assistant", "content": f"second {CANARY} there"},
+    ]
+
+    off = _post(client, key, messages).json()["result"]
+
+    session = client.app.state.session_factory()
+    try:
+        session.query(Policy).first().raw_content_enabled = True
+        session.commit()
+    finally:
+        session.close()
+    client.app.state.policy_service.invalidate_all_engines()
+
+    on = _post(client, key, messages).json()["result"]
+
+    assert on["blocked"] == off["blocked"]
+    assert on["transformed"] == off["transformed"]
+    assert on["guard_output"] == off["guard_output"], "capture changed the sanitised output"
+    assert on["detectors"] == off["detectors"], "capture changed the detector verdicts"
+
+
+@pytest.mark.parametrize("role", ["human/operator", "rôle", "x" * 200, "tool-call"])
+def test_an_unusual_role_is_accepted_whether_or_not_capture_is_on(client_and_key, role):
+    """Roles are caller data, not internal discriminators. Feeding one into the
+    identifier rule made capture-on reject requests capture-off accepts —
+    capture changing what the API accepts."""
+    from app.db.models import Policy
+
+    client, key = client_and_key
+
+    session = client.app.state.session_factory()
+    try:
+        session.query(Policy).first().raw_content_enabled = True
+        session.commit()
+    finally:
+        session.close()
+    client.app.state.policy_service.invalidate_all_engines()
+
+    resp = _post(client, key, [{"role": role, "content": "hello"}])
+
+    assert resp.status_code == 200, f"role {role!r} failed the request when capture was on"

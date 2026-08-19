@@ -142,7 +142,13 @@ _DETECTOR_REGISTRY: dict[str, tuple[str, str]] = {
 
 @contextmanager
 def _capture_scope(collector: Any, detector: str) -> Iterator[Any]:
-    """One exact-match batch per detector run, or nothing when capture is off."""
+    """One exact-match batch per detector run, or nothing when capture is off.
+
+    The batch is discarded unless the detector both returns and returns a
+    successful result. A typed FAILED return is a supported outcome, not an
+    exception, and it previously still committed a plausible batch while the
+    safe evidence recorded no finding for that detector.
+    """
     if collector is None:
         yield None
         return
@@ -407,6 +413,13 @@ class ScannerEngine:
                         det_result = detector.scan(current_text, vault=vault, **extra)
                     else:
                         det_result = detector.scan(current_text, **extra)
+
+                    # Inside the scope, before it commits. A typed FAILED
+                    # return is a supported outcome, not an exception, and
+                    # checking it after the batch had already committed left
+                    # exact values from a detector whose verdict is a failure.
+                    if batch is not None and det_result.status is DetectorStatus.FAILED:
+                        batch.poisoned = True
             except Exception as exc:
                 logger.error("Detector '%s' raised during scan: %s", det_name, describe(exc))
                 result.record_failure(det_name, FailureCode.SCAN_FAILED, detector.action)

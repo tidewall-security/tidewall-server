@@ -42,6 +42,25 @@ from app.utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_role(value: object) -> str | None:
+    """A role that provenance can record, or nothing.
+
+    Dropped rather than rejected: the role is a nice-to-have on an audit
+    record, and refusing the request because a caller used "human/operator"
+    would make enabling capture change the API contract.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    # ASCII, matching what SourceRef will accept. isalnum() passes Unicode
+    # letters, so a role like "rôle" cleared this check and was then rejected
+    # downstream — failing the request rather than dropping the role.
+    ok = all(("a" <= c <= "z") or ("A" <= c <= "Z") or ("0" <= c <= "9") or c in "_-." for c in value)
+    if len(value) > 64 or not ok:
+        return None
+    return value
+
+
 router = APIRouter()
 
 
@@ -249,7 +268,16 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             segment_text = str(message.get("content") or "")
             segments.append(
                 (
-                    SourceRef(kind="message", index=index, field="content", role=message.get("role") or None),
+                    SourceRef(
+                        kind="message",
+                        index=index,
+                        field="content",
+                        # Roles are caller data, not internal discriminators.
+                        # Feeding an extension role straight into the identifier
+                        # rule made capture-on reject requests capture-off
+                        # accepts — capture changing what the API accepts.
+                        role=_safe_role(message.get("role")),
+                    ),
                     segment_text,
                     cursor,
                 )

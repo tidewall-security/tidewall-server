@@ -750,11 +750,14 @@ def test_a_detector_that_fails_part_way_stores_nothing():
     collector = MatchCollector()
     collector.register_flattened([(MSG, "alice@example.com and more text here", 0)])
 
-    with pytest.raises(EvidenceError):
-        with collector.capture("pii") as batch:
-            report_match(batch, "pii", "EMAIL_ADDRESS", "alice@example.com", 0, 17)
-            # Stale: this value is not at these offsets.
-            report_match(batch, "pii", "US_SSN", "123-45-6789", 22, 33)
+    # No exception: reporting must not raise into detector execution. An
+    # earlier version did, and the engine turned it into SCAN_FAILED — so
+    # turning capture on could skip a redaction that would otherwise have
+    # happened. Audit must never change enforcement.
+    with collector.capture("pii") as batch:
+        report_match(batch, "pii", "EMAIL_ADDRESS", "alice@example.com", 0, 17)
+        report_match(batch, "pii", "US_SSN", "123-45-6789", 22, 33)  # stale
+        assert batch.poisoned is True
 
     assert collector.finalize() == [], "a partial detector batch survived"
 
