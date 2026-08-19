@@ -118,6 +118,14 @@ def _build(monkeypatch):
     return app, Session, path, body, {"Authorization": f"Bearer {raw}"}
 
 
+def _api_key_id(Session):
+    session = Session()
+    try:
+        return session.query(APIKey).one().id
+    finally:
+        session.close()
+
+
 def _attempt(Session):
     session = Session()
     try:
@@ -503,7 +511,9 @@ def test_the_handler_re_raises_a_deferred_cancellation_instead_of_returning_202(
         request.state.role = "admin"
         request.state.grants = frozenset({CONTENT_EXPORT})
         request.state.policy_id = "policy-a"
-        request.state.api_key_id = None
+        # A real one: the route requires it, because the idempotency
+        # constraint it feeds is not unique over NULL.
+        request.state.api_key_id = _api_key_id(Session)
 
         handler = asyncio.create_task(route._authorize_and_export(request))
         await asyncio.to_thread(entered.wait, 10)

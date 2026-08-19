@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+from starlette.requests import Request
 
 from app.auth.grants import CONTENT_EXPORT, CONTENT_READ, MATCHES_READ
 from app.auth.key_utils import generate_key, hash_key, key_prefix
@@ -979,3 +980,58 @@ def test_cleanup_is_bounded(env, monkeypatch):
     # close from one that merely finished eventually -- the hang is 30s and an
     # unbounded close would still return 202, just much later.
     assert elapsed < 5, f"cleanup was not bounded: {elapsed:.1f}s"
+
+
+@pytest.mark.parametrize("api_key_id", [None, ""])
+def test_a_credential_without_an_api_key_id_cannot_export(env, api_key_id):
+    """The uniqueness the idempotency contract rests on.
+
+    SQLite does not make (NULL, digest) unique, so an attempt row with a null
+    api_key_id constrains nothing: one key could reserve twice and disclose
+    twice. No current middleware branch grants admin without an APIKey row --
+    its primary key is NOT NULL -- so this is defence in depth. The route
+    relies on the property, so the route checks it, and this drives the handler
+    directly because no supported credential can produce the state.
+    """
+    import asyncio
+
+    import app.routes.content_export as route
+
+    client, Session, port = env
+    interaction_id = _interaction(Session)
+    target_id = _target(Session, port)
+
+    payload = json.dumps({"view": "full", "target_id": target_id}).encode()
+    path = f"/v1/logs/{interaction_id}/content-export"
+
+    async def _receive():
+        return {"type": "http.request", "body": payload, "more_body": False}
+
+    async def _go():
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.1"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode(),
+            "query_string": b"",
+            "root_path": "",
+            "headers": [(b"host", b"test"), (b"content-type", b"application/json")],
+            "client": ("127.0.0.1", 51234),
+            "server": ("test", 80),
+            "app": client.app,
+            "path_params": {"interaction_id": str(interaction_id)},
+        }
+        request = Request(scope, _receive)
+        # Everything else that authorises this request still holds.
+        request.state.role = "admin"
+        request.state.grants = frozenset({CONTENT_EXPORT})
+        request.state.policy_id = "policy-a"
+        request.state.api_key_id = api_key_id
+        return await route._authorize_and_export(request)
+
+    resp = asyncio.run(_go())
+    assert resp.status_code == 403, bytes(resp.body)
+    assert not _Receiver.received, "content was exported without a credential id to bind it to"

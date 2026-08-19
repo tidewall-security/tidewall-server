@@ -217,9 +217,18 @@ async def _authorize_and_export(request: Request) -> Response:
 
     if role is None:
         return _error(401, "Not authenticated")
-    if role != "admin" or not policy_id or CONTENT_EXPORT not in grants:
+    if role != "admin" or not policy_id or not api_key_id or CONTENT_EXPORT not in grants:
         # Reading one record in the UI and shipping it to an external system are
         # different acts, and this one is admin-only.
+        #
+        # `api_key_id` is checked here, not because a credential can currently
+        # reach this point without one -- the only middleware branch that grants
+        # admin loads an APIKey whose primary key is NOT NULL -- but because
+        # everything downstream assumes it. SQLite does not make (NULL, digest)
+        # unique, so a null id would silently turn the idempotency constraint
+        # into no constraint at all: two attempts with one key, each disclosing.
+        # That assumption should be enforced where it is relied on rather than
+        # inherited from another module's behaviour.
         return _error(403, "Content export requires an admin credential with an explicit grant")
 
     session_factory = request.app.state.session_factory
