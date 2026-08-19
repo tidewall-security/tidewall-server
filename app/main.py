@@ -361,6 +361,7 @@ def create_app() -> FastAPI:
         activity,
         content,
         content_export,
+        content_export_admin,
         dashboard,
         devices,
         guard,
@@ -378,6 +379,7 @@ def create_app() -> FastAPI:
     app.include_router(logs.router)
     app.include_router(content.router)
     app.include_router(content_export.router)
+    app.include_router(content_export_admin.router)
     app.include_router(me.router)
     app.include_router(dashboard.router)
     app.include_router(policies.router)
