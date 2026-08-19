@@ -133,6 +133,7 @@ def test_the_retention_job_purges_expired_content():
     session.add(
         InteractionContent(
             interaction_id=event.id,
+            policy_id=event.policy_id,
             input_json=[{"content": "secret"}],
             byte_size=10,
             captured_at=datetime.now(UTC) - timedelta(days=2),

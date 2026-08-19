@@ -578,3 +578,128 @@ def test_an_empty_tools_list_is_still_recorded_as_a_wrapper():
 
     assert isinstance(prepared.input_json, dict)
     assert prepared.input_json["tools"] == []
+
+
+# ---------------------------------------------------------------------------
+# Step 6: the duplicated policy, and the boundary it made load-bearing
+# ---------------------------------------------------------------------------
+
+
+def test_capture_writes_the_parents_policy(db):
+    """A NOT NULL column with no writer would have failed the first capture
+    after upgrade. The value is the parent's, taken after it has flushed."""
+    policy_id = _policy(db, enabled=True)
+    InteractionLog(db).log_event(
+        request_id="tw_00000000000000a1",
+        timestamp="2026-08-19T00:00:00Z",
+        event_type="input",
+        policy="p",
+        policy_id=policy_id,
+        blocked=False,
+        transformed=False,
+        latency_ms=1.0,
+        evidence={},
+        content={"input": [{"content": CANARY}], "output": None, "matches": None},
+        capture_enabled=True,
+    )
+    session = db()
+    try:
+        event = session.query(Interaction).one()
+        stored = session.query(InteractionContent).one()
+        assert stored.policy_id == policy_id
+        assert stored.policy_id == event.policy_id, "the three-way equality starts here"
+    finally:
+        session.close()
+
+
+def test_a_core_event_failure_is_not_reported_as_a_capture_failure(db, monkeypatch):
+    """The flush that persists the *event* used to sit inside the capture-only
+    try, so a core failure was caught there, reported to the operator as
+    "content persistence failed", and only then did the poisoned transaction
+    make the commit raise. A core failure misreported as a capture failure --
+    and only when capture was on.
+    """
+    import logging
+
+    policy_id = _policy(db, enabled=True)
+    messages: list[str] = []
+    real_error = logging.Logger.error
+
+    def _record(self, msg, *args, **kwargs):
+        # Rendered, not the format string: report() passes the message and the
+        # exception type as args, so recording str(msg) alone captures "%s: %s"
+        # and the assertion below can never fail.
+        try:
+            messages.append(str(msg) % args if args else str(msg))
+        except Exception:
+            messages.append(str(msg))
+        return real_error(self, msg, *args, **kwargs)
+
+    def _write(request_id: str) -> None:
+        InteractionLog(db).log_event(
+            request_id=request_id,
+            timestamp="2026-08-19T00:00:00Z",
+            event_type="input",
+            policy="p",
+            policy_id=policy_id,
+            blocked=False,
+            transformed=False,
+            latency_ms=1.0,
+            evidence={},
+            content={"input": [{"content": CANARY}], "output": None, "matches": None},
+            capture_enabled=True,
+        )
+
+    _write("tw_00000000000000a2")
+    messages.clear()
+    monkeypatch.setattr(logging.Logger, "error", _record)
+
+    # The same request_id again: the *parent* insert violates its unique
+    # constraint, so this is a core event failure, not a content one.
+    with pytest.raises(Exception):
+        _write("tw_00000000000000a2")
+
+    assert not any(
+        "content" in m for m in messages
+    ), f"a core event failure was reported as a content failure: {messages}"
+
+
+def test_the_content_row_and_the_availability_flag_are_one_unit(db, monkeypatch):
+    """Set and flushed inside the savepoint. If the flag were written after the
+    savepoint released, a failure there would leave content present while the
+    event says it is not."""
+    policy_id = _policy(db, enabled=True)
+
+    def _explode(session, *, interaction, prepared):
+        session.add(
+            InteractionContent(
+                interaction_id=interaction.id,
+                policy_id=None,  # violates NOT NULL, inside the savepoint
+                input_json=prepared.input_json,
+                byte_size=prepared.byte_size,
+            )
+        )
+
+    monkeypatch.setattr("app.services.content_capture.capture_content", _explode)
+
+    InteractionLog(db).log_event(
+        request_id="tw_00000000000000a3",
+        timestamp="2026-08-19T00:00:00Z",
+        event_type="input",
+        policy="p",
+        policy_id=policy_id,
+        blocked=False,
+        transformed=False,
+        latency_ms=1.0,
+        evidence={},
+        content={"input": [{"content": CANARY}], "output": None, "matches": None},
+        capture_enabled=True,
+    )
+
+    session = db()
+    try:
+        event = session.query(Interaction).one()
+        assert event.content_available is False, "the flag survived a rolled-back content row"
+        assert session.query(InteractionContent).count() == 0
+    finally:
+        session.close()

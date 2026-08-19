@@ -300,16 +300,37 @@ class InteractionLog:
                     prepared = None
 
                 if prepared is not None:
+                    # Outside the capture-only handler, deliberately. This
+                    # flush persists the *event*, and it used to sit inside the
+                    # try below — so an invalid policy_id, a constraint, any
+                    # core failure, was caught and reported to the operator as
+                    # "content persistence failed" before the poisoned
+                    # transaction made the outer commit raise anyway. A core
+                    # failure misreported as a capture failure, and only when
+                    # capture was on.
+                    #
+                    # It also has to happen here for begin_nested(), which
+                    # flushes pending state before creating the savepoint: the
+                    # session must be clean at that point or unrelated
+                    # mutations are swept into the savepoint.
+                    session.flush()
+
                     # A savepoint, so a failure in the content INSERT itself —
                     # a constraint, a driver disagreement, anything — rolls back
                     # only the content. Pre-serialising caught unsupported
                     # Python values; it did nothing for a failure at
                     # persistence, which still destroyed the audit event.
+                    #
+                    # The row and the flag are one unit: content_available is
+                    # set and flushed *inside* the savepoint, so they cannot
+                    # disagree. Setting it after the savepoint released would
+                    # let a failure there leave content present while the event
+                    # says it is not.
                     try:
-                        session.flush()
                         with session.begin_nested():
                             capture_content(session, interaction=row, prepared=prepared)
-                        row.content_available = True
+                            row.content_available = True
+                            session.flush()
                     except Exception as exc:
                         report(
                             logger, "error", "content persistence failed for request; storing the event without it", exc

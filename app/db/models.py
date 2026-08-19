@@ -243,6 +243,12 @@ class InteractionContent(Base):
     interaction_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("interactions.id", ondelete="CASCADE"), nullable=False, unique=True
     )
+    # The parent's policy, duplicated. The read path requires the credential's
+    # policy, the interaction's policy and this column to be equal; a join would
+    # prove the first two and assume the third. Detected on read and excluded in
+    # SQL when it disagrees -- not prevented, because SQLite cannot express a
+    # cross-table equality without a trigger.
+    policy_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     # The prompt and the reply, and the exact matched values from the step 1
     # channel. Written only when the policy explicitly enables capture.
     input_json: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
@@ -269,9 +275,27 @@ class ContentAccessAudit(Base):
     # Not a foreign key: the audit must outlive the row it describes, or
     # deleting the content would erase the record of who read it.
     api_key_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # matches | full. Named tier from step 4; it carries exactly what a "view"
+    # column would, so a synonym would only create a dual-write obligation.
     tier: Mapped[str] = mapped_column(String, nullable=False)
     policy_id: Mapped[str | None] = mapped_column(String, nullable=True)
     accessed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now, index=True)
+    # Nullable so any row written before this step survives.
+    actor_role: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The authorization rule exercised -- the least-privilege grant sufficient
+    # for the view, not the strongest one the caller held.
+    grant_used: Mapped[str | None] = mapped_column(String, nullable=True)
+    outcome: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Why a denied_scope was denied. Internal: the caller sees one uniform 404
+    # for all four causes, and an operator investigating needs to know which.
+    reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    # This access attempt's own correlation id, not the target interaction's
+    # request_id -- that is already derivable from interaction_id.
+    attempt_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # The ASGI peer, never X-Forwarded-For: there is no trusted-proxy
+    # configuration here, so a header would let a caller choose their own
+    # audit attribution.
+    source_ip: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class Vault(Base):

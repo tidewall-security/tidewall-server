@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
+from app.auth.dependencies import KNOWN_ROLES
+from app.auth.grants import GrantError, validate_grants
 from app.auth.key_utils import generate_key, hash_key, key_prefix
 from app.db.models import APIKey
 
@@ -26,11 +28,21 @@ class KeyService:
         policy_id: str | None = None,
         collector_type: str | None = None,
         expires_at: datetime | None = None,
+        grants: list[str] | None = None,
     ) -> tuple[str, APIKey]:
         """Create a new API key. Returns (raw_key, api_key_record).
 
         The raw key is returned ONCE and never stored — only its hash is persisted.
         """
+        # The friendly half of grant enforcement. The fail-closed half is
+        # authentication, which revalidates every request -- necessary because a
+        # row can also be written by a test, a script or a hand edit, so this is
+        # service-entry validation rather than a claim that every path is
+        # covered.
+        if role not in KNOWN_ROLES:
+            raise GrantError(f"unknown role {role!r}")
+        validated = validate_grants(role, policy_id, grants)
+
         raw_key = generate_key()
         api_key = APIKey(
             name=name,
@@ -40,6 +52,7 @@ class KeyService:
             policy_id=policy_id,
             collector_type=collector_type,
             expires_at=expires_at,
+            grants=sorted(validated) if validated else None,
         )
         # A viewer with no policy sees nothing, because a null binding is
         # never widened to a wildcard on the read side. Refusing the key is the
