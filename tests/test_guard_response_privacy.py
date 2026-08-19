@@ -249,3 +249,65 @@ def test_the_vocabularies_come_from_the_enums_not_a_restated_list():
     for code in FailureCode:
         projected = project_detectors({"code": {"detected": False, "failure_code": code.value}})
         assert projected["code"]["failure_code"] == code.value, f"{code.value} would be dropped"
+
+
+def test_exact_matches_are_captured_when_capture_is_on(client_and_key):
+    """The middle role tier needs matched values, and they must be provenance —
+    validated against the text the detector was given — not values copied out
+    of a public payload."""
+    from app.db.models import InteractionContent, Policy
+
+    client, key = client_and_key
+    factory = client.app.state.session_factory
+
+    session = factory()
+    try:
+        policy = session.query(Policy).first()
+        policy.raw_content_enabled = True
+        session.commit()
+    finally:
+        session.close()
+
+    client.app.state.policy_service.invalidate_all_engines()
+
+    resp = client.post(
+        "/v1/guard_chat_completions",
+        json={
+            "guard_input": {"messages": [{"role": "user", "content": f"token {CANARY} here"}]},
+            "event_type": "input",
+        },
+        headers={"Authorization": f"Bearer {key}"},
+    )
+    assert resp.status_code == 200
+
+    session = factory()
+    try:
+        content = session.query(InteractionContent).one()
+    finally:
+        session.close()
+
+    assert content.matches_json is not None, "no exact matches were captured"
+    stored = json.dumps(content.matches_json)
+    assert CANARY in stored, "the matched value was not recorded"
+    assert "start" not in stored and "end" not in stored, "offsets reached storage"
+
+
+def test_no_matches_are_captured_when_capture_is_off(client_and_key):
+    from app.db.models import InteractionContent
+
+    client, key = client_and_key
+
+    client.post(
+        "/v1/guard_chat_completions",
+        json={
+            "guard_input": {"messages": [{"role": "user", "content": f"token {CANARY} here"}]},
+            "event_type": "input",
+        },
+        headers={"Authorization": f"Bearer {key}"},
+    )
+
+    session = client.app.state.session_factory()
+    try:
+        assert session.query(InteractionContent).count() == 0
+    finally:
+        session.close()

@@ -127,6 +127,8 @@ class PolicyService:
         # indistinguishable from applied-and-found-nothing.
         validate_detectors(detectors or {})
         retention = _validated_retention(raw_content_retention_days)
+        if not isinstance(raw_content_enabled, bool):
+            raise ValueError("raw_content_enabled must be a boolean")
 
         session, should_close = self._get_session()
         try:

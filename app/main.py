@@ -167,8 +167,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # In a finally: an exception thrown into the lifespan context would
         # otherwise skip both, leaving the scheduler running against a disposed
         # engine.
-        await scheduler.stop()
-        engine.dispose()
+        drained = await scheduler.stop()
+        if drained:
+            engine.dispose()
+        else:
+            # A worker still owns a session. Disposing now would pull the
+            # connection out from under it; leaking the engine on a shutdown
+            # path is the lesser fault.
+            logging.getLogger(__name__).error("not disposing the database engine: background work is still running")
 
 
 def create_app() -> FastAPI:

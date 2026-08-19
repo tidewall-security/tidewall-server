@@ -61,6 +61,7 @@ are exactly what the product exists to protect.
 from __future__ import annotations
 
 import json
+import logging
 import unicodedata
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -84,6 +85,8 @@ MATCHES_SCHEMA_VERSION = 1
 SOURCE_KINDS = ("message", "tool")
 SOURCE_FIELDS = ("content", "name", "description", "parameters")
 _MAX_IDENTIFIER_LENGTH = 64
+
+logger = logging.getLogger(__name__)
 
 SourceKind = Literal["message", "tool"]
 SourceField = Literal["content", "name", "description", "parameters"]
@@ -528,3 +531,46 @@ class _DetectorCapture:
             raise EvidenceError(failure)
         original = None
         self._staged.append(match)
+
+
+def report_match(
+    collector: MatchCollector | None,
+    detector: str,
+    match_type: str,
+    value: str,
+    start: int,
+    end: int,
+    *,
+    source: SourceRef | None = None,
+    rule_id: str | None = None,
+) -> None:
+    """Record one match, if anyone is collecting.
+
+    A helper rather than a method so a detector needs no knowledge of the
+    collector's lifecycle: it either has one or it does not, and a scan with
+    capture off pays nothing.
+
+    Failures here are swallowed deliberately. A detector's job is detection —
+    if provenance cannot be established for one value, the audit record loses
+    that value, and the alternative is failing a security scan because a
+    bookkeeping check did not like an offset. The capture fails closed, which
+    is the direction that matters.
+    """
+    if collector is None:
+        return
+    try:
+        with collector.capture(detector) as batch:
+            batch.add(
+                ExactMatch(
+                    detector=detector,
+                    match_type=match_type,
+                    source=source or SourceRef(kind="message", index=0, field="content"),
+                    value=value,
+                    start=start,
+                    end=end,
+                    rule_id=rule_id,
+                )
+            )
+    except EvidenceError:
+        # No content in the log line: this runs where an operator can see it.
+        logger.debug("exact match for %s failed validation and was not recorded", detector)

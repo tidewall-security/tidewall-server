@@ -360,8 +360,15 @@ class ScannerEngine:
         vault: Any,
         tools: list[dict] | None = None,
         messages: list[dict] | None = None,
+        matches: Any = None,
     ) -> ScanResult:
-        """Run all enabled detectors on *text* and return aggregated result."""
+        """Run all enabled detectors on *text* and return aggregated result.
+
+        ``matches`` is an optional exact-match collector. When capture is on the
+        guard passes one, detectors that hold an original value report into it,
+        and every match is validated against the text they were given — so the
+        record is provenance rather than a value copied out of a payload.
+        """
         result = ScanResult()
         self._seed_construction_failures(result, event_type=event_type)
         current_text = text
@@ -371,14 +378,18 @@ class ScannerEngine:
                 continue
 
             try:
+                # The collector is passed to detectors that can report exact
+                # matches. It is optional so a detector that does not is
+                # unaffected, and so a scan without capture pays nothing.
+                extra: dict[str, Any] = {"matches": matches} if matches is not None else {}
                 if det_name == "mcp_validation" and tools:
-                    det_result = detector.scan(current_text, tools=tools)
+                    det_result = detector.scan(current_text, tools=tools, **extra)
                 elif det_name == "malicious_prompt" and messages:
-                    det_result = detector.scan(current_text, messages=messages)
+                    det_result = detector.scan(current_text, messages=messages, **extra)
                 elif det_name == "confidential_and_pii_entity" and vault is not None:
-                    det_result = detector.scan(current_text, vault=vault)
+                    det_result = detector.scan(current_text, vault=vault, **extra)
                 else:
-                    det_result = detector.scan(current_text)
+                    det_result = detector.scan(current_text, **extra)
             except Exception as exc:
                 logger.error("Detector '%s' raised during scan: %s", det_name, describe(exc))
                 result.record_failure(det_name, FailureCode.SCAN_FAILED, detector.action)

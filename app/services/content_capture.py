@@ -37,16 +37,6 @@ from app.db.models import Interaction, InteractionContent
 logger = logging.getLogger(__name__)
 
 
-def _byte_size(*payloads: Any) -> int:
-    """What this row costs, so unbounded growth is at least measurable."""
-    total = 0
-    for payload in payloads:
-        if payload is None:
-            continue
-        total += len(json.dumps(payload, default=str, ensure_ascii=False).encode("utf-8"))
-    return total
-
-
 @dataclass(frozen=True)
 class PreparedContent:
     """Content that has already been serialised successfully.
@@ -83,13 +73,17 @@ def build_content(
     # stored shape does not depend on whether any happened to be present.
     payload_in: Any = {"messages": input_messages, "tools": tools} if tools is not None else input_messages
 
-    # The same strict serializer persistence will use — no default=str — so
-    # accounting and storage cannot disagree about what is representable.
-    encoded = json.dumps(
-        {"input": payload_in, "output": output_messages, "matches": matches},
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
+    # Measured per column, exactly as each is stored. The previous version
+    # measured one synthetic wrapper with compact separators, which is not what
+    # SQLAlchemy writes into three separate JSON columns — so the gauge counted
+    # keys and punctuation that do not exist and missed the ones that do.
+    #
+    # json.dumps with default arguments is SQLAlchemy's default JSON
+    # serializer, and it is strict: an unsupported value raises here, before
+    # the event commits, rather than at persistence.
+    encoded = b"".join(
+        json.dumps(value).encode("utf-8") for value in (payload_in, output_messages, matches) if value is not None
+    )
 
     expires_at = datetime.now(UTC) + timedelta(days=retention_days) if retention_days else None
     return PreparedContent(

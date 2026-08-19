@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.services.audit_evidence import report_match as _report_match
 from app.services.redactor import Redactor
 from app.services.safe_logging import describe
 from app.vault import TidewallVault
@@ -116,6 +117,8 @@ class PIIDetector(BaseDetector):
                 placeholder = f"[REDACTED_{entity_type}_{fallback_counts[entity_type]}]"
 
             spans.append((r.start, r.end, placeholder, entity_type))
+
+            _report_match(kwargs.get("matches"), self.name, entity_type, original, r.start, r.end)
 
             rule = self._rules.get(entity_type, {"action": "replacement"})
             redaction = self._redactor.redact(placeholder, entity_type, rule)

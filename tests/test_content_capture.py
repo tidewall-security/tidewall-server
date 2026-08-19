@@ -484,3 +484,98 @@ def test_the_seed_rejects_an_unenforceable_retention(tmp_path):
     finally:
         session.close()
         engine.dispose()
+
+
+def test_a_persistence_failure_also_keeps_the_audit_event(db, monkeypatch):
+    """Pre-serialising caught unsupported Python values and did nothing for a
+    failure at persistence, which still destroyed the audit event."""
+    from app.services import content_capture
+
+    policy_id = _policy(db, enabled=True)
+
+    def _explode(*_args, **_kwargs):
+        raise RuntimeError("constraint violation at insert")
+
+    monkeypatch.setattr("app.services.content_capture.capture_content", _explode)
+
+    InteractionLog(db).log_event(
+        request_id="tw_000000000000000e",
+        timestamp="2026-08-19T00:00:00Z",
+        event_type="input",
+        policy="p",
+        policy_id=policy_id,
+        blocked=False,
+        transformed=False,
+        latency_ms=1.0,
+        evidence={},
+        content={"input": [{"content": CANARY}], "output": None, "matches": None},
+        capture_enabled=True,
+    )
+
+    session = db()
+    try:
+        event = session.query(Interaction).one()
+        assert event.content_available is False
+        assert session.query(InteractionContent).count() == 0
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("value", ["false", "true", 0, 1, "no"])
+def test_the_seed_rejects_a_non_boolean_capture_flag(tmp_path, value):
+    """YAML raw_content_enabled: "false" is a non-empty string, so bool() made
+    it True — turning prompt capture ON from configuration that reads as off."""
+    import yaml
+    from sqlalchemy import create_engine as _ce
+    from sqlalchemy.orm import sessionmaker as _sm
+
+    from app.db.seed import seed_from_yaml
+
+    path = tmp_path / "policy.yaml"
+    path.write_text(yaml.dump({"name": "p", "raw_content_enabled": value, "detectors": {}}))
+
+    engine = _ce(f"sqlite:///{tmp_path / f'flag{hash(str(value))}.db'}")
+    Base.metadata.create_all(engine)
+    session = _sm(bind=engine)()
+    try:
+        with pytest.raises(ValueError, match="must be true or false"):
+            seed_from_yaml(session, str(path))
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_byte_size_is_the_bytes_actually_stored():
+    """The previous version measured one synthetic wrapper with compact
+    separators, which is not what goes into three separate JSON columns."""
+    import json as _json
+
+    from app.services.content_capture import build_content
+
+    prepared = build_content(
+        input_messages=[{"content": "café"}],
+        output_messages=[{"content": "reply"}],
+        matches={"pii": 1},
+        tools=[],
+        retention_days=None,
+    )
+
+    expected = sum(
+        len(_json.dumps(v).encode("utf-8"))
+        for v in (prepared.input_json, prepared.output_json, prepared.matches_json)
+        if v is not None
+    )
+    assert prepared.byte_size == expected
+
+
+def test_an_empty_tools_list_is_still_recorded_as_a_wrapper():
+    """The truthiness branch dropped an explicitly empty tools list, so the
+    stored shape depended on whether any happened to be present."""
+    from app.services.content_capture import build_content
+
+    prepared = build_content(
+        input_messages=[{"content": "x"}], output_messages=None, matches=None, tools=[], retention_days=None
+    )
+
+    assert isinstance(prepared.input_json, dict)
+    assert prepared.input_json["tools"] == []

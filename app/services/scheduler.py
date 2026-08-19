@@ -34,7 +34,9 @@ logger = logging.getLogger(__name__)
 # a promise about what gets disclosed — enforced on read — so the cadence here
 # only governs how promptly the disk is reclaimed.
 DEFAULT_INTERVAL_SECONDS = 300.0
-_MAX_CONCURRENT_WORKERS = 8
+# Concurrency is whatever asyncio's default executor allows. A semaphore was
+# declared here and never acquired, which is a bound that exists only in the
+# reader's head — worse than no bound, because it reads as enforced.
 
 
 @dataclass
@@ -54,7 +56,6 @@ class Scheduler:
         # awaiting asyncio.to_thread detaches the worker rather than stopping
         # it, so a timeout that only cancels lets shutdown dispose the database
         # engine underneath a live session. This tracks the workers themselves.
-        self._workers = threading.BoundedSemaphore(value=_MAX_CONCURRENT_WORKERS)
         self._worker_count = 0
         self._worker_lock = threading.Lock()
         self._workers_idle = threading.Event()
@@ -114,7 +115,7 @@ class Scheduler:
             except TimeoutError:
                 continue
 
-    async def stop(self, *, timeout_seconds: float = 30.0, worker_drain_seconds: float = 30.0) -> None:
+    async def stop(self, *, timeout_seconds: float = 30.0, worker_drain_seconds: float = 30.0) -> bool:
         """Signal the loops and wait for any in-flight run to finish.
 
         Deliberately does not cancel first. A retention run is awaiting
@@ -130,7 +131,7 @@ class Scheduler:
         self._stopping.set()
         if not self._tasks:
             logger.info("Scheduler stopped")
-            return
+            return True
         done, pending = await asyncio.wait(self._tasks, timeout=timeout_seconds)
         for task in pending:
             logger.warning("scheduled job did not finish within %.0fs; cancelling", timeout_seconds)
@@ -150,12 +151,17 @@ class Scheduler:
             logger.info("waiting for %d background worker(s) to finish", self._worker_count)
             await asyncio.to_thread(self._workers_idle.wait, worker_drain_seconds)
             if not self._workers_idle.is_set():
-                # Said out loud rather than silently disposing under live work.
+                # Reported, not just logged. Saying "disposal may race them" and
+                # returning anyway left the caller to dispose regardless, which
+                # is the outcome this is meant to prevent — the caller needs to
+                # be able to decide.
                 logger.error(
-                    "background worker(s) still running after %.0fs; database disposal may race them",
+                    "background worker(s) still running after %.0fs; not safe to dispose the engine",
                     worker_drain_seconds,
                 )
+                return False
         logger.info("Scheduler stopped")
+        return True
 
 
 def retention_job(

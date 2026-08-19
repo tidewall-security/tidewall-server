@@ -230,7 +230,32 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     # Detectors use synchronous ML inference (torch, ONNX) so we offload
     # the entire scan to a thread to keep the async event loop responsive.
     t0 = time.monotonic()
-    scan_result = await asyncio.to_thread(engine.scan, all_text, event_type, vault_id, vault, tools, messages)
+    # A collector only when capture is on. Detectors that hold an original
+    # value report into it, and each match is validated against the text they
+    # were given — provenance rather than a value copied out of a payload.
+    capture_enabled = bool(getattr(policy, "raw_content_enabled", False))
+    match_collector = None
+    if capture_enabled:
+        from app.services.audit_evidence import MatchCollector, SourceRef
+
+        match_collector = MatchCollector()
+        match_collector.register_source(SourceRef(kind="message", index=0, field="content"), all_text)
+
+    scan_result = await asyncio.to_thread(
+        engine.scan, all_text, event_type, vault_id, vault, tools, messages, match_collector
+    )
+
+    captured_matches = None
+    if match_collector is not None:
+        try:
+            groups = match_collector.finalize()
+            captured_matches = {
+                "schema_version": 1,
+                "matches": [g.as_storable() for g in groups],
+            }
+        except Exception as exc:
+            # Capture failing must not fail the scan that already succeeded.
+            logger.warning("exact match capture failed: %s", describe(exc))
     latency_ms = (time.monotonic() - t0) * 1000
 
     # If any redacting detector mutated text, we need to re-scan each
@@ -433,10 +458,9 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             "tools": tools,
             # Exact matches await the detector wiring: the typed channel from
             # step 1 exists but no detector reports through it yet, so this is
-            # null rather than pretending otherwise.
-            "matches": None,
+            "matches": captured_matches,
         },
-        capture_enabled=bool(getattr(policy, "raw_content_enabled", False)),
+        capture_enabled=capture_enabled,
         retention_days=getattr(policy, "raw_content_retention_days", None),
         app_id=body.app_id,
         user_id=body.user_id,

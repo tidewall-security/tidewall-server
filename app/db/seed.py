@@ -15,6 +15,18 @@ from app.services.policy_validation import validate_detectors
 logger = logging.getLogger(__name__)
 
 
+def _validated_seed_flag(value: object) -> bool:
+    """A real boolean, not a truthy value.
+
+    YAML `raw_content_enabled: "false"` is a non-empty string, so bool() made
+    it True — turning prompt capture ON from configuration that reads as off.
+    A privacy boundary must not invert on a quoting mistake.
+    """
+    if not isinstance(value, bool):
+        raise ValueError("raw_content_enabled must be true or false, not a string or number")
+    return value
+
+
 def _validated_seed_retention(value: object) -> int | None:
     """Retention from YAML, or None for no expiry.
 
@@ -65,7 +77,7 @@ def seed_from_yaml(session: Session, yaml_path: str | Path) -> None:
         # Read here too, or an exported enabled policy used as the first-boot
         # configuration silently seeds capture off and loses its retention
         # window — a round trip that drops a security setting.
-        raw_content_enabled=bool(raw.get("raw_content_enabled", False)),
+        raw_content_enabled=_validated_seed_flag(raw.get("raw_content_enabled", False)),
         raw_content_retention_days=_validated_seed_retention(raw.get("raw_content_retention_days")),
         is_default=True,
     )

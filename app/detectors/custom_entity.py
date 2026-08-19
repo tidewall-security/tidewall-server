@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.services.audit_evidence import report_match as _report_match
 from app.services.safe_regex import MAX_MATCHES_PER_SCAN, MAX_PATTERNS, UnsafePatternError, compile_pattern
 
 from .base import BaseDetector, DetectorResult, FailureCode
@@ -114,8 +115,10 @@ class CustomEntityDetector(BaseDetector):
         # Build entities (left-to-right) and sanitize text (right-to-left so
         # earlier offsets stay valid as we splice). Note: entity ``start_pos``
         # records the position in the ORIGINAL ``text``, not in ``sanitized``.
+        collector = kwargs.get("matches")
         entities: list[dict[str, Any]] = []
         for n, (start, _end, value) in enumerate(kept, start=1):
+            _report_match(collector, self.name, "CUSTOM", value, start, start + len(value))
             placeholder = f"[REDACTED_CUSTOM_{n}]"
             entities.append(
                 {

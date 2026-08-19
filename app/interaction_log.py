@@ -298,9 +298,22 @@ class InteractionLog:
                     prepared = None
 
                 if prepared is not None:
-                    session.flush()
-                    capture_content(session, interaction=row, prepared=prepared)
-                    row.content_available = True
+                    # A savepoint, so a failure in the content INSERT itself —
+                    # a constraint, a driver disagreement, anything — rolls back
+                    # only the content. Pre-serialising caught unsupported
+                    # Python values; it did nothing for a failure at
+                    # persistence, which still destroyed the audit event.
+                    try:
+                        session.flush()
+                        with session.begin_nested():
+                            capture_content(session, interaction=row, prepared=prepared)
+                        row.content_available = True
+                    except Exception as exc:
+                        logger.error(
+                            "content persistence failed for request; storing the event without it: %s",
+                            describe(exc),
+                        )
+                        row.content_available = False
 
             session.commit()
 
