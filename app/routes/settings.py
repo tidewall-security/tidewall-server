@@ -262,7 +262,10 @@ async def update_export_target(target_id: str, body: UpdateExportTargetRequest, 
             target.enabled = body.enabled
         if body.allow_content_export is not None:
             target.allow_content_export = body.allow_content_export
-        if body.content_export_policy_id is not None:
+        # Field presence, not value: omitted means unchanged, an explicit null
+        # means clear. Guarding on `is not None` made the scope one-way -- once
+        # a target had a policy, the API could never restore it to null.
+        if "content_export_policy_id" in body.model_fields_set:
             target.content_export_policy_id = body.content_export_policy_id
         if body.content_export_views is not None:
             target.content_export_views = _views_or_400(body.content_export_views)

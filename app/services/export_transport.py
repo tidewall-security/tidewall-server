@@ -40,11 +40,16 @@ _FORBIDDEN_HEADERS = frozenset(
         "te",
         "trailer",
         "proxy-authorization",
+        "proxy-authenticate",
         "proxy-connection",
+        "keep-alive",
+        "expect",
     }
 )
 
-PHASES = ("not_started", "connection_acquired", "request_started", "headers_received")
+#: RFC 9110 token characters. A header name outside these is not a header name,
+#: and some intermediaries will interpret it as something else entirely.
+_TOKEN_CHARS = frozenset("!#$%&'*+-.^_`|~0123456789" "abcdefghijklmnopqrstuvwxyz" "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
 
 class DestinationRefused(ValueError):
@@ -109,6 +114,21 @@ def validate_destination(url: str) -> tuple[str, int, list[str]]:
     if not host:
         raise DestinationRefused("the destination URL has no host")
 
+    # A trailing dot is the same name to a resolver and a different string to
+    # anything comparing hostnames, so it is a way to spell one destination
+    # twice. Refused rather than normalised: a target's URL should say what it
+    # means.
+    if host.endswith("."):
+        raise DestinationRefused("a trailing dot in the destination host is not permitted")
+
+    # Non-ASCII resolves through IDNA, so the name that is validated and the
+    # name that is connected to can differ in ways nobody reading the config
+    # would expect.
+    try:
+        host.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise DestinationRefused("a non-ASCII destination host is not permitted") from exc
+
     try:
         port = parts.port or 443
     except ValueError as exc:
@@ -140,8 +160,12 @@ def validate_headers(headers: dict[str, str] | None) -> dict[str, str]:
             raise DestinationRefused("header names and values must be strings")
         if name.lower() in _FORBIDDEN_HEADERS:
             raise DestinationRefused(f"header {name!r} is not permitted")
-        if any(c in name or c in value for c in ("\r", "\n", "\0")):
-            raise DestinationRefused("a control character in a header")
+        if not name or any(c not in _TOKEN_CHARS for c in name):
+            raise DestinationRefused(f"header name {name!r} is not a valid HTTP token")
+        # Every control character, not just CR, LF and NUL: the others are no
+        # more meaningful in a header value and some proxies act on them.
+        if any(ord(c) < 0x20 or ord(c) == 0x7F for c in value):
+            raise DestinationRefused("a control character in a header value")
         out[name] = value
     return out
 
@@ -265,6 +289,7 @@ async def send_payload(
     body: bytes,
     addresses: list[str],
     deadline_seconds: float,
+    max_request_bytes: int = 8 * 1024 * 1024,
     max_response_bytes: int = 64 * 1024,
 ) -> SendResult:
     """One request to one validated destination, reporting what it observed.
@@ -275,6 +300,11 @@ async def send_payload(
     connect bound, and a peer dripping bytes just under the read timeout stays
     alive indefinitely.
     """
+    if len(body) > max_request_bytes:
+        # Before anything is connected: a payload that cannot be sent should not
+        # cost a connection to the destination.
+        return SendResult(phase="not_started", error="PayloadTooLarge")
+
     backend = PinnedBackend(addresses)
     result = SendResult()
 
@@ -313,10 +343,19 @@ async def send_payload(
                 result.error = type(exc).__name__
             finally:
                 await response.aclose()
-    except Exception as exc:
-        result.phase = backend.phase
-        result.peer = backend.peer
-        result.error = type(exc).__name__
+    except BaseException as exc:
+        # Once a final status is observed the attempt is settled from it. A
+        # deadline firing during the body drain arrives here as a TimeoutError
+        # -- and CancelledError is a BaseException, so it does not even reach
+        # the inner handler -- and overwriting the phase would turn a receiver
+        # response we actually saw into `indeterminate`.
+        if result.phase != "headers_received":
+            result.phase = backend.phase
+            result.peer = backend.peer
+        result.error = result.error or type(exc).__name__
+        if isinstance(exc, BaseException) and not isinstance(exc, Exception):
+            # Genuine cancellation is not ours to swallow.
+            raise
     finally:
         # Bounded and best effort: a close failure never changes a state.
         try:

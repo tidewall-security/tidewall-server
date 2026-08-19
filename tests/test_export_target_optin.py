@@ -118,3 +118,62 @@ def test_a_target_is_created_opted_out_by_default():
     ).json()
     assert body["allow_content_export"] is False
     assert body["content_export_views"] == []
+
+
+def test_a_policy_scope_can_be_cleared_again():
+    """Omitted means unchanged; an explicit null means clear. Guarding on
+    `is not None` made the scope one-way."""
+    client, headers, _ = _client()
+    target = client.post(
+        "/v1/settings/export-targets",
+        json={
+            "name": "t",
+            "type": "webhook",
+            "config": {},
+            "format": "ocsf",
+            "events": [],
+            "allow_content_export": True,
+            "content_export_policy_id": "policy-a",
+            "content_export_views": ["full"],
+        },
+        headers=headers,
+    ).json()
+    assert target["content_export_policy_id"] == "policy-a"
+
+    # Omitted: unchanged.
+    body = client.patch(f"/v1/settings/export-targets/{target['id']}", json={"name": "renamed"}, headers=headers).json()
+    assert body["content_export_policy_id"] == "policy-a"
+
+    # Explicit null: cleared.
+    body = client.patch(
+        f"/v1/settings/export-targets/{target['id']}",
+        json={"content_export_policy_id": None},
+        headers=headers,
+    ).json()
+    assert body["content_export_policy_id"] is None
+
+
+def test_the_interlock_can_be_turned_off_again():
+    client, headers, _ = _client()
+    target = client.post(
+        "/v1/settings/export-targets",
+        json={
+            "name": "t",
+            "type": "webhook",
+            "config": {},
+            "format": "ocsf",
+            "events": [],
+            "allow_content_export": True,
+            "content_export_views": ["full"],
+        },
+        headers=headers,
+    ).json()
+    assert target["allow_content_export"] is True
+
+    body = client.patch(
+        f"/v1/settings/export-targets/{target['id']}",
+        json={"allow_content_export": False, "content_export_views": []},
+        headers=headers,
+    ).json()
+    assert body["allow_content_export"] is False
+    assert body["content_export_views"] == []

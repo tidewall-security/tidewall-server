@@ -31,9 +31,20 @@ from app.services.export_transport import (
         ("https://example.com:80/hook", "port"),
     ],
 )
-def test_a_refused_url_shape_never_resolves(url, why):
-    # Refused before any name resolution, so a hostile URL cannot even make this
-    # server perform a DNS lookup of the attacker's choosing.
+def test_a_refused_url_shape_never_resolves(url, why, monkeypatch):
+    """Refused before any name resolution, so a hostile URL cannot even make
+    this server perform a DNS lookup of the attacker's choosing.
+
+    The spy is the point. Without it these cases pass whether or not the guard
+    exists, because an unresolvable host raises DestinationRefused anyway -- and
+    removing the userinfo check left all eight green.
+    """
+    import app.services.export_transport as t
+
+    def _must_not_resolve(host, port):
+        raise AssertionError(f"resolved {host!r}: the shape check did not refuse first")
+
+    monkeypatch.setattr(t, "_resolve", _must_not_resolve)
     with pytest.raises(DestinationRefused):
         validate_destination(url)
 
@@ -53,7 +64,12 @@ def test_a_refused_url_shape_never_resolves(url, why):
         "224.0.0.1",
     ],
 )
-def test_a_non_public_address_literal_is_refused(literal):
+def test_a_non_public_address_literal_is_refused(literal, monkeypatch):
+    import app.services.export_transport as t
+
+    # A literal still goes through getaddrinfo, which returns it unchanged; the
+    # stub keeps the test off the network without changing what is checked.
+    monkeypatch.setattr(t, "_resolve", lambda host, port: [host.strip("[]")])
     with pytest.raises(DestinationRefused):
         validate_destination(f"https://{literal}/hook")
 
@@ -248,3 +264,255 @@ def _self_signed(cert_path, key_path, hostname):
             encryption_algorithm=serialization.NoEncryption(),
         )
     )
+
+
+@pytest.mark.parametrize("host", ["example.com.", "exämple.com", "xn--exmple-cua.com."])
+def test_a_hostname_spelling_that_means_the_same_destination_is_refused(host, monkeypatch):
+    """A trailing dot resolves the same and compares differently; a non-ASCII
+    name resolves through IDNA, so the name validated and the name connected to
+    can differ."""
+    import app.services.export_transport as t
+
+    monkeypatch.setattr(t, "_resolve", lambda h, p: ["93.184.216.34"])
+    with pytest.raises(DestinationRefused):
+        validate_destination(f"https://{host}/hook")
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Keep-Alive": "timeout=5"},
+        {"Proxy-Authenticate": "Basic"},
+        {"Expect": "100-continue"},
+        {"X Bad": "v"},  # space is not a token character
+        {"X:Bad": "v"},
+        {"": "v"},
+        {"X-Bad": "a\x01b"},  # a control character that is not CR, LF or NUL
+        {"X-Bad": "a\x7fb"},  # DEL
+    ],
+)
+def test_more_refused_headers(headers):
+    with pytest.raises(DestinationRefused):
+        validate_headers(headers)
+
+
+def test_a_body_over_the_bound_never_opens_a_connection():
+    """A payload that cannot be sent should not cost a connection."""
+    import asyncio
+
+    from app.services.export_transport import send_payload
+
+    result = asyncio.run(
+        send_payload(
+            url="https://pinned.invalid/hook",
+            headers={},
+            body=b"x" * 100,
+            addresses=["203.0.113.1"],
+            deadline_seconds=5,
+            max_request_bytes=10,
+        )
+    )
+    assert result.phase == "not_started"
+    assert result.error == "PayloadTooLarge"
+    assert state_for_phase(result) == "failed"
+
+
+def test_a_deadline_during_the_body_drain_keeps_the_status_already_observed():
+    """Headers settle the attempt. Overwriting the phase on a drain timeout
+    would turn a receiver response we actually saw into `indeterminate`, which
+    over-reports uncertainty in the direction that hides a disclosure."""
+    import asyncio
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    import app.services.export_transport as t
+
+    stop = threading.Event()
+
+    class _Dripper(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            # 200, not 204: a 204 has no body by definition, so httpx never
+            # reads one and there is nothing to time out draining. An earlier
+            # version used 204 and the test passed in 0.13s without ever
+            # exercising the path it names.
+            self.send_response(200)
+            self.send_header("Content-Length", "1000")
+            self.end_headers()
+            # Headers are out; the body never finishes.
+            self.wfile.write(b"x")
+            self.wfile.flush()
+            stop.wait(5)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), _Dripper)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    async def _go():
+        # Plain HTTP through the same sender: validate_destination refuses http,
+        # but send_payload is being exercised directly here for its phase
+        # behaviour, not its URL policy.
+        return await t.send_payload(
+            url=f"http://127.0.0.1:{port}/hook",
+            headers={},
+            body=b"{}",
+            addresses=["127.0.0.1"],
+            deadline_seconds=0.5,
+        )
+
+    try:
+        result = asyncio.run(_go())
+    finally:
+        stop.set()
+        server.shutdown()
+
+    assert result.error is not None, "the drain did not time out, so this proves nothing"
+    assert result.phase == "headers_received", "a drain timeout discarded the observed status"
+    assert result.status == 200
+    assert state_for_phase(result) == "succeeded"
+
+
+def test_the_sender_does_not_follow_a_redirect():
+    """With redirects disabled a 3xx is the receiver's answer, not a hop. A
+    redirect to a private address would otherwise defeat every address check."""
+    import asyncio
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    import app.services.export_transport as t
+
+    followed: list[str] = []
+
+    class _Redirector(BaseHTTPRequestHandler):
+        def do_POST(self):
+            followed.append(self.path)
+            self.send_response(302)
+            self.send_header("Location", "http://169.254.169.254/latest/meta-data/")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), _Redirector)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    async def _go():
+        return await t.send_payload(
+            url=f"http://127.0.0.1:{port}/hook",
+            headers={},
+            body=b"{}",
+            addresses=["127.0.0.1"],
+            deadline_seconds=5,
+        )
+
+    try:
+        result = asyncio.run(_go())
+    finally:
+        server.shutdown()
+
+    assert followed == ["/hook"], "the redirect was followed"
+    assert result.status == 302
+    # Below 400 but not success: the existing webhook sender assumes otherwise.
+    assert state_for_phase(result) == "failed"
+
+
+def test_a_refused_connection_is_failed_not_indeterminate():
+    """No request bytes were written, so this is definitely-not-delivered."""
+    import asyncio
+    import socket
+
+    import app.services.export_transport as t
+
+    # A port nothing is listening on.
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    dead_port = probe.getsockname()[1]
+    probe.close()
+
+    result = asyncio.run(
+        t.send_payload(
+            url=f"http://127.0.0.1:{dead_port}/hook",
+            headers={},
+            body=b"{}",
+            addresses=["127.0.0.1"],
+            deadline_seconds=5,
+        )
+    )
+    assert result.phase == "not_started"
+    assert state_for_phase(result) == "failed"
+
+
+def test_several_addresses_are_tried_in_the_validated_order():
+    """Failing over is not a second resolution: the set was fixed before the
+    first connect, so a name answering differently later cannot enter it.
+
+    The connect is stubbed rather than aimed at a real unreachable address:
+    whether an OS refuses or silently drops a connection to an unbound loopback
+    alias varies, and this is a test of the loop, not of the network stack.
+    """
+    import asyncio
+
+    import httpcore
+
+    from app.services.export_transport import PinnedBackend
+
+    attempted: list[str] = []
+
+    async def _fake_connect(self, host, port, timeout=None, local_address=None, socket_options=None):
+        attempted.append(host)
+        if host != "203.0.113.2":
+            raise OSError("refused")
+        return object()  # stands in for a stream; the wrapper only holds it
+
+    async def _go():
+        backend = PinnedBackend(["203.0.113.1", "203.0.113.2", "203.0.113.3"])
+        original = httpcore.AnyIOBackend.connect_tcp
+        httpcore.AnyIOBackend.connect_tcp = _fake_connect
+        try:
+            await backend.connect_tcp("example.com", 443)
+        finally:
+            httpcore.AnyIOBackend.connect_tcp = original
+        return backend
+
+    backend = asyncio.run(_go())
+
+    assert attempted == ["203.0.113.1", "203.0.113.2"], "not tried in the validated order"
+    assert "example.com" not in attempted, "connected by hostname instead of by pinned address"
+    assert backend.peer == "203.0.113.2"
+    assert backend.phase == "connection_acquired"
+
+
+def test_every_address_failing_raises_rather_than_connecting_by_name():
+    import asyncio
+
+    import httpcore
+
+    from app.services.export_transport import PinnedBackend
+
+    attempted: list[str] = []
+
+    async def _always_fail(self, host, port, timeout=None, local_address=None, socket_options=None):
+        attempted.append(host)
+        raise OSError("refused")
+
+    async def _go():
+        backend = PinnedBackend(["203.0.113.1", "203.0.113.2"])
+        original = httpcore.AnyIOBackend.connect_tcp
+        httpcore.AnyIOBackend.connect_tcp = _always_fail
+        try:
+            with pytest.raises(OSError):
+                await backend.connect_tcp("example.com", 443)
+        finally:
+            httpcore.AnyIOBackend.connect_tcp = original
+        return backend
+
+    backend = asyncio.run(_go())
+    assert attempted == ["203.0.113.1", "203.0.113.2"]
+    assert backend.phase == "not_started", "a failed connect claimed a connection"
