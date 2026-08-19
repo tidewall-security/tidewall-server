@@ -1,4 +1,5 @@
 """Tests for database engine initialization."""
+
 import os
 import tempfile
 
@@ -16,6 +17,7 @@ def test_engine_creates_database_file():
         assert engine is not None
 
         from sqlalchemy import text
+
         with engine.connect() as conn:
             result = conn.execute(text("SELECT 1"))
             assert result.scalar() == 1

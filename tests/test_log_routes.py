@@ -56,6 +56,8 @@ def _make_app_and_client():
             key_hash=hash_key(raw_viewer_key),
             key_prefix=key_prefix(raw_viewer_key),
             role="viewer",
+            # Bound: an unbound viewer now sees nothing, deliberately.
+            policy_id="policy-default",
         )
     )
     session.add(
@@ -81,13 +83,13 @@ def _seed_interactions(session_factory):
             request_id="req-1",
             timestamp="2026-03-01T10:00:00Z",
             event_type="input",
+            policy_id="policy-default",
             policy_name="default",
             blocked=True,
             transformed=False,
             status="blocked",
             latency_ms=12.5,
-            summary="Blocked prompt injection",
-            detectors_json={"prompt_injection": {"detected": True, "score": 0.95}},
+            evidence_json={"malicious_prompt": {"detected": True}},
             app_id="chat-app",
             user_id="alice",
             model="gpt-4",
@@ -97,13 +99,13 @@ def _seed_interactions(session_factory):
             request_id="req-2",
             timestamp="2026-03-01T10:01:00Z",
             event_type="output",
+            policy_id="policy-default",
             policy_name="default",
             blocked=False,
             transformed=True,
             status="transformed",
             latency_ms=8.3,
-            summary="PII redacted",
-            detectors_json={"pii": {"detected": True, "score": 0.8}},
+            evidence_json={"confidential_and_pii_entity": {"detected": True}},
             app_id="chat-app",
             user_id="bob",
             model="gpt-4",
@@ -113,13 +115,13 @@ def _seed_interactions(session_factory):
             request_id="req-3",
             timestamp="2026-03-01T10:02:00Z",
             event_type="input",
+            policy_id="policy-default",
             policy_name="default",
             blocked=False,
             transformed=False,
             status="allowed",
             latency_ms=5.0,
-            summary="Clean request",
-            detectors_json={"prompt_injection": {"detected": False, "score": 0.1}},
+            evidence_json={"malicious_prompt": {"detected": False}},
             app_id="search-app",
             user_id="alice",
             model="claude-3",
@@ -207,8 +209,8 @@ def test_get_stats_returns_aggregate_counts(setup):
     assert "avg_latency_ms" in data
     assert data["avg_latency_ms"] > 0
     # Detector counts: prompt_injection detected once, pii detected once
-    assert data["detector_counts"]["prompt_injection"] == 1
-    assert data["detector_counts"]["pii"] == 1
+    assert data["detector_counts"]["malicious_prompt"] == 1
+    assert data["detector_counts"]["confidential_and_pii_entity"] == 1
 
 
 # ------------------------------------------------------------------

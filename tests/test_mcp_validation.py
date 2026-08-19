@@ -1,9 +1,11 @@
 """Tests for MCPValidationDetector — tool name validation."""
+
 import pytest
 
 
 def test_no_tools_not_detected():
     from app.detectors.mcp_validation import MCPValidationDetector
+
     detector = MCPValidationDetector({"enabled": True, "action": "block", "similarity_threshold": 0.8})
     result = detector.scan("", tools=[])
     assert result.detected is False
@@ -11,6 +13,7 @@ def test_no_tools_not_detected():
 
 def test_unique_tools_not_detected():
     from app.detectors.mcp_validation import MCPValidationDetector
+
     detector = MCPValidationDetector({"enabled": True, "action": "block", "similarity_threshold": 0.8})
     tools = [
         {"type": "function", "function": {"name": "get_weather", "description": "Gets weather"}},
@@ -22,6 +25,7 @@ def test_unique_tools_not_detected():
 
 def test_exact_duplicate_names_detected():
     from app.detectors.mcp_validation import MCPValidationDetector
+
     detector = MCPValidationDetector({"enabled": True, "action": "block", "similarity_threshold": 0.8})
     tools = [
         {"type": "function", "function": {"name": "get_data", "description": "Gets data v1"}},
@@ -34,6 +38,7 @@ def test_exact_duplicate_names_detected():
 
 def test_similar_names_detected():
     from app.detectors.mcp_validation import MCPValidationDetector
+
     detector = MCPValidationDetector({"enabled": True, "action": "block", "similarity_threshold": 0.8})
     tools = [
         {"type": "function", "function": {"name": "get_user_data", "description": "A"}},
@@ -47,6 +52,7 @@ def test_similar_names_detected():
 
 def test_low_similarity_not_detected():
     from app.detectors.mcp_validation import MCPValidationDetector
+
     detector = MCPValidationDetector({"enabled": True, "action": "block", "similarity_threshold": 0.8})
     tools = [
         {"type": "function", "function": {"name": "get_weather", "description": "A"}},
@@ -58,6 +64,7 @@ def test_low_similarity_not_detected():
 
 def test_custom_threshold():
     from app.detectors.mcp_validation import MCPValidationDetector
+
     detector = MCPValidationDetector({"enabled": True, "action": "block", "similarity_threshold": 0.5})
     tools = [
         {"type": "function", "function": {"name": "get_data", "description": "A"}},
@@ -70,6 +77,7 @@ def test_custom_threshold():
 
 def test_block_action_returns_filtered_tools():
     from app.detectors.mcp_validation import MCPValidationDetector
+
     detector = MCPValidationDetector({"enabled": True, "action": "block", "similarity_threshold": 0.8})
     tools = [
         {"type": "function", "function": {"name": "safe_tool", "description": "Safe"}},
@@ -85,6 +93,7 @@ def test_block_action_returns_filtered_tools():
 
 def test_report_action_no_filtering():
     from app.detectors.mcp_validation import MCPValidationDetector
+
     detector = MCPValidationDetector({"enabled": True, "action": "report", "similarity_threshold": 0.8})
     tools = [
         {"type": "function", "function": {"name": "get_data", "description": "V1"}},
@@ -98,10 +107,14 @@ def test_report_action_no_filtering():
 def test_tools_passed_via_kwargs():
     """Detector receives tools via kwargs, not text."""
     from app.detectors.mcp_validation import MCPValidationDetector
+
     detector = MCPValidationDetector({"enabled": True, "action": "block", "similarity_threshold": 0.8})
     # text is empty, tools come via kwargs
-    result = detector.scan("some text content", tools=[
-        {"type": "function", "function": {"name": "dup", "description": "A"}},
-        {"type": "function", "function": {"name": "dup", "description": "B"}},
-    ])
+    result = detector.scan(
+        "some text content",
+        tools=[
+            {"type": "function", "function": {"name": "dup", "description": "A"}},
+            {"type": "function", "function": {"name": "dup", "description": "B"}},
+        ],
+    )
     assert result.detected is True

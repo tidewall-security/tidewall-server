@@ -1,4 +1,5 @@
 """Tests for AccessRuleService — CRUD operations."""
+
 import pytest
 from app.db.engine import get_engine, get_session_factory
 from app.db.models import Base, Policy, RuleSet, AccessRule
@@ -27,6 +28,7 @@ def _get_rule_set_id(session):
 
 def test_create_access_rule(db_session):
     from app.services.access_rule_service import AccessRuleService
+
     svc = AccessRuleService(db_session)
     rule = svc.create_rule(
         rule_set_id=_get_rule_set_id(db_session),
@@ -42,6 +44,7 @@ def test_create_access_rule(db_session):
 
 def test_create_multiple_rules_increments_sort_order(db_session):
     from app.services.access_rule_service import AccessRuleService
+
     svc = AccessRuleService(db_session)
     rs_id = _get_rule_set_id(db_session)
     r1 = svc.create_rule(rs_id, name="rule1", conditions={}, then_action="continue", else_action="continue")
@@ -52,6 +55,7 @@ def test_create_multiple_rules_increments_sort_order(db_session):
 
 def test_list_rules_ordered(db_session):
     from app.services.access_rule_service import AccessRuleService
+
     svc = AccessRuleService(db_session)
     rs_id = _get_rule_set_id(db_session)
     svc.create_rule(rs_id, name="second", conditions={}, then_action="continue", else_action="continue")
@@ -63,10 +67,14 @@ def test_list_rules_ordered(db_session):
 
 def test_update_rule(db_session):
     from app.services.access_rule_service import AccessRuleService
+
     svc = AccessRuleService(db_session)
     rule = svc.create_rule(
-        _get_rule_set_id(db_session), name="orig", conditions={},
-        then_action="continue", else_action="continue",
+        _get_rule_set_id(db_session),
+        name="orig",
+        conditions={},
+        then_action="continue",
+        else_action="continue",
     )
     updated = svc.update_rule(rule.id, name="renamed", then_action="block_and_stop")
     assert updated.name == "renamed"
@@ -75,10 +83,14 @@ def test_update_rule(db_session):
 
 def test_delete_rule(db_session):
     from app.services.access_rule_service import AccessRuleService
+
     svc = AccessRuleService(db_session)
     rule = svc.create_rule(
-        _get_rule_set_id(db_session), name="deletable", conditions={},
-        then_action="continue", else_action="continue",
+        _get_rule_set_id(db_session),
+        name="deletable",
+        conditions={},
+        then_action="continue",
+        else_action="continue",
     )
     svc.delete_rule(rule.id)
     assert db_session.query(AccessRule).filter_by(id=rule.id).first() is None

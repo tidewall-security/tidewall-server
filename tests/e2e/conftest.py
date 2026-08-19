@@ -1,4 +1,5 @@
 """E2E test fixtures."""
+
 import os
 import pathlib
 import subprocess
@@ -87,8 +88,7 @@ def server_url():
         proc.terminate()
         log_file.close()
         raise RuntimeError(
-            f"Server did not become healthy within {_STARTUP_TIMEOUT}s.\n"
-            f"--- {_LOG_PATH} (tail) ---\n{_tail_log()}"
+            f"Server did not become healthy within {_STARTUP_TIMEOUT}s.\n" f"--- {_LOG_PATH} (tail) ---\n{_tail_log()}"
         )
 
     yield "http://localhost:8090"

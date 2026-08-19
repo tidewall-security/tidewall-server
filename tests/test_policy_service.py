@@ -245,3 +245,32 @@ def test_the_database_refuses_the_delete_even_if_the_count_is_bypassed(seeded_se
     seeded_session.rollback()
 
     assert seeded_session.get(Policy, scoped.id) is not None
+
+
+def test_deleting_a_policy_bound_to_an_api_key_is_refused(seeded_session):
+    """Otherwise deleting a policy silently promotes a scoped administrator.
+
+    APIKey.policy_id is ON DELETE SET NULL and an unbound admin reads and
+    deletes globally, so an unrelated administrative action escalated a
+    policy-scoped admin to an organisation-wide one.
+    """
+    from app.auth.key_utils import generate_key, hash_key, key_prefix
+    from app.db.models import APIKey
+    from app.services.policy_service import PolicyInUseError, PolicyService
+
+    svc = PolicyService(seeded_session)
+    scoped = svc.create_policy(name="engineering-keys", type="application")
+    raw = generate_key(prefix="ak")
+    seeded_session.add(
+        APIKey(
+            name="bound-admin",
+            key_hash=hash_key(raw),
+            key_prefix=key_prefix(raw),
+            role="admin",
+            policy_id=scoped.id,
+        )
+    )
+    seeded_session.commit()
+
+    with pytest.raises(PolicyInUseError, match="API key"):
+        svc.delete_policy(scoped.id)

@@ -1,4 +1,5 @@
 """Tests for ActivityService."""
+
 import pytest
 from app.db.engine import get_engine, get_session_factory
 from app.db.models import Base, ActivityLog
@@ -16,6 +17,7 @@ def db_session():
 
 def test_log_activity(db_session):
     from app.services.activity_service import ActivityService
+
     svc = ActivityService(db_session)
     svc.log(
         actor="admin-key",
@@ -33,6 +35,7 @@ def test_log_activity(db_session):
 
 def test_list_activity(db_session):
     from app.services.activity_service import ActivityService
+
     svc = ActivityService(db_session)
     svc.log(actor="a", action="create", target_type="policy", target_id="1")
     svc.log(actor="b", action="update", target_type="key", target_id="2")
@@ -42,6 +45,7 @@ def test_list_activity(db_session):
 
 def test_list_activity_ordered_by_timestamp(db_session):
     from app.services.activity_service import ActivityService
+
     svc = ActivityService(db_session)
     svc.log(actor="first", action="create", target_type="policy", target_id="1")
     svc.log(actor="second", action="update", target_type="policy", target_id="1")

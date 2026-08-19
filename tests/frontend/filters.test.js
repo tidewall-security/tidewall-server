@@ -23,10 +23,11 @@ beforeAll(() => {
 });
 
 var testEvents = [
-  { summary: 'Blocked PII', user_id: 'alice', app_id: 'app1', model: 'gpt-4', request_id: 'r1', blocked: true, transformed: false, input_messages: [{ role: 'user', content: 'My SSN is 123' }] },
-  { summary: 'Blocked malicious', user_id: 'bob', app_id: 'app2', model: 'gpt-4', request_id: 'r2', blocked: true, transformed: false, input_messages: [{ role: 'user', content: 'Drop tables' }] },
-  { summary: 'Transformed topic', user_id: 'carol', app_id: 'app1', model: 'claude', request_id: 'r3', blocked: false, transformed: true, input_messages: [{ role: 'user', content: 'Off topic question' }] },
-  { summary: 'Clean request', user_id: 'dave', app_id: 'app3', model: 'claude', request_id: 'r4', blocked: false, transformed: false, input_messages: [{ role: 'user', content: 'Normal question' }] },
+  // No summary and no input_messages: the event DTO no longer carries either.
+  { user_id: 'alice', app_id: 'app1', model: 'gpt-4', request_id: 'r1', blocked: true, transformed: false, evidence: { confidential_and_pii_entity: { detected: true, entities: [{ type: 'US_SSN', count: 1 }] } } },
+  { user_id: 'bob', app_id: 'app2', model: 'gpt-4', request_id: 'r2', blocked: true, transformed: false, evidence: { malicious_prompt: { detected: true } } },
+  { user_id: 'carol', app_id: 'app1', model: 'claude', request_id: 'r3', blocked: false, transformed: true, evidence: { topic: { detected: true } } },
+  { user_id: 'dave', app_id: 'app3', model: 'claude', request_id: 'r4', blocked: false, transformed: false, evidence: {} },
 ];
 
 describe('filterEvents', () => {
@@ -43,13 +44,13 @@ describe('filterEvents', () => {
   it('filters transformed events', () => {
     var result = filterEvents(testEvents, 'transformed', '');
     expect(result).toHaveLength(1);
-    expect(result[0].summary).toBe('Transformed topic');
+    expect(result[0].user_id).toBe('carol');
   });
 
   it('filters clean events', () => {
     var result = filterEvents(testEvents, 'clean', '');
     expect(result).toHaveLength(1);
-    expect(result[0].summary).toBe('Clean request');
+    expect(result[0].user_id).toBe('dave');
   });
 
   it('searches by user_id', () => {
@@ -76,10 +77,21 @@ describe('filterEvents', () => {
     expect(result[0].blocked).toBe(true);
   });
 
-  it('searches within input_messages content', () => {
-    var result = filterEvents(testEvents, 'all', 'SSN');
+  it('searches evidence detector names and entity types, not content', () => {
+    // Content search went with the content. Searching a redacted copy would
+    // have been worse: a hit tells you the term was in a prompt you cannot read.
+    var result = filterEvents(testEvents, 'all', 'US_SSN');
     expect(result).toHaveLength(1);
     expect(result[0].user_id).toBe('alice');
+
+    var byDetector = filterEvents(testEvents, 'all', 'malicious_prompt');
+    expect(byDetector).toHaveLength(1);
+    expect(byDetector[0].user_id).toBe('bob');
+  });
+
+  it('does not search prompt content even if an event still carries it', () => {
+    var withContent = [{ user_id: 'eve', request_id: 'r9', input_messages: [{ role: 'user', content: 'my SSN is 123' }] }];
+    expect(filterEvents(withContent, 'all', '123')).toHaveLength(0);
   });
 });
 

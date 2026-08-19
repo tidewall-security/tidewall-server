@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import OnDetectorFailure
-from app.db.models import Device, Policy, RegistrationToken, RuleSet
+from app.db.models import APIKey, Device, Policy, RegistrationToken, RuleSet
 from app.scanner_engine import ScannerEngine
 from app.services.policy_validation import validate_detectors
 
@@ -231,10 +231,16 @@ class PolicyService:
             # keys are ON DELETE RESTRICT, and that is what holds.
             devices = session.query(Device).filter_by(policy_id=policy_id).count()
             tokens = session.query(RegistrationToken).filter_by(policy_id=policy_id).count()
-            if devices or tokens:
+            # API keys too. APIKey.policy_id is ON DELETE SET NULL, and an
+            # unbound admin reads and deletes globally — so deleting a policy
+            # silently promoted a policy-scoped administrator to an
+            # organisation-wide one, which is a privilege escalation performed
+            # by an unrelated administrative action.
+            keys = session.query(APIKey).filter_by(policy_id=policy_id).count()
+            if devices or tokens or keys:
                 raise PolicyInUseError(
-                    f"Policy {policy_id} is still bound to {devices} device(s) and "
-                    f"{tokens} registration token(s). Remove them first."
+                    f"Policy {policy_id} is still bound to {devices} device(s), "
+                    f"{tokens} registration token(s) and {keys} API key(s). Remove them first."
                 )
 
             # Invalidate all cached engines for this policy

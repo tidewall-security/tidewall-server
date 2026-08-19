@@ -129,17 +129,21 @@
       if (currentFilter === 'clean' && status !== 'allowed') return false;
 
       if (searchTerm) {
-        var inputText = '';
-        if (ev.input_messages && Array.isArray(ev.input_messages)) {
-          inputText = ev.input_messages.map(function (m) { return m.content || ''; }).join(' ');
+        // Metadata and evidence only. Prompt search went with the prompt.
+        var evidenceText = '';
+        if (ev.evidence && typeof ev.evidence === 'object') {
+          evidenceText = Object.keys(ev.evidence).map(function (dn) {
+            var ents = (ev.evidence[dn] && ev.evidence[dn].entities) || [];
+            return dn + ' ' + ents.map(function (e) { return e.type || ''; }).join(' ');
+          }).join(' ');
         }
         var haystack = [
-          ev.summary || '',
           ev.user_id || '',
           ev.app_id || '',
           ev.model || '',
           ev.request_id || '',
-          inputText
+          ev.policy || '',
+          evidenceText
         ].join(' ').toLowerCase();
         if (haystack.indexOf(searchTerm) === -1) return false;
       }
@@ -188,10 +192,10 @@
 
       // Findings: detector chips for detected detectors
       var chips = '';
-      if (ev.detectors_json && typeof ev.detectors_json === 'object') {
-        Object.keys(ev.detectors_json).forEach(function (dn) {
+      if (ev.evidence && typeof ev.evidence === 'object') {
+        Object.keys(ev.evidence).forEach(function (dn) {
           if (dn.charAt(0) === '_') return;  // reserved scan metadata, not a detector
-          var di = ev.detectors_json[dn];
+          var di = ev.evidence[dn];
           if (di && di.detected) {
             chips += Utils.detectorChip(dn);
           }
@@ -199,11 +203,10 @@
       }
       if (!chips) chips = '<span class="text-muted">None</span>';
 
-      // Input text from messages
+      // The prompt is not retained, so there is nothing to render here. Say so
+      // explicitly rather than leaving a blank cell, which reads as a failure
+      // to load rather than a deliberate absence.
       var inputText = '';
-      if (ev.input_messages && Array.isArray(ev.input_messages)) {
-        inputText = ev.input_messages.map(function (m) { return m.content || ''; }).join(' ');
-      }
 
       var timeStr = Utils.formatTime(ev.timestamp);
 
@@ -286,38 +289,34 @@
     });
     html += '</div>';
 
-    // Right column: input messages
+    // Right column: content state.
+    // The prompt is not retained. Say so explicitly — a blank panel reads as a
+    // failure to load rather than as a deliberate absence, and an operator who
+    // thinks the UI is broken will go looking for the content elsewhere.
     html += '<div style="flex:1;min-width:0;">';
-    html += '<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-secondary);margin-bottom:10px;">Input Messages</div>';
-    if (ev.input_messages && Array.isArray(ev.input_messages) && ev.input_messages.length > 0) {
-      ev.input_messages.forEach(function (msg) {
-        var role = msg.role || 'user';
-        var roleCls = role === 'user' ? 'badge-blocked' : role === 'assistant' ? 'badge-allowed' : 'badge-reported';
-        html += '<div style="margin-bottom:10px;">';
-        html += '<span class="badge ' + roleCls + '" style="margin-bottom:4px;display:inline-block;">' + Utils.escHtml(role) + '</span>';
-        html += '<div style="font-size:13px;color:var(--text-primary);background:var(--bg-primary);border-radius:var(--radius-sm);padding:8px;white-space:pre-wrap;">' + Utils.escHtml(msg.content || '') + '</div>';
-        html += '</div>';
-      });
+    html += '<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-secondary);margin-bottom:10px;">Content</div>';
+    if (ev.content_available) {
+      html += '<div class="text-muted" style="font-size:13px;">Retained for this policy. You do not have the grant required to view it.</div>';
     } else {
-      html += '<div class="text-muted">No input messages</div>';
+      html += '<div class="text-muted" style="font-size:13px;">Not retained. Tidewall stores what was detected, not the prompt itself.</div>';
     }
     html += '</div>';
 
     html += '</div>'; // end two-column flex
 
     // Detector results
-    if (ev.detectors_json && typeof ev.detectors_json === 'object') {
+    if (ev.evidence && typeof ev.evidence === 'object') {
       // Reserved metadata keys (e.g. _degraded) are not detectors; rendering
       // them as detector cards showed a nonexistent detector with a "Clear"
       // badge, which is exactly backwards for a degraded scan.
-      var detNames = Object.keys(ev.detectors_json).filter(function (n) {
+      var detNames = Object.keys(ev.evidence).filter(function (n) {
         return n.charAt(0) !== '_';
       });
       if (detNames.length > 0) {
         html += '<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-secondary);margin-bottom:10px;">Detector Results</div>';
         html += '<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px;">';
         detNames.forEach(function (dn) {
-          var di = ev.detectors_json[dn];
+          var di = ev.evidence[dn];
           var detected = di && di.detected;
           var borderColor = detected ? 'var(--status-blocked)' : 'var(--border)';
           html += '<div style="background:var(--bg-primary);border:1px solid ' + borderColor + ';border-radius:var(--radius-md);padding:10px 14px;min-width:160px;flex:0 0 auto;">';
@@ -327,10 +326,13 @@
             ? '<span class="badge badge-blocked" style="margin-left:auto;">Detected</span>'
             : '<span class="badge badge-allowed" style="margin-left:auto;">Clear</span>';
           html += '</div>';
-          if (di && di.data) {
-            var summary = JSON.stringify(di.data);
-            if (summary.length > 120) summary = summary.slice(0, 120) + '...';
-            html += '<div style="font-size:11px;color:var(--text-secondary);font-family:var(--font-mono);">' + Utils.escHtml(summary) + '</div>';
+          // Types and counts, which is what the record holds now.
+          if (di && Array.isArray(di.entities) && di.entities.length > 0) {
+            var parts = di.entities.map(function (e) { return (e.type || '?') + ' x' + (e.count || 1); });
+            html += '<div style="font-size:11px;color:var(--text-secondary);font-family:var(--font-mono);">' + Utils.escHtml(parts.join(', ')) + '</div>';
+          }
+          if (di && di.failure_code) {
+            html += '<div style="font-size:11px;color:var(--status-blocked);">' + Utils.escHtml(di.failure_code) + '</div>';
           }
           html += '</div>';
         });
@@ -338,11 +340,17 @@
       }
     }
 
-    // "Show Raw JSON" button + pre block
+    // The stored record, in full.
+    //
+    // The plan said remove this because it dumped the whole event including
+    // the prompt. The DTO it renders is now allowlisted and built field by
+    // field, so it cannot carry content — and showing an operator exactly what
+    // is retained is the honest answer to "what do you keep about me". Renamed
+    // so it does not read as a debug escape hatch.
     var uid = 'raw-' + Math.random().toString(36).slice(2);
     var rawJson = syntaxHighlightJson(ev);
     html += '<div>';
-    html += '<button class="btn btn-ghost" style="font-size:12px;padding:4px 12px;" onclick="(function(){var el=document.getElementById(\'' + uid + '\');el.style.display=el.style.display===\'none\'?\'block\':\'none\';})()">Show Raw JSON</button>';
+    html += '<button class="btn btn-ghost" style="font-size:12px;padding:4px 12px;" onclick="(function(){var el=document.getElementById(\'' + uid + '\');el.style.display=el.style.display===\'none\'?\'block\':\'none\';})()">Show stored record</button>';
     html += '<pre class="json-tree" id="' + uid + '" style="display:none;margin-top:8px;">' + rawJson + '</pre>';
     html += '</div>';
 

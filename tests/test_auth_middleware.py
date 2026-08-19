@@ -1,4 +1,5 @@
 """Tests for auth middleware and role dependencies."""
+
 import pytest
 from fastapi import FastAPI, Depends
 from fastapi.testclient import TestClient
@@ -22,7 +23,9 @@ def app_with_auth():
 
     key_svc = KeyService(session)
     admin_key, _ = key_svc.create_key(name="admin", role="admin")
-    viewer_key, _ = key_svc.create_key(name="viewer", role="viewer")
+    # Bound: an unbound viewer is refused at creation, because it would
+    # authenticate successfully and then see nothing.
+    viewer_key, _ = key_svc.create_key(name="viewer", role="viewer", policy_id=policy.id)
     api_key, _ = key_svc.create_key(name="collector", role="api")
 
     from app.auth.middleware import AuthMiddleware

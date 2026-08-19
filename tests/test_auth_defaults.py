@@ -64,9 +64,6 @@ def test_require_role_rejects_an_anonymous_request():
 # ---------------------------------------------------------------------------
 
 
-
-
-
 def test_dockerfile_does_not_bind_independently_of_settings():
     """A CMD that passes --host would reintroduce the disconnect."""
     from pathlib import Path
@@ -109,9 +106,6 @@ def test_dashboard_shells_cannot_be_framed():
     assert "frame-ancestors 'none'" in resp.headers["content-security-policy"]
     assert resp.headers["x-frame-options"] == "DENY"
     assert resp.headers["x-content-type-options"] == "nosniff"
-
-
-
 
 
 def test_rejected_bootstrap_config_leaves_no_database_state(tmp_path):

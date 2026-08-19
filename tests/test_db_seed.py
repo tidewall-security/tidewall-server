@@ -1,4 +1,5 @@
 """Tests for first-boot policy seeding."""
+
 import pytest
 
 from app.db.engine import get_engine, get_session_factory

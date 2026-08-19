@@ -33,6 +33,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from app.auth.dependencies import require_role
 from app.config import OnDetectorFailure
 from app.detectors.base import FailureCode
+from app.interaction_log import _validated as _safe_meta
+from app.interaction_log import _validated_ip as _safe_ip
 from app.models import GuardRequest, GuardResponse, GuardResult
 from app.services.safe_export_evidence import project_detectors
 from app.services.safe_logging import describe
@@ -177,10 +179,10 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             transformed=False,
             status="blocked",
             latency_ms=0,
-            summary=summary,
-            input_messages=messages,
-            output_messages=None,
-            detectors_json={},
+            # The resolved policy, not the caller's binding, which may be null.
+            policy_id=policy.id,
+            api_key_id=getattr(request.state, "api_key_id", None),
+            evidence={},
             app_id=body.app_id,
             user_id=body.user_id,
             llm_provider=body.llm_provider,
@@ -199,11 +201,13 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
                 policy_name=policy_name,
                 event_type=event_type,
                 detectors={},
-                user_id=body.user_id,
-                app_id=body.app_id,
-                model=body.model,
-                llm_provider=body.llm_provider,
-                source_ip=body.source_ip,
+                # The same normalisation storage applies. Otherwise the
+                # caller-content channel simply crosses a different sink.
+                user_id=_safe_meta(body.user_id, "user_id"),
+                app_id=_safe_meta(body.app_id, "app_id"),
+                model=_safe_meta(body.model, "model"),
+                llm_provider=_safe_meta(body.llm_provider, "llm_provider"),
+                source_ip=_safe_ip(body.source_ip),
             )
         except Exception:
             pass  # Never block guard response on export failure
@@ -409,10 +413,9 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
         transformed=scan_result.transformed,
         status=status,
         latency_ms=latency_ms,
-        summary=summary,
-        input_messages=messages,
-        output_messages=guard_output.get("messages") if guard_output else None,
-        detectors_json=scan_result.detectors,
+        policy_id=policy.id,
+        api_key_id=getattr(request.state, "api_key_id", None),
+        evidence=project_detectors(scan_result.detectors),
         app_id=body.app_id,
         user_id=body.user_id,
         llm_provider=body.llm_provider,

@@ -175,10 +175,9 @@ RAW_SHAPES = {
         "status": "ok",
         "data": {"topics": [{"topic": CANARY, "confidence": 0.8}], "action": "block"},
     },
-    "failed_detector": {"detected": False, "status": "failed", "failure_code": "dependency_missing"},
-    "skipped_detector": {"detected": False, "status": "skipped", "skip_reason": "short_circuited"},
+    "code": {"detected": False, "status": "failed", "failure_code": "dependency_missing"},
+    "language": {"detected": False, "status": "skipped", "skip_reason": "short_circuited"},
 }
-
 
 
 @pytest.mark.parametrize("name", sorted(RAW_SHAPES))
@@ -200,18 +199,18 @@ def test_a_failed_detector_keeps_its_failure_code():
     difference between a missing dependency and a crashed scan."""
     from app.services.safe_export_evidence import project_detectors
 
-    projected = project_detectors({"d": RAW_SHAPES["failed_detector"]})
+    projected = project_detectors({"code": RAW_SHAPES["code"]})
 
-    assert projected["d"]["status"] == "failed"
-    assert projected["d"]["failure_code"] == "dependency_missing"
+    assert projected["code"]["status"] == "failed"
+    assert projected["code"]["failure_code"] == "dependency_missing"
 
 
 def test_a_skipped_detector_keeps_its_reason():
     from app.services.safe_export_evidence import project_detectors
 
-    projected = project_detectors({"d": RAW_SHAPES["skipped_detector"]})
+    projected = project_detectors({"language": RAW_SHAPES["language"]})
 
-    assert projected["d"]["skip_reason"] == "short_circuited"
+    assert projected["language"]["skip_reason"] == "short_circuited"
 
 
 @pytest.mark.parametrize("field", ["failure_code", "skip_reason", "status"])
@@ -220,9 +219,9 @@ def test_an_identifier_shaped_string_is_not_a_valid_code(field):
     64-character identifier. 'sk_live_SECRET' is identifier-shaped."""
     from app.services.safe_export_evidence import project_detectors
 
-    projected = project_detectors({"d": {"detected": False, field: "sk_live_SECRET"}})
+    projected = project_detectors({"code": {"detected": False, field: "sk_live_SECRET"}})
 
-    assert field not in projected["d"], f"{field} accepted an arbitrary identifier"
+    assert field not in projected["code"], f"{field} accepted an arbitrary identifier"
 
 
 @pytest.mark.parametrize(
@@ -237,9 +236,9 @@ def test_a_real_enum_value_survives(field, value):
     """Guards against the check being so strict it drops the real thing."""
     from app.services.safe_export_evidence import project_detectors
 
-    projected = project_detectors({"d": {"detected": False, field: value}})
+    projected = project_detectors({"code": {"detected": False, field: value}})
 
-    assert projected["d"][field] == value
+    assert projected["code"][field] == value
 
 
 def test_the_vocabularies_come_from_the_enums_not_a_restated_list():
@@ -248,5 +247,5 @@ def test_the_vocabularies_come_from_the_enums_not_a_restated_list():
     from app.services.safe_export_evidence import project_detectors
 
     for code in FailureCode:
-        projected = project_detectors({"d": {"detected": False, "failure_code": code.value}})
-        assert projected["d"]["failure_code"] == code.value, f"{code.value} would be dropped"
+        projected = project_detectors({"code": {"detected": False, "failure_code": code.value}})
+        assert projected["code"]["failure_code"] == code.value, f"{code.value} would be dropped"

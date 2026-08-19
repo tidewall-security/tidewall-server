@@ -63,7 +63,7 @@ def _event(fmt: str) -> dict:
     return svc._build_event(
         fmt,
         status="allowed",
-        request_id="tw_test",
+        request_id="tw_00000000000000dd",
         timestamp="2026-08-16T00:00:00Z",
         summary="Scan incomplete: one or more detectors could not run.",
         policy_name="default",
@@ -97,7 +97,7 @@ def test_clean_events_carry_no_degraded_marker():
     event = svc._build_event(
         "raw",
         status="allowed",
-        request_id="tw_test",
+        request_id="tw_00000000000000dd",
         timestamp="2026-08-16T00:00:00Z",
         summary="No threats detected.",
         policy_name="default",
@@ -120,14 +120,12 @@ def test_interaction_row_carries_the_degraded_marker():
     from app.db.models import Base, Interaction
     from app.interaction_log import InteractionLog
 
-    engine = create_engine(
-        "sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool
-    )
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
     SessionLocal = sessionmaker(bind=engine)
 
     InteractionLog(SessionLocal).log_event(
-        request_id="tw_test",
+        request_id="tw_00000000000000dd",
         timestamp="2026-08-16T00:00:00Z",
         event_type="input",
         policy="default",
@@ -135,18 +133,18 @@ def test_interaction_row_carries_the_degraded_marker():
         transformed=False,
         status="allowed",
         latency_ms=1.0,
-        summary="Scan incomplete: one or more detectors could not run.",
-        input_messages=[],
-        output_messages=None,
-        detectors_json=_DEGRADED_DETECTORS,
+        policy_id="policy-default",
+        evidence=_DEGRADED_DETECTORS,
     )
 
     session = SessionLocal()
     try:
         row = session.query(Interaction).one()
-        assert row.detectors_json["_degraded"]["degraded"] is True
-        assert row.detectors_json["_degraded"]["failed_detectors"] == ["malicious_prompt"]
-        assert "No threats detected" not in row.summary
+        assert row.evidence_json["_degraded"]["degraded"] is True
+        assert row.evidence_json["_degraded"]["failed_detectors"] == ["malicious_prompt"]
+        # summary is gone: it carried the access-rule name and detector-derived
+        # strings, and was displayed and searched in the UI.
+        assert not hasattr(row, "summary")
     finally:
         session.close()
 
@@ -170,12 +168,18 @@ def test_reserved_keys_are_distinguishable_from_detectors():
 
 
 def test_ui_consumers_exclude_reserved_keys():
-    """Guards the two consumers codex found rendering `_degraded` as a detector."""
+    """Guards the consumer that renders `_degraded` as a detector.
+
+    There were two. The stale duplicate at app/static/dashboard.html was
+    removed in step 4: it was publicly reachable, sent no bearer token so every
+    API call it made returned 401, and still read the removed content columns.
+    A forgotten consumer of a content DTO is worth deleting rather than
+    maintaining.
+    """
     from pathlib import Path
 
     root = Path(__file__).resolve().parent.parent
-    dashboard = (root / "app/static/dashboard.html").read_text()
-    findings = (root / "app/static/js/findings.js").read_text()
+    assert not (root / "app/static/dashboard.html").exists(), "the stale duplicate dashboard is back"
 
-    assert 'dn.startsWith("_")' in dashboard
+    findings = (root / "app/static/js/findings.js").read_text()
     assert findings.count("charAt(0)") >= 2

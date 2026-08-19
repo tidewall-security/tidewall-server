@@ -115,9 +115,9 @@ def test_pipeline_tag_matches_how_the_code_uses_it(ref: ModelRef):
 
     if published is None:
         pytest.skip(f"{ref.repo_id} publishes no pipeline_tag")
-    assert published == ref.pipeline_tag, (
-        f"{ref.repo_id} is a {published} model but the registry declares {ref.pipeline_tag}"
-    )
+    assert (
+        published == ref.pipeline_tag
+    ), f"{ref.repo_id} is a {published} model but the registry declares {ref.pipeline_tag}"
 
 
 @_NETWORK
@@ -136,9 +136,9 @@ def test_declared_licence_matches_upstream(ref: ModelRef):
 
     if published is None:
         pytest.skip(f"{ref.repo_id} publishes no licence in cardData")
-    assert str(published).lower() == ref.licence.lower(), (
-        f"{ref.repo_id} now declares {published!r}; the registry and NOTICE say {ref.licence!r}"
-    )
+    assert (
+        str(published).lower() == ref.licence.lower()
+    ), f"{ref.repo_id} now declares {published!r}; the registry and NOTICE say {ref.licence!r}"
 
 
 def test_notice_lists_every_registry_artifact():
@@ -181,28 +181,24 @@ def test_prewarm_imports_in_a_builder_only_context():
     builder = dockerfile.split("# ---- Runtime stage ----")[0]
 
     if app_imports:
-        assert "COPY app" in builder, (
-            f"prewarm.py imports {sorted(app_imports)} but the Docker builder stage does not copy app/"
-        )
+        assert (
+            "COPY app" in builder
+        ), f"prewarm.py imports {sorted(app_imports)} but the Docker builder stage does not copy app/"
         # Ordering, not just presence. The previous version of this test only
         # looked for the substring anywhere in the builder stage, so it passed
         # while the image could not build at all: `COPY app` sat ten lines
         # after `pip install .`, which needs it. A test that reports a fixed
         # build while the build is broken is worse than no test.
-        assert builder.index("COPY app") < builder.index("RUN python prewarm.py"), (
-            "COPY app must precede RUN python prewarm.py"
-        )
+        assert builder.index("COPY app") < builder.index(
+            "RUN python prewarm.py"
+        ), "COPY app must precede RUN python prewarm.py"
 
     # Hatch builds the project from pyproject metadata, which declares the
     # readme, licence and notice, plus the `app` wheel target. Copying
     # pyproject alone failed with "Readme file does not exist: README.md".
     install_at = builder.index("pip install --no-cache-dir .")
     for required in ("README.md", "LICENSE", "NOTICE", "app"):
-        copies = [
-            builder.index(line)
-            for line in builder.splitlines()
-            if line.startswith("COPY") and required in line
-        ]
+        copies = [builder.index(line) for line in builder.splitlines() if line.startswith("COPY") and required in line]
         assert copies, f"the Docker builder stage never copies {required}, which `pip install .` needs"
         assert min(copies) < install_at, f"{required} is copied after `pip install .`, which needs it"
 

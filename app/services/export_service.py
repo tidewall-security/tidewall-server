@@ -17,9 +17,83 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.db.models import ExportTarget
+from app.interaction_log import _validated as _safe_meta
+from app.interaction_log import _validated_ip as _safe_ip
+from app.interaction_log import is_generated_request_id
 from app.services.ocsf_builder import build_aidr_compat_event, build_ocsf_event
 from app.services.safe_export_evidence import project_detectors
 from app.services.safe_logging import describe
+
+_STATUSES = frozenset({"allowed", "blocked", "transformed", "reported", "alerted"})
+_EVENT_TYPES = frozenset({"input", "output", "tool_input", "tool_output", "tool_listing"})
+# The complete set an export may carry. Closed, so a new keyword argument is
+# invisible until someone decides it is safe to send.
+_EXPORTABLE_FIELDS = frozenset(
+    {
+        "status",
+        "request_id",
+        "timestamp",
+        "summary",
+        "policy_name",
+        "event_type",
+        "detectors",
+        "user_id",
+        "app_id",
+        "model",
+        "llm_provider",
+        "source_ip",
+        "device_id",
+    }
+)
+
+
+def _safe_request_id(value: object) -> str | None:
+    """The same check storage uses, so the two boundaries cannot drift."""
+    return value if is_generated_request_id(value) else None  # type: ignore[return-value]
+
+
+def _safe_timestamp(value: object) -> str | None:
+    from datetime import datetime
+
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).isoformat()
+    except ValueError:
+        return None
+
+
+def _fixed_summary(status: object, detectors: object) -> str:
+    """A summary built from closed codes, never from caller or operator text.
+
+    It used to be an f-string over the matched access-rule name, which is an
+    arbitrary control-plane value — operators put tenant names, customer
+    identifiers and incident references in them — and it crossed webhook and
+    syslog verbatim plus OCSF message and AIDR Vendor.summary.
+    """
+    verdict = (
+        status
+        if isinstance(status, str) and status in {"allowed", "blocked", "transformed", "reported", "alerted"}
+        else "allowed"
+    )
+    # Restricted to real detector names even though emit() projects first.
+    # A helper that is only safe because of what its caller did is a trap for
+    # the next caller.
+    from app.scanner_engine import _DETECTOR_REGISTRY
+
+    names = (
+        sorted(
+            k
+            for k, v in (detectors or {}).items()
+            if isinstance(v, dict) and v.get("detected") and k in _DETECTOR_REGISTRY
+        )
+        if isinstance(detectors, dict)
+        else []
+    )
+    if not names:
+        return verdict
+    return f"{verdict}: " + ", ".join(names[:5])
+
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +159,29 @@ class ExportService:
         The service owns what may cross this boundary (P0-6).
         """
         kwargs["detectors"] = project_detectors(kwargs.get("detectors"))
+        # Every textual field, not just detectors. Normalising at one call site
+        # leaves the invariant one caller away from being lost, and the summary
+        # in particular was built from an arbitrary control-plane rule name.
+        for field in ("user_id", "app_id", "model", "llm_provider", "device_id", "policy_name"):
+            if field in kwargs:
+                kwargs[field] = _safe_meta(kwargs[field], field)
+        if "source_ip" in kwargs:
+            kwargs["source_ip"] = _safe_ip(kwargs["source_ip"])
+        kwargs["summary"] = _fixed_summary(kwargs.get("status"), kwargs.get("detectors"))
+
+        # Generated/resolved fields, normalised here too. Sanitising only the
+        # obviously-caller-supplied keys left request_id, timestamp, status and
+        # event_type forwarded verbatim, and a direct caller of emit() is as
+        # real a boundary as the guard route.
+        kwargs["status"] = kwargs.get("status") if kwargs.get("status") in _STATUSES else "allowed"
+        kwargs["event_type"] = kwargs.get("event_type") if kwargs.get("event_type") in _EVENT_TYPES else "input"
+        kwargs["request_id"] = _safe_request_id(kwargs.get("request_id"))
+        kwargs["timestamp"] = _safe_timestamp(kwargs.get("timestamp"))
+
+        # Anything not in the closed set is dropped rather than forwarded. An
+        # open kwargs bag means every builder-only field — collector_type,
+        # api_key_name, fpe_context — sits outside the sink invariant.
+        kwargs = {k: v for k, v in kwargs.items() if k in _EXPORTABLE_FIELDS}
         status = kwargs.get("status", "allowed")
         targets = self._get_matching_targets(status)
 

@@ -1,4 +1,5 @@
 """Tests for SQLAlchemy ORM models."""
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -95,7 +96,7 @@ def test_create_interaction(db_session):
         blocked=True,
         transformed=False,
         latency_ms=150.5,
-        summary="malicious_prompt: blocked",
+        evidence_json={"malicious_prompt": {"detected": True}},
     )
     db_session.add(interaction)
     db_session.commit()

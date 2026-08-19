@@ -103,11 +103,22 @@ def test_an_unknown_field_is_dropped_rather_than_passed_through():
     nothing would fail.
     """
     projected = project_detectors(
-        {"future_detector": {"detected": True, "status": "ok", "leaked_field": CANARY, "data": {"raw_text": CANARY}}}
+        {"topic": {"detected": True, "status": "ok", "leaked_field": CANARY, "data": {"raw_text": CANARY}}}
     )
 
     assert CANARY not in _flatten(projected)
-    assert projected["future_detector"]["detected"] is True
+    assert projected["topic"]["detected"] is True
+
+
+def test_an_unknown_detector_name_is_dropped_entirely():
+    """A detector that does not exist is not evidence.
+
+    The name is a channel too: a lexical check accepted
+    {"REVEALSECRETSNOW": {"detected": true}}, which is the arbitrary-evidence
+    bypass moved from a value to a key.
+    """
+    assert project_detectors({f"{CANARY}": {"detected": True}}) == {}
+    assert project_detectors({f"_{CANARY}": {"degraded": True}}) == {}
 
 
 @pytest.mark.parametrize("garbage", [None, "string", 42, [], {"d": "not-a-dict"}])
@@ -142,8 +153,10 @@ def test_an_unrecognised_type_label_becomes_OTHER(label):
 
 def test_a_recognised_type_label_survives():
     """The record still has to say what kind of thing fired."""
-    projected = project_detectors({"pii": {"detected": True, "data": {"entities": [{"type": "EMAIL_ADDRESS"}]}}})
-    assert projected["pii"]["entities"] == [{"type": "EMAIL_ADDRESS", "count": 1}]
+    projected = project_detectors(
+        {"confidential_and_pii_entity": {"detected": True, "data": {"entities": [{"type": "EMAIL_ADDRESS"}]}}}
+    )
+    assert projected["confidential_and_pii_entity"]["entities"] == [{"type": "EMAIL_ADDRESS", "count": 1}]
 
 
 # ---------------------------------------------------------------------------
@@ -352,9 +365,11 @@ def test_an_unclassified_label_is_flagged_not_silently_bucketed():
 
 
 def test_a_fully_known_payload_is_not_flagged():
-    projected = project_detectors({"pii": {"detected": True, "data": {"entities": [{"type": "US_SSN"}]}}})
+    projected = project_detectors(
+        {"confidential_and_pii_entity": {"detected": True, "data": {"entities": [{"type": "US_SSN"}]}}}
+    )
 
-    assert "unclassified_types" not in projected["pii"]
+    assert "unclassified_types" not in projected["confidential_and_pii_entity"]
 
 
 def test_projection_is_idempotent():

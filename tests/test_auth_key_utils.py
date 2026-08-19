@@ -1,4 +1,5 @@
 """Tests for API key utilities."""
+
 import pytest
 
 
