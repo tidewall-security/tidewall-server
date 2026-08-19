@@ -369,3 +369,232 @@ describe('continuity, and its five conditions', () => {
     expect(contentCalls.length).toBe(1);
   });
 });
+
+describe('a stale response is discarded', () => {
+  // Each of these was a guard no test killed until now.
+  function deferredContent() {
+    let resolve;
+    const pending = new Promise((r) => { resolve = r; });
+    globalThis.API.getLogContent = (id, view, opts) => {
+      contentCalls.push({ id, view, opts });
+      return pending;
+    };
+    return () => resolve(contentResponse);
+  }
+
+  async function clickThen(action) {
+    loadFindings();
+    await flush();
+    const settle = deferredContent();
+    document.querySelector('[data-content-view="full"]').click();
+    await flush();
+    await action();
+    settle();
+    await flush();
+    return document.body.textContent.includes(CANARY);
+  }
+
+  it('does not write after Hide', async () => {
+    expect(await clickThen(async () => {
+      const hide = document.querySelector('.content-hide');
+      if (hide) hide.click();
+    })).toBe(false);
+  });
+
+  it('does not write after the page is hidden', async () => {
+    expect(await clickThen(async () => {
+      Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+      document.dispatchEvent(new window.Event('visibilitychange'));
+    })).toBe(false);
+  });
+
+  it('does not write after pagehide', async () => {
+    expect(await clickThen(async () => {
+      window.dispatchEvent(new window.Event('pagehide'));
+    })).toBe(false);
+  });
+
+  it('does not write after the credential changes', async () => {
+    expect(await clickThen(async () => {
+      globalThis.TidewallAuth.fireCredentialChange();
+      await flush();
+    })).toBe(false);
+  });
+
+  it('does not write into a rebuilt panel after a filter render', async () => {
+    // The detached-container guard: without it a late response writes into a
+    // node that is no longer in the document, or into the wrong one.
+    expect(await clickThen(async () => {
+      const input = document.getElementById('searchInput');
+      input.value = 'zzz-matches-nothing';
+      input.dispatchEvent(new window.Event('input'));
+      await flush();
+    })).toBe(false);
+  });
+});
+
+describe('a 200 must be about the request', () => {
+  async function attempt(body) {
+    contentResponse = { ok: true, status: 200, body: body };
+    loadFindings();
+    await flush();
+    document.querySelector('[data-content-view="full"]').click();
+    await flush();
+    return document.body.textContent;
+  }
+
+  const good = () => ({
+    interaction_id: 1, view: 'full', captured_at: 'x', expires_at: null,
+    messages: [{ content: CANARY }], tools: null, output: null, matches: null
+  });
+
+  it('rejects a body describing a different interaction', async () => {
+    const text = await attempt(Object.assign(good(), { interaction_id: 99 }));
+    expect(text).not.toContain(CANARY);
+    expect(text).toContain('could not be read');
+  });
+
+  it('rejects a body describing a different view', async () => {
+    const text = await attempt(Object.assign(good(), { view: 'matches' }));
+    expect(text).not.toContain(CANARY);
+  });
+
+  it('rejects a non-string captured_at', async () => {
+    expect(await attempt(Object.assign(good(), { captured_at: 12345 }))).not.toContain(CANARY);
+  });
+
+  it('rejects a non-array messages', async () => {
+    expect(await attempt(Object.assign(good(), { messages: 'a string' }))).not.toContain(CANARY);
+  });
+
+  it('rejects a malformed matches block', async () => {
+    expect(await attempt(Object.assign(good(), { matches: { schema_version: 'one', matches: [] } })))
+      .not.toContain(CANARY);
+  });
+
+  it('ignores an unexpected extra field', async () => {
+    // A future server field must be added deliberately, not appear because a
+    // dump found it.
+    const text = await attempt(Object.assign(good(), { surprise: 'extra-' + CANARY }));
+    expect(text).toContain(CANARY);      // the messages are rendered
+    expect(text).not.toContain('extra-' + CANARY);
+  });
+});
+
+describe('each status has its own answer', () => {
+  async function statusText(res) {
+    contentResponse = res;
+    loadFindings();
+    await flush();
+    document.querySelector('[data-content-view="full"]').click();
+    await flush();
+    return document.querySelector('.content-status').textContent;
+  }
+
+  it('403 says the grant is missing, and removes the control', async () => {
+    const text = await statusText({ ok: false, status: 403, body: null });
+    expect(text).toContain('grant');
+    // The endpoint is authoritative: the advisory button must actually go.
+    expect(document.querySelector('[data-content-view="full"]')).toBeNull();
+  });
+
+  it('404 says it is no longer available', async () => {
+    expect(await statusText({ ok: false, status: 404, body: null })).toContain('no longer available');
+  });
+
+  it('500 says the stored content could not be read', async () => {
+    expect(await statusText({ ok: false, status: 500, body: null })).toContain('could not be read');
+  });
+
+  it('503 says the access could not be recorded, not that content is missing', async () => {
+    const text = await statusText({ ok: false, status: 503, body: null });
+    expect(text).toContain('recorded');
+    expect(text).not.toContain('no longer available');
+  });
+
+  it('400 says the request was not valid', async () => {
+    expect(await statusText({ ok: false, status: 400, body: null })).toContain('not valid');
+  });
+
+  it('a network failure says the request failed', async () => {
+    expect(await statusText({ ok: false, status: 0, body: null })).toContain('request failed');
+  });
+
+  it('leaves the button retryable after a failure', async () => {
+    await statusText({ ok: false, status: 500, body: null });
+    const btn = document.querySelector('[data-content-view="full"]');
+    expect(btn).not.toBeNull();
+    expect(btn.disabled).toBe(false);
+  });
+});
+
+describe('a credential change replaces the previous principal\'s controls', () => {
+  it('reloads capabilities and re-renders', async () => {
+    loadFindings();
+    await flush();
+    expect(document.querySelectorAll('.content-btn').length).toBeGreaterThan(0);
+
+    // The new principal may read nothing.
+    capabilityResponse = { ok: true, status: 200, body: { content: { matches: false, full: false } } };
+    globalThis.TidewallAuth.fireCredentialChange();
+    await flush();
+
+    expect(document.querySelectorAll('.content-btn').length).toBe(0);
+    expect(document.body.textContent).toContain('requires an additional grant');
+  });
+});
+
+describe('capability states are distinguishable', () => {
+  it('says permissions could not be checked, rather than claiming no grant', async () => {
+    capabilityResponse = { ok: false, status: 500, body: null };
+    loadFindings();
+    await flush();
+    expect(document.body.textContent).toContain('could not be checked');
+    expect(document.body.textContent).not.toContain('requires an additional grant');
+    expect(document.querySelectorAll('.content-btn').length).toBe(0);
+  });
+
+  it('offers only the views the caller has', async () => {
+    capabilityResponse = { ok: true, status: 200, body: { content: { matches: true, full: false } } };
+    loadFindings();
+    await flush();
+    expect(document.querySelector('[data-content-view="matches"]')).not.toBeNull();
+    expect(document.querySelector('[data-content-view="full"]')).toBeNull();
+  });
+});
+
+describe('a response for a detached panel is discarded', () => {
+  it('does not become visible on a later render', async () => {
+    // The generation is still current here -- a search render does not clear a
+    // disclosure that has not been set yet -- so only the isConnected check
+    // stops the value being stored against a node that left the document.
+    // Without it the value is retained and the NEXT render reattaches it,
+    // which is how a discarded response becomes visible.
+    let resolve;
+    const pending = new Promise((r) => { resolve = r; });
+    loadFindings();
+    await flush();
+    globalThis.API.getLogContent = (id, view, opts) => {
+      contentCalls.push({ id, view, opts });
+      return pending;
+    };
+    document.querySelector('[data-content-view="full"]').click();
+    await flush();
+
+    // Re-render so the panel the request started for is detached.
+    const input = document.getElementById('searchInput');
+    input.value = 'tw_';           // still matches, so the row stays
+    input.dispatchEvent(new window.Event('input'));
+    await flush();
+
+    resolve(contentResponse);
+    await flush();
+
+    // And render once more: a retained value would be reattached here.
+    input.value = 'tw';
+    input.dispatchEvent(new window.Event('input'));
+    await flush();
+
+    expect(document.body.textContent).not.toContain(CANARY);
+  });
+});

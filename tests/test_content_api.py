@@ -1003,8 +1003,23 @@ def test_capabilities_takes_no_subject(me_env):
         assert body == {"content": {"matches": False, "full": False}}, f"{query} changed the answer"
 
 
-def test_capabilities_is_uncacheable(me_env):
+@pytest.mark.parametrize(
+    "headers_factory",
+    [
+        lambda Session: None,  # no credential: a 401 from AuthMiddleware
+        lambda Session: {"Authorization": "Bearer ak_not_a_real_key"},
+        lambda Session: _key(Session, role="viewer", policy_id="policy-a", grants=[CONTENT_READ]),
+        lambda Session: _key(Session, role="api", policy_id="policy-a", grants=None),
+    ],
+)
+def test_capabilities_is_uncacheable_on_every_path(me_env, headers_factory):
+    """Including the 401s AuthMiddleware returns before the route runs.
+
+    The route can only header its own responses, so those were cacheable while
+    the test checked a 200 only.
+    """
     client, Session = me_env
-    headers = _key(Session, role="viewer", policy_id="policy-a", grants=[CONTENT_READ])
-    resp = client.get("/v1/me/capabilities", headers=headers)
-    assert resp.headers["cache-control"] == "no-store"
+    headers = headers_factory(Session)
+    resp = client.get("/v1/me/capabilities", headers=headers or {})
+    assert resp.headers["cache-control"] == "no-store", f"{resp.status_code} was cacheable"
+    assert resp.headers["pragma"] == "no-cache"

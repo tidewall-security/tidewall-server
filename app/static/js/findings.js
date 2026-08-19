@@ -105,6 +105,12 @@
         capabilities = null;
         capabilitiesFailed = false;
         clearDisclosure();
+        // And the buttons must go with it. Nulling the state without
+        // re-rendering left the previous principal's controls on screen and
+        // clickable -- offering an operation the current credential may not
+        // have, and inviting a denied read that gets audited against them.
+        renderTable();
+        loadCapabilities();
       });
     }
     loadCapabilities();
@@ -473,17 +479,19 @@
    */
   function reattachDisclosure() {
     if (!disclosure || !tbody) return;
-    var section = null;
+    var section = findSectionFor(disclosure.interactionId);
+    if (!section) return;
+    renderContentSection(section, disclosure.value);
+  }
+
+  function findSectionFor(interactionId) {
+    if (!tbody) return null;
     var sections = tbody.querySelectorAll('.content-section');
     for (var i = 0; i < sections.length; i++) {
       var btn = sections[i].querySelector('.content-btn');
-      if (btn && String(btn.getAttribute('data-content-id')) === String(disclosure.interactionId)) {
-        section = sections[i];
-        break;
-      }
+      if (btn && String(btn.getAttribute('data-content-id')) === String(interactionId)) return sections[i];
     }
-    if (!section) return;
-    renderContentSection(section, disclosure.value);
+    return null;
   }
 
   // ---- The one place a content request is made ----
@@ -562,8 +570,16 @@
         } else {
           if (res.status === 403) {
             // The endpoint is authoritative; the advisory snapshot was stale.
+            // Re-render so the control actually goes away: updating only the
+            // hidden state left a denied button sitting there, immediately
+            // retryable, while the comment claimed the UI had updated.
             capabilities = Object.assign({}, capabilities);
             capabilities[view] = false;
+            var message = statusMessage(res);
+            renderTable();
+            var rebuilt = findSectionFor(interactionId);
+            if (rebuilt) setStatus(rebuilt, message);
+            return;
           }
           setStatus(section, statusMessage(res));
         }
