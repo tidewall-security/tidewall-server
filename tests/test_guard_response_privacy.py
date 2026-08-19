@@ -311,3 +311,69 @@ def test_no_matches_are_captured_when_capture_is_off(client_and_key):
         assert session.query(InteractionContent).count() == 0
     finally:
         session.close()
+
+
+def test_a_match_in_a_later_message_is_attributed_to_that_message(client_and_key):
+    """The guard flattens messages before scanning, so a detector reports
+    offsets into the concatenation. Recording those as message[0] was factually
+    wrong: a match in the third message was stored as having come from the
+    first, and the role was always lost."""
+    from app.db.models import InteractionContent, Policy
+
+    client, key = client_and_key
+    factory = client.app.state.session_factory
+
+    session = factory()
+    try:
+        session.query(Policy).first().raw_content_enabled = True
+        session.commit()
+    finally:
+        session.close()
+    client.app.state.policy_service.invalidate_all_engines()
+
+    client.post(
+        "/v1/guard_chat_completions",
+        json={
+            "guard_input": {
+                "messages": [
+                    {"role": "system", "content": "you are helpful"},
+                    {"role": "user", "content": "nothing here"},
+                    {"role": "assistant", "content": f"the token is {CANARY}"},
+                ]
+            },
+            "event_type": "input",
+        },
+        headers={"Authorization": f"Bearer {key}"},
+    )
+
+    session = factory()
+    try:
+        matches = session.query(InteractionContent).one().matches_json
+    finally:
+        session.close()
+
+    assert matches and matches["matches"], "no match was captured"
+    entry = next(m for m in matches["matches"] if CANARY in m["value"])
+    assert entry["source"]["index"] == 2, f"attributed to message {entry['source']['index']}, not 2"
+    assert entry["source"]["role"] == "assistant"
+
+
+def test_a_match_spanning_the_join_boundary_is_dropped(client_and_key):
+    """The separator can create a string that occurs in no original message.
+    Attributing it to whichever message it started in would be a fabricated
+    provenance record."""
+    from app.services.audit_evidence import MatchCollector, SourceRef
+
+    collector = MatchCollector()
+    collector.register_flattened(
+        [
+            (SourceRef(kind="message", index=0, field="content", role="user"), "abc", 0),
+            (SourceRef(kind="message", index=1, field="content", role="user"), "def", 4),
+        ]
+    )
+
+    # "c d" spans the join.
+    assert collector.resolve_flattened(2, 5) is None
+    # Wholly inside the second message.
+    resolved = collector.resolve_flattened(4, 7)
+    assert resolved is not None and resolved[0].index == 1

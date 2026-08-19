@@ -20,6 +20,8 @@ so detector models are loaded once and reused across requests.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -136,6 +138,16 @@ _DETECTOR_REGISTRY: dict[str, tuple[str, str]] = {
     "competitors": ("app.detectors.competitors", "CompetitorsDetector"),
     "emoji": ("app.detectors.emoji_detector", "EmojiDetector"),
 }
+
+
+@contextmanager
+def _capture_scope(collector: Any, detector: str) -> Iterator[Any]:
+    """One exact-match batch per detector run, or nothing when capture is off."""
+    if collector is None:
+        yield None
+        return
+    with collector.capture(detector) as batch:
+        yield batch
 
 
 def _detector_applies(name: str, event_type: str) -> bool:
@@ -381,15 +393,20 @@ class ScannerEngine:
                 # The collector is passed to detectors that can report exact
                 # matches. It is optional so a detector that does not is
                 # unaffected, and so a scan without capture pays nothing.
-                extra: dict[str, Any] = {"matches": matches} if matches is not None else {}
-                if det_name == "mcp_validation" and tools:
-                    det_result = detector.scan(current_text, tools=tools, **extra)
-                elif det_name == "malicious_prompt" and messages:
-                    det_result = detector.scan(current_text, messages=messages, **extra)
-                elif det_name == "confidential_and_pii_entity" and vault is not None:
-                    det_result = detector.scan(current_text, vault=vault, **extra)
-                else:
-                    det_result = detector.scan(current_text, **extra)
+                # One capture scope around each detector call, so anything it
+                # staged is discarded if it raises part-way. Opening a capture
+                # per match let a detector that failed later still persist a
+                # plausible partial set.
+                with _capture_scope(matches, det_name) as batch:
+                    extra: dict[str, Any] = {"matches": batch} if batch is not None else {}
+                    if det_name == "mcp_validation" and tools:
+                        det_result = detector.scan(current_text, tools=tools, **extra)
+                    elif det_name == "malicious_prompt" and messages:
+                        det_result = detector.scan(current_text, messages=messages, **extra)
+                    elif det_name == "confidential_and_pii_entity" and vault is not None:
+                        det_result = detector.scan(current_text, vault=vault, **extra)
+                    else:
+                        det_result = detector.scan(current_text, **extra)
             except Exception as exc:
                 logger.error("Detector '%s' raised during scan: %s", det_name, describe(exc))
                 result.record_failure(det_name, FailureCode.SCAN_FAILED, detector.action)

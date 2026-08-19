@@ -736,3 +736,54 @@ def test_the_stored_form_carries_a_schema_version():
     assert payload["schema_version"] == 1
     assert payload["matches"][0]["value"] == "alice@example.com"
     assert "start" not in json_keys(payload)
+
+
+def test_a_detector_that_fails_part_way_stores_nothing():
+    """One capture scope per detector run.
+
+    An earlier helper opened and committed a fresh capture per match, so a
+    detector that failed later still persisted a plausible partial set — while
+    the safe evidence recorded no successful finding for it.
+    """
+    from app.services.audit_evidence import report_match
+
+    collector = MatchCollector()
+    collector.register_flattened([(MSG, "alice@example.com and more text here", 0)])
+
+    with pytest.raises(EvidenceError):
+        with collector.capture("pii") as batch:
+            report_match(batch, "pii", "EMAIL_ADDRESS", "alice@example.com", 0, 17)
+            # Stale: this value is not at these offsets.
+            report_match(batch, "pii", "US_SSN", "123-45-6789", 22, 33)
+
+    assert collector.finalize() == [], "a partial detector batch survived"
+
+
+def test_an_exception_after_a_reported_match_discards_it():
+    """The PII path reports before redaction; if redaction then raises, the
+    detector is recorded as failed and must not leave exact values behind."""
+    from app.services.audit_evidence import report_match
+
+    collector = MatchCollector()
+    collector.register_flattened([(MSG, "alice@example.com", 0)])
+
+    with pytest.raises(RuntimeError):
+        with collector.capture("pii") as batch:
+            report_match(batch, "pii", "EMAIL_ADDRESS", "alice@example.com", 0, 17)
+            raise RuntimeError("redaction blew up")
+
+    assert collector.finalize() == []
+
+
+def test_a_successful_detector_batch_is_kept():
+    from app.services.audit_evidence import report_match
+
+    collector = MatchCollector()
+    collector.register_flattened([(MSG, "alice@example.com", 0)])
+
+    with collector.capture("pii") as batch:
+        report_match(batch, "pii", "EMAIL_ADDRESS", "alice@example.com", 0, 17)
+
+    groups = collector.finalize()
+    assert len(groups) == 1
+    assert groups[0].value == "alice@example.com"

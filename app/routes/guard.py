@@ -239,7 +239,23 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
         from app.services.audit_evidence import MatchCollector, SourceRef
 
         match_collector = MatchCollector()
-        match_collector.register_source(SourceRef(kind="message", index=0, field="content"), all_text)
+        # Per message, with each one's offset into the flattened text, so a
+        # match is attributed to the message it actually came from rather than
+        # to the first one.
+        segments = []
+        cursor = 0
+        for index, message in enumerate(messages or []):
+            # Not `body` — that is the request.
+            segment_text = str(message.get("content") or "")
+            segments.append(
+                (
+                    SourceRef(kind="message", index=index, field="content", role=message.get("role") or None),
+                    segment_text,
+                    cursor,
+                )
+            )
+            cursor += len(segment_text) + 1  # the single space the flattening inserts
+        match_collector.register_flattened(segments)
 
     scan_result = await asyncio.to_thread(
         engine.scan, all_text, event_type, vault_id, vault, tools, messages, match_collector

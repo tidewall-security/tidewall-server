@@ -33,6 +33,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.db.models import Interaction, InteractionContent
+from app.services.audit_evidence import MAX_MATCHES_JSON_BYTES
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,14 @@ def build_content(
     encoded = b"".join(
         json.dumps(value).encode("utf-8") for value in (payload_in, output_messages, matches) if value is not None
     )
+
+    # The match bound, enforced on what is actually persisted. The collector
+    # checks its own compact canonical form, but that is not what goes into the
+    # JSON column — so a payload under the limit there could exceed it here.
+    if matches is not None:
+        stored_matches = len(json.dumps(matches).encode("utf-8"))
+        if stored_matches > MAX_MATCHES_JSON_BYTES:
+            raise ValueError(f"stored matches would be {stored_matches} bytes, over the {MAX_MATCHES_JSON_BYTES} limit")
 
     expires_at = datetime.now(UTC) + timedelta(days=retention_days) if retention_days else None
     return PreparedContent(

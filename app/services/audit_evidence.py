@@ -301,10 +301,36 @@ class MatchCollector:
     _originals: dict[SourceRef, str] = field(default_factory=dict, repr=False)
     _matches: list[ExactMatch] = field(default_factory=list, repr=False)
     _finalized: bool = field(default=False, repr=False)
+    _segments: list[tuple[SourceRef, str, int]] = field(default_factory=list, repr=False)
     _capture_open: bool = field(default=False, repr=False)
 
     def __getstate__(self) -> None:
         raise EvidenceError("collector.not_serializable", "the collector holds original content and offsets")
+
+    def register_flattened(self, segments: list[tuple[SourceRef, str, int]]) -> None:
+        """Register the originals behind a concatenated scan text.
+
+        The guard flattens every message into one string before scanning, so a
+        detector reports offsets into that concatenation. Recording those as
+        `message[0].content` was factually wrong: a match in the third message
+        was stored as having come from the first, roles were always lost, and
+        the separator could produce a string that appears in no original field.
+
+        Each segment is (source, original text, offset of that text within the
+        flattened string). A span is resolved back to exactly one segment, and
+        a span crossing a boundary is refused rather than attributed to
+        whichever segment it started in.
+        """
+        self._segments = sorted(segments, key=lambda seg: seg[2])
+        for source, original, _offset in self._segments:
+            self.register_source(source, original)
+
+    def resolve_flattened(self, start: int, end: int) -> tuple[SourceRef, int, int] | None:
+        """Map a flattened span to (source, start, end) in its original field."""
+        for source, original, offset in getattr(self, "_segments", []):
+            if start >= offset and end <= offset + len(original):
+                return source, start - offset, end - offset
+        return None
 
     def register_source(self, source: SourceRef, original: str) -> None:
         """Record a field as it arrived, before any detector runs."""
@@ -534,43 +560,49 @@ class _DetectorCapture:
 
 
 def report_match(
-    collector: MatchCollector | None,
+    batch: _DetectorCapture | None,
     detector: str,
     match_type: str,
     value: str,
     start: int,
     end: int,
     *,
-    source: SourceRef | None = None,
     rule_id: str | None = None,
 ) -> None:
-    """Record one match, if anyone is collecting.
+    """Stage one match in the detector's open batch, if anyone is collecting.
 
-    A helper rather than a method so a detector needs no knowledge of the
-    collector's lifecycle: it either has one or it does not, and a scan with
-    capture off pays nothing.
+    Takes the batch rather than the collector deliberately. An earlier version
+    opened and committed a fresh capture per match, which defeated the whole
+    point of the batch: a later invalid match no longer discarded the earlier
+    ones, so a detector that failed part-way could still persist a plausible
+    partial set — and the safe evidence would record no successful finding for
+    it. The scanner opens one capture around each detector call, so a detector
+    that raises discards everything it staged.
 
-    Failures here are swallowed deliberately. A detector's job is detection —
-    if provenance cannot be established for one value, the audit record loses
-    that value, and the alternative is failing a security scan because a
-    bookkeeping check did not like an offset. The capture fails closed, which
-    is the direction that matters.
+    Offsets arrive relative to the flattened scan text and are resolved back to
+    the single original message they came from. A span crossing a boundary is
+    dropped rather than attributed to whichever message it started in.
     """
-    if collector is None:
+    if batch is None:
         return
+    resolved = batch._collector.resolve_flattened(start, end)
+    if resolved is None:
+        logger.debug("exact match for %s could not be attributed to one message; dropped", detector)
+        return
+    source, local_start, local_end = resolved
     try:
-        with collector.capture(detector) as batch:
-            batch.add(
-                ExactMatch(
-                    detector=detector,
-                    match_type=match_type,
-                    source=source or SourceRef(kind="message", index=0, field="content"),
-                    value=value,
-                    start=start,
-                    end=end,
-                    rule_id=rule_id,
-                )
+        batch.add(
+            ExactMatch(
+                detector=detector,
+                match_type=match_type,
+                source=source,
+                value=value,
+                start=local_start,
+                end=local_end,
+                rule_id=rule_id,
             )
+        )
     except EvidenceError:
-        # No content in the log line: this runs where an operator can see it.
-        logger.debug("exact match for %s failed validation and was not recorded", detector)
+        # Re-raised so the surrounding capture discards this detector's whole
+        # batch. Swallowing it here is what made partial capture silent.
+        raise
