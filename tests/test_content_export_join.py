@@ -1,7 +1,14 @@
 """The cancellation-resistant join used for settlement and cleanup.
 
-Deterministic: every case is driven by events rather than sleeps, so the
-completion races are exercised exactly rather than approximately.
+Rendezvous is by event where the ordering matters -- "the task has started",
+"the joiner is waiting" -- so those points are exact. Some tasks then run for a
+short fixed sleep to give the joiner something to wait on; that is duration,
+not synchronisation, and no assertion depends on how long it takes.
+
+These test the helper. They say nothing about whether the route calls it:
+that is tests/test_content_export_cancellation.py, and the two were separately
+necessary -- both call sites were replaceable with a plain await while every
+test here stayed green.
 """
 
 from __future__ import annotations
@@ -151,17 +158,44 @@ def test_a_task_that_completes_on_the_cancelling_tick_still_has_its_result_drain
     assert len(errors) == 1, "the task's exception was never retrieved"
 
 
-def test_the_task_reference_is_held_so_it_cannot_be_collected():
-    """A bare create_task is owned by nothing; the caller must hold it."""
+def test_the_join_holds_its_own_reference_to_the_task():
+    """A bare create_task is owned by nothing but the loop's weak set.
+
+    An earlier version of this test kept the task in a local of its own and
+    then called gc.collect(), which could only ever prove that a strongly
+    referenced object is not collected. The caller here drops every reference
+    it has before collecting, so the only thing keeping the task alive is the
+    join's own parameter.
+
+    Ownership by the *process* is a different property with a different test:
+    test_the_settlement_task_is_always_owned_by_the_process, in
+    tests/test_content_export_cancellation.py.
+    """
     import gc
 
     async def _go():
-        task = asyncio.create_task(asyncio.sleep(0.01, result="kept"))
-        gc.collect()
-        await _join_and_drain(task, on_error=lambda exc: None)
-        return task.result()
+        errors: list[Exception] = []
+        result: list[object] = []
 
-    assert _run(_go()) == "kept"
+        async def _work():
+            await asyncio.sleep(0.01)
+            result.append("kept")
+
+        async def _join_only(task):
+            # The task is now reachable from this frame's argument and from
+            # nowhere else the caller controls.
+            gc.collect()
+            gc.collect()
+            return await _join_and_drain(task, on_error=errors.append)
+
+        joiner = _join_only(asyncio.create_task(_work()))
+        cancelled = await joiner
+        return cancelled, errors, result
+
+    cancelled, errors, result = _run(_go())
+    assert result == ["kept"], "the task did not run to completion"
+    assert errors == []
+    assert cancelled is False
 
 
 @pytest.mark.parametrize("attempts_count", [1, 5])

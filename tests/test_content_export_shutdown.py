@@ -19,9 +19,12 @@ does not:
   so the task itself is the only evidence that work is pending.
 
 Note what does NOT hold these up: ``stop()`` drains workers itself, so once a
-settlement has reached its thread the ordering survives removing either the
-lifespan's settlement gather or its ``drain_workers()`` call. Each test below
-names the mechanism it kills.
+settlement has reached its thread the ordering survives removing the
+lifespan's ``drain_workers()`` call.
+
+Only the second and third tests isolate a mechanism, and each says which. The
+first isolates nothing -- several mechanisms would independently hold its
+ordering, and it passes with ``scheduler = None`` in the route.
 """
 
 from __future__ import annotations
@@ -228,10 +231,11 @@ def test_shutdown_waits_for_a_settlement_the_route_started(tmp_path):
     """The end-to-end claim: a real request's settlement outranks shutdown.
 
     Nothing is cancelled and the settlement has already reached its thread, so
-    several mechanisms would each hold this ordering on their own. It therefore
-    kills no single one of them -- what it proves is that the route reaches
-    them at all, which the scheduler-level tests cannot show. The two tests
-    that follow isolate the individual wirings.
+    several mechanisms would each hold this ordering on their own, and this
+    kills none of them individually -- it passes with the route's scheduler
+    dispatch removed. What it establishes is that a real request produces a
+    settlement the real lifespan waits for at all, which no test built from
+    synthetic tasks can show. The two that follow isolate the wirings.
     """
 
     async def scenario(app, ctx, harness):

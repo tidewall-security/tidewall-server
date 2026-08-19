@@ -289,9 +289,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         #    the drain stop() performs, which ran before step 2.
         #
         #    Not INDEPENDENTLY killable, and that is worth saying rather than
-        #    implying otherwise: it is redundant with the worker drain inside
-        #    stop(), so removing either one alone leaves every test green.
-        #    Removing BOTH fails
+        #    implying otherwise. For THIS scenario it is redundant with the
+        #    worker drain inside stop(): removing this call alone leaves every
+        #    test green. (The reverse is not true -- stop()'s own drain has a
+        #    direct test, test_stop_waits_for_a_tracked_worker_past_the_task_
+        #    timeout, which removing it fails.) Removing BOTH fails
         #    test_shutdown_waits_for_a_settlement_thread_whose_task_was_cancelled,
         #    which is the case they exist for -- a worker DETACHED by a
         #    cancelled await, where the task is done and only the thread is

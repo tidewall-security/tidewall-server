@@ -47,6 +47,17 @@ _FORBIDDEN_HEADERS = frozenset(
     }
 )
 
+#: Headers this server sets itself on a content export. They are refused in a
+#: target's configuration rather than allowed to lose a merge, because HTTP
+#: field names are case-insensitive while dict keys are not: a configured
+#: ``idempotency-key`` does not collide with the server's ``Idempotency-Key``
+#: in the dict, so both reach the wire. The receiver then chooses, and a
+#: receiver that honours the configured one can collapse two distinct attempts
+#: into one acknowledgement while this server records the second as succeeded.
+#: The attempt id has to be the only idempotency token on the request for the
+#: state it settles to mean anything.
+_SERVER_OWNED_HEADERS = frozenset({"idempotency-key", "content-type"})
+
 #: RFC 9110 token characters. A header name outside these is not a header name,
 #: and some intermediaries will interpret it as something else entirely.
 _TOKEN_CHARS = frozenset("!#$%&'*+-.^_`|~0123456789" "abcdefghijklmnopqrstuvwxyz" "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
@@ -79,7 +90,19 @@ def _is_public(addr: str) -> bool:
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         # ::ffff:127.0.0.1 is loopback wearing an IPv6 hat.
         ip = ip.ipv4_mapped
-    return not (
+    # Both halves are load-bearing, and neither is sufficient alone.
+    #
+    # The negative list alone admitted 100.64.0.0/10 (RFC 6598 shared address
+    # space): Python reports it as neither private nor reserved, so "not
+    # private and not reserved" is not the same question as "routable on the
+    # public internet". That range is carrier-grade NAT space and is also a
+    # common internal overlay range -- Tailscale uses it -- so accepting it
+    # is a live SSRF path into an internal network.
+    #
+    # is_global alone is wrong in the other direction: Python reports
+    # 224.0.0.1 as global (it is globally *scoped* multicast), so the
+    # multicast check still has to be here.
+    return ip.is_global and not (
         ip.is_loopback
         or ip.is_link_local  # includes 169.254.169.254, the cloud metadata address
         or ip.is_private
@@ -160,6 +183,8 @@ def validate_headers(headers: dict[str, str] | None) -> dict[str, str]:
             raise DestinationRefused("header names and values must be strings")
         if name.lower() in _FORBIDDEN_HEADERS:
             raise DestinationRefused(f"header {name!r} is not permitted")
+        if name.lower() in _SERVER_OWNED_HEADERS:
+            raise DestinationRefused(f"header {name!r} is set by this server and cannot be configured")
         if not name or any(c not in _TOKEN_CHARS for c in name):
             raise DestinationRefused(f"header name {name!r} is not a valid HTTP token")
         # Every control character, not just CR, LF and NUL: the others are no

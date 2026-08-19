@@ -61,7 +61,23 @@ def test_a_refused_url_shape_never_resolves(url, why, monkeypatch):
         "[fd00::1]",
         "[::ffff:127.0.0.1]",  # loopback wearing an IPv6 hat
         "0.0.0.0",
-        "224.0.0.1",
+        "224.0.0.1",  # globally SCOPED multicast: Python calls this is_global
+        # Special-use ranges that are neither private nor reserved, so a
+        # negative "not private and not reserved" rule admits every one of
+        # them. 100.64/10 is the one that mattered: carrier-grade NAT space,
+        # and the range Tailscale hands out.
+        "100.64.0.1",
+        "[::ffff:100.64.0.1]",
+        "192.0.0.1",  # IETF protocol assignments
+        "192.0.2.1",  # TEST-NET-1
+        "198.18.0.1",  # benchmarking
+        "198.51.100.1",  # TEST-NET-2
+        "203.0.113.1",  # TEST-NET-3
+        "240.0.0.1",  # future use
+        "255.255.255.255",  # broadcast
+        "[64:ff9b::808:808]",  # NAT64 well-known prefix
+        "[2001:db8::1]",  # documentation
+        "[2002:808:808::1]",  # 6to4 wrapping a public v4 address
     ],
 )
 def test_a_non_public_address_literal_is_refused(literal, monkeypatch):
@@ -516,3 +532,79 @@ def test_every_address_failing_raises_rather_than_connecting_by_name():
     backend = asyncio.run(_go())
     assert attempted == ["203.0.113.1", "203.0.113.2"]
     assert backend.phase == "not_started", "a failed connect claimed a connection"
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"idempotency-key": "attacker-chosen"},
+        {"Idempotency-Key": "attacker-chosen"},
+        {"IDEMPOTENCY-KEY": "attacker-chosen"},
+        {"IdEmPoTeNcY-kEy": "attacker-chosen"},
+        {"content-type": "text/plain"},
+        {"Content-Type": "text/plain"},
+        {"CONTENT-TYPE": "text/plain"},
+        {"cOnTeNt-TyPe": "text/plain"},
+    ],
+)
+def test_a_header_this_server_sets_itself_cannot_be_configured(headers):
+    """In any spelling. HTTP field names are case-insensitive and dict keys are
+    not, so a configured variant does not overwrite the server's value -- it
+    travels alongside it (see the test below for the proof)."""
+    with pytest.raises(DestinationRefused):
+        validate_headers(headers)
+
+
+def test_a_case_variant_header_would_otherwise_reach_the_wire_twice():
+    """Why the reservation above exists, checked against the real client.
+
+    This asserts the hazard, not a guard: if httpx ever collapsed case-variant
+    field names on its own, this test fails and the reservation's stated
+    rationale is no longer true. Nothing in production sends unvalidated
+    headers -- the route validates before it sends.
+    """
+    import asyncio
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    import app.services.export_transport as t
+
+    seen: list[list[str]] = []
+
+    class _Echo(BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen.append(self.headers.get_all("Idempotency-Key") or [])
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), _Echo)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    async def _go():
+        return await t.send_payload(
+            url=f"http://127.0.0.1:{port}/hook",
+            headers={"idempotency-key": "attacker-chosen", "Idempotency-Key": "server-owned"},
+            body=b"{}",
+            addresses=["127.0.0.1"],
+            deadline_seconds=5,
+        )
+
+    try:
+        result = asyncio.run(_go())
+    finally:
+        server.shutdown()
+
+    if result.closer is not None:
+        asyncio.run(result.closer())
+
+    assert seen, "the receiver was never reached, so this proves nothing"
+    assert len(seen[0]) == 2, (
+        f"expected both spellings on the wire, saw {seen[0]!r}; if this client now "
+        "collapses them, the reservation in _SERVER_OWNED_HEADERS needs a new rationale"
+    )
+    assert "attacker-chosen" in seen[0]
