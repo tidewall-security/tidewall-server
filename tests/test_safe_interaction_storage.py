@@ -651,12 +651,25 @@ def test_filters_are_applied_before_the_limit(scoped_app):
     assert any(r["request_id"] == "tw_old_blocked" for r in rows), "a match beyond the first page was filtered away"
 
 
-def test_alembic_head_matches_the_orm_schema(tmp_path):
-    """Two sources of truth that disagree are one source of surprise.
+def test_alembic_head_matches_the_orm_structurally(tmp_path):
+    """Structural parity between the migrated and ORM schemas.
 
-    A fresh install uses create_all; an upgraded one uses the migrations. When
-    they differ, a constraint that holds in tests does not hold in production,
-    or the reverse.
+    A fresh install uses create_all; an upgraded one uses the migrations, so a
+    difference means a constraint that holds in tests and not in production, or
+    the reverse.
+
+    Named for what it actually compares, which is: table and column presence,
+    nullability, column types, index names, primary keys, foreign keys with
+    their delete actions, and unique constraints.
+
+    It does NOT compare server defaults, check constraints, or index column
+    order and uniqueness. One known difference is deliberate: the migration
+    gives database-side defaults to evidence_schema_version,
+    content_available, raw_content_enabled, byte_size, captured_at and
+    accessed_at, because a migration must populate existing rows, while the ORM
+    uses Python-side defaults for new objects. That is the normal split, not
+    drift — but this test would not catch drift there, and its previous name
+    implied it would.
     """
     from app.db.models import Base
 
@@ -721,7 +734,7 @@ def test_alembic_head_matches_the_orm_schema(tmp_path):
         migrated.dispose()
         orm.dispose()
 
-    assert not differences, "migrated and ORM schemas diverge:\n" + "\n".join(differences)
+    assert not differences, "migrated and ORM schemas diverge structurally:\n" + "\n".join(differences)
 
 
 def test_the_response_model_rejects_an_unexpected_field(scoped_app):
