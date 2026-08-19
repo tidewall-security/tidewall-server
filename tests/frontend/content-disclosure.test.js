@@ -598,3 +598,89 @@ describe('a response for a detached panel is discarded', () => {
     expect(document.body.textContent).not.toContain(CANARY);
   });
 });
+
+describe('capability responses are scoped to the credential that asked', () => {
+  it('a late response for the previous principal does not restore its buttons', async () => {
+    // Responses do not have to arrive in order. Without an epoch check, a
+    // request started as principal A resolves after the credential changed and
+    // overwrites B's state -- restoring buttons for a principal who may not
+    // have them.
+    let resolveA;
+    const first = new Promise((r) => { resolveA = r; });
+    let call = 0;
+    globalThis.API.getCapabilities = () => {
+      call += 1;
+      if (call === 1) return first;
+      return Promise.resolve({ ok: true, status: 200, body: { content: { matches: false, full: false } } });
+    };
+
+    loadFindings();
+    await flush();                                   // request A outstanding
+
+    globalThis.TidewallAuth.fireCredentialChange();   // principal B
+    await flush();                                   // request B resolves: no capability
+    expect(document.querySelectorAll('.content-btn').length).toBe(0);
+
+    resolveA({ ok: true, status: 200, body: { content: { matches: true, full: true } } });
+    await flush();
+
+    expect(document.querySelectorAll('.content-btn').length).toBe(0);
+  });
+});
+
+describe('full-view body validation', () => {
+  async function attempt(body) {
+    contentResponse = { ok: true, status: 200, body: body };
+    loadFindings();
+    await flush();
+    document.querySelector('[data-content-view="full"]').click();
+    await flush();
+    return document.body.textContent;
+  }
+
+  const good = () => ({
+    interaction_id: 1, view: 'full', captured_at: 'x', expires_at: null,
+    messages: [], tools: null, output: null, matches: null
+  });
+
+  // A canary INSIDE the malformed value, so the assertion fails if the
+  // malformed value is rendered -- the first version put the canary elsewhere
+  // and passed while the bad value was displayed.
+  it.each(['messages', 'tools', 'output'])('rejects a non-array %s', async (field) => {
+    const body = good();
+    body[field] = 'not-an-array-' + CANARY;
+    const text = await attempt(body);
+    expect(text).not.toContain(CANARY);
+    expect(text).toContain('could not be read');
+  });
+
+  it('rejects a non-string, non-null expires_at', async () => {
+    const body = good();
+    body.expires_at = { nested: CANARY };
+    const text = await attempt(body);
+    expect(text).not.toContain(CANARY);
+  });
+
+  it('accepts a null expires_at, which means no time expiry', async () => {
+    const body = good();
+    body.messages = [{ content: CANARY }];
+    expect(await attempt(body)).toContain(CANARY);
+  });
+});
+
+describe('the offered views match the capabilities exactly', () => {
+  it.each([
+    [{ matches: true, full: true }, ['matches', 'full']],
+    [{ matches: true, full: false }, ['matches']],
+    [{ matches: false, full: true }, ['full']],
+    [{ matches: false, full: false }, []]
+  ])('%o offers %o', async (content, expected) => {
+    capabilityResponse = { ok: true, status: 200, body: { content: content } };
+    loadFindings();
+    await flush();
+    const offered = Array.from(document.querySelectorAll('.content-btn'))
+      .map((b) => b.getAttribute('data-content-view'));
+    // One row in the fixture, so one button per allowed view.
+    expect(offered).toEqual(expected);
+  });
+});

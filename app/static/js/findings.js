@@ -803,7 +803,13 @@
   // this call still yields 403 there, and the panel updates from that answer.
   function loadCapabilities() {
     if (!window.API || !API.getCapabilities) return;
+    // Scoped to the credential it was asked under. Without this, a request
+    // started as principal A can resolve AFTER the credential changed to B and
+    // overwrite B's state -- restoring A's buttons for a principal who may not
+    // have them, because responses do not have to arrive in order.
+    var epoch = authEpoch;
     API.getCapabilities().then(function (res) {
+      if (epoch !== authEpoch) return;
       if (res && res.ok && res.body && res.body.content) {
         capabilities = {
           matches: res.body.content.matches === true,
