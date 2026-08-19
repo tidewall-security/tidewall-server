@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -22,11 +22,15 @@ def require_sqlite(db_url: str) -> None:
     chronological order. On a database with a real datetime type that reasoning
     does not apply and the comparison would need revisiting.
     """
-    if not db_url.startswith("sqlite"):
-        raise RuntimeError(
-            "SQLite is the only supported database. "
-            f"DB_URL must begin with 'sqlite', got {db_url.split(':', 1)[0]!r}."
-        )
+    # The backend SQLAlchemy would actually load, not a string prefix:
+    # "sqliteevil://" starts with "sqlite" and is not SQLite, and would have
+    # slipped past to fail later in dialect loading instead of here.
+    try:
+        backend = make_url(db_url).get_backend_name()
+    except Exception as exc:
+        raise RuntimeError(f"DB_URL is not a valid database URL: {exc}") from exc
+    if backend != "sqlite":
+        raise RuntimeError(f"SQLite is the only supported database; DB_URL uses {backend!r}.")
 
 
 def get_engine(db_url: str, echo: bool = False) -> Engine:

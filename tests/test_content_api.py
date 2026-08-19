@@ -660,3 +660,241 @@ def test_there_is_no_bulk_form(env):
         resp = client.get(f"{path}?view=full", headers=headers)
         assert resp.status_code in (400, 404, 405), f"{path} returned {resp.status_code}"
         assert CANARY not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# The audit boundary covers acquisition, rollback and close
+# ---------------------------------------------------------------------------
+
+
+def test_an_audit_session_that_cannot_be_acquired_is_still_503(env, monkeypatch):
+    """Acquisition sat outside the boundary, so a factory failure reached the
+    endpoint's last-resort catch and turned the required 503 into a 500. The
+    earlier tests patched _audit only after a session already existed, so they
+    passed while this survived."""
+    client, Session = env
+    headers = _key(Session, role="viewer", policy_id="policy-a", grants=[CONTENT_READ])
+    interaction_id = _interaction(Session)
+
+    calls = {"n": 0}
+
+    def _factory():
+        # 1 = the authentication lookup, 2 = the scoped read, 3 = the audit.
+        calls["n"] += 1
+        if calls["n"] > 2:
+            raise RuntimeError("no session for you")
+        return Session()
+
+    client.app.state.session_factory = _factory
+    try:
+        resp = client.get(f"/v1/logs/{interaction_id}/content?view=full", headers=headers)
+    finally:
+        client.app.state.session_factory = Session
+
+    assert resp.status_code == 503, "an audit session failure became an internal error"
+    assert CANARY not in resp.text
+
+
+def test_an_audit_session_failure_on_a_denial_keeps_the_denial(env):
+    client, Session = env
+    headers = _key(Session, role="viewer", policy_id="policy-a", grants=None)
+    interaction_id = _interaction(Session)
+
+    calls = {"n": 0}
+
+    def _factory():
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise RuntimeError("no session for you")
+        return Session()
+
+    client.app.state.session_factory = _factory
+    try:
+        resp = client.get(f"/v1/logs/{interaction_id}/content?view=matches", headers=headers)
+    finally:
+        client.app.state.session_factory = Session
+
+    assert resp.status_code == 403, "an audit session failure replaced the denial"
+
+
+def test_a_close_failure_after_a_successful_audit_does_not_become_a_500(env, monkeypatch):
+    """close() sat in a finally outside the handler, so a close failure after a
+    successful commit escaped and turned an authorized read into a 500 the
+    caller cannot distinguish from a real fault."""
+    client, Session = env
+    headers = _key(Session, role="viewer", policy_id="policy-a", grants=[CONTENT_READ])
+    interaction_id = _interaction(Session)
+
+    real_close = Session.class_.close
+    state = {"closes": 0}
+
+    def _close(self):
+        # 1 = authentication, 2 = the scoped read, 3 = the audit session, which
+        # is the one whose close used to escape the boundary.
+        state["closes"] += 1
+        if state["closes"] >= 3:
+            raise RuntimeError("close failed")
+        return real_close(self)
+
+    monkeypatch.setattr(Session.class_, "close", _close)
+    resp = client.get(f"/v1/logs/{interaction_id}/content?view=full", headers=headers)
+    assert resp.status_code == 200, "a close failure became an internal error"
+
+
+def test_audit_failures_are_counted(env, monkeypatch):
+    """There is no metrics system here, so this is a process counter whose
+    running total goes into each failure record -- log-based alerting is what an
+    operator actually has today."""
+    import app.routes.content as content_module
+
+    client, Session = env
+    headers = _key(Session, role="viewer", policy_id="policy-a", grants=[CONTENT_READ])
+    interaction_id = _interaction(Session)
+
+    before = content_module.audit_failure_count()
+    monkeypatch.setattr(content_module, "_audit", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    client.get(f"/v1/logs/{interaction_id}/content?view=full", headers=headers)
+
+    assert content_module.audit_failure_count() == before + 1
+
+
+# ---------------------------------------------------------------------------
+# Canonical rendering, null equivalence, and the unhandled-exception path
+# ---------------------------------------------------------------------------
+
+
+def test_timestamps_render_canonically(env):
+    """ "ISO-8601 UTC" does not determine a unique body: Z against +00:00, and
+    trimmed against padded fractional seconds, are all defensible."""
+    client, Session = env
+    headers = _key(Session, role="viewer", policy_id="policy-a", grants=[CONTENT_READ])
+    interaction_id = _interaction(Session, expires_at=datetime.now(UTC) + timedelta(days=1))
+
+    body = client.get(f"/v1/logs/{interaction_id}/content?view=full", headers=headers).json()
+    for value in (body["captured_at"], body["expires_at"]):
+        assert value.endswith("Z"), value
+        assert "+00:00" not in value
+
+
+def test_no_expiry_renders_as_null_not_a_string(env):
+    client, Session = env
+    headers = _key(Session, role="viewer", policy_id="policy-a", grants=[CONTENT_READ])
+    interaction_id = _interaction(Session)  # no expiry configured
+    assert client.get(f"/v1/logs/{interaction_id}/content?view=full", headers=headers).json()["expires_at"] is None
+
+
+def test_sql_null_and_json_null_produce_the_same_body(env):
+    """Both mean "nothing was captured for this field". Inventing a difference
+    between them would expose how the row happened to be written."""
+    client, Session = env
+    headers = _key(Session, role="viewer", policy_id="policy-a", grants=[CONTENT_READ])
+
+    sql_null = _interaction(Session)
+    json_null = _interaction(Session)
+    session = Session()
+    session.execute(
+        sa.text("UPDATE interaction_contents SET output_json = NULL WHERE interaction_id = :i"),
+        {"i": sql_null},
+    )
+    session.execute(
+        sa.text("UPDATE interaction_contents SET output_json = 'null' WHERE interaction_id = :i"),
+        {"i": json_null},
+    )
+    session.commit()
+    session.close()
+
+    a = client.get(f"/v1/logs/{sql_null}/content?view=full", headers=headers).json()
+    b = client.get(f"/v1/logs/{json_null}/content?view=full", headers=headers).json()
+    assert a["output"] is None and b["output"] is None
+    assert set(a) == set(b), "the two null forms produced different fields"
+
+
+def test_every_field_is_present_even_when_everything_is_null(env):
+    """No absent-versus-null rule to get wrong: null carries the meaning."""
+    client, Session = env
+    headers = _key(Session, role="viewer", policy_id="policy-a", grants=[CONTENT_READ])
+    interaction_id = _interaction(Session)
+    session = Session()
+    session.execute(
+        sa.text(
+            "UPDATE interaction_contents SET input_json = NULL, output_json = NULL, "
+            "matches_json = NULL WHERE interaction_id = :i"
+        ),
+        {"i": interaction_id},
+    )
+    session.commit()
+    session.close()
+
+    body = client.get(f"/v1/logs/{interaction_id}/content?view=full", headers=headers).json()
+    assert set(body) == {
+        "interaction_id",
+        "view",
+        "captured_at",
+        "expires_at",
+        "messages",
+        "tools",
+        "output",
+        "matches",
+    }
+    assert body["messages"] is None and body["matches"] is None
+
+
+def test_a_genuinely_unhandled_exception_is_a_fixed_500_with_the_headers(env, monkeypatch):
+    """Through the production stack, not an explicitly constructed 500 Response,
+    which would prove nothing about the path that matters."""
+    import app.routes.content as content_module
+
+    client, Session = env
+    headers = _key(Session, role="viewer", policy_id="policy-a", grants=[CONTENT_READ])
+    interaction_id = _interaction(Session)
+
+    def _explode(*_args, **_kwargs):
+        raise RuntimeError("boom in the projection")
+
+    monkeypatch.setattr(content_module, "_select", _explode)
+    resp = client.get(f"/v1/logs/{interaction_id}/content?view=full", headers=headers)
+
+    assert resp.status_code == 500
+    assert resp.json() == {"detail": "Internal error"}
+    assert "boom" not in resp.text and "RuntimeError" not in resp.text
+    assert resp.headers["cache-control"] == "no-store"
+
+
+def test_a_non_finite_number_in_stored_content_is_corrupt(env):
+    """Python's json accepts NaN and Infinity, which are not JSON, so
+    build_content can already have written one. Under an application/json
+    contract, emitting a non-standard token or coercing it are both worse than
+    refusing."""
+    client, Session = env
+    headers = _key(Session, role="viewer", policy_id="policy-a", grants=[CONTENT_READ])
+    interaction_id = _interaction(Session)
+    session = Session()
+    session.execute(
+        sa.text("UPDATE interaction_contents SET input_json = '[{\"score\": NaN}]' WHERE interaction_id = :i"),
+        {"i": interaction_id},
+    )
+    session.commit()
+    session.close()
+
+    assert client.get(f"/v1/logs/{interaction_id}/content?view=full", headers=headers).status_code == 500
+    assert _audits(Session)[-1].outcome == "denied_corrupt"
+
+
+def test_keys_api_returns_persisted_grants_and_never_the_implied_one(env):
+    """The implication is applied at read time. Materialising it here would make
+    it look like a third grant and let a later export check inherit it."""
+    from app.services.key_service import KeyService
+
+    _client, Session = env
+    session = Session()
+    try:
+        from app.routes.keys import _key_to_dict
+
+        _raw, api_key = KeyService(session).create_key(
+            name="analyst", role="viewer", policy_id="policy-a", grants=[CONTENT_READ]
+        )
+        rendered = _key_to_dict(api_key)
+        assert rendered["grants"] == [CONTENT_READ]
+        assert MATCHES_READ not in rendered["grants"], "the implied grant was materialised"
+    finally:
+        session.close()

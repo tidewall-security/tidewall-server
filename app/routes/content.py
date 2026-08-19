@@ -54,6 +54,20 @@ NO_CONTENT_ROW = "no_content_row"
 POLICY_MISMATCH = "policy_mismatch"
 EXPIRED = "expired"
 
+#: Audit writes that could not be made durable, since process start.
+#:
+#: There is no metrics system in this application, so this is a process counter
+#: whose running total is included in each failure record -- log-based alerting
+#: is what an operator actually has today. A metrics endpoint is a follow-up,
+#: and saying so is better than describing a counter nobody can scrape.
+_audit_failures = 0
+
+
+def audit_failure_count() -> int:
+    """How many audit writes have failed since process start."""
+    return _audit_failures
+
+
 _NO_STORE = {
     "Cache-Control": "no-store",
     "Pragma": "no-cache",
@@ -390,9 +404,19 @@ async def _authorize_and_read(request: Request) -> Response:
     session_factory = request.app.state.session_factory
 
     def audit(outcome: str, *, reason: str | None, grant_used: str | None, interaction: int | None) -> bool:
-        """Record the decision. Returns whether it landed."""
-        session = session_factory()
+        """Record the decision. Returns whether it landed.
+
+        The boundary covers acquiring the session, writing, rolling back and
+        closing. Acquisition sat outside it and a factory failure reached the
+        endpoint's last-resort catch -- turning a required 503 into a 500 on the
+        authorized path, and replacing a denial with a 500 on the denied one.
+        Nothing about auditing may decide the status except in the two ways the
+        design specifies.
+        """
+        global _audit_failures
+        session = None
         try:
+            session = session_factory()
             _audit(
                 session,
                 attempt_id=attempt_id,
@@ -408,12 +432,14 @@ async def _authorize_and_read(request: Request) -> Response:
             )
             return True
         except Exception as exc:
-            # Rolled back and closed before anything else. A poisoned session is
-            # never reused to emit a second audit.
-            try:
-                session.rollback()
-            except Exception:
-                pass
+            _audit_failures += 1
+            # Rolled back before anything else. A poisoned session is never
+            # reused to emit a second audit.
+            if session is not None:
+                try:
+                    session.rollback()
+                except Exception:
+                    pass
             # Bounded and after the rollback: identifiers and the outcome that
             # was meant to be stored, no exception text and nothing derived from
             # content. Evidence that the durable audit could not be written --
@@ -421,12 +447,20 @@ async def _authorize_and_read(request: Request) -> Response:
             report(
                 logger,
                 "error",
-                f"content access audit failed: attempt={attempt_id} key={api_key_id} outcome={outcome}",
+                f"content access audit failed: attempt={attempt_id} key={api_key_id} "
+                f"outcome={outcome} failures_since_start={_audit_failures}",
                 exc,
             )
             return False
         finally:
-            session.close()
+            # Also inside the boundary: a close failure after a successful
+            # commit would otherwise escape and turn an authorized read into a
+            # 500 that the caller cannot distinguish from a real fault.
+            if session is not None:
+                try:
+                    session.close()
+                except Exception:
+                    pass
 
     if role is None:
         return _error(401, "Not authenticated")

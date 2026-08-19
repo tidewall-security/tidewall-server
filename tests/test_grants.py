@@ -135,3 +135,65 @@ def test_an_unknown_role_is_no_longer_the_lowest_valid_one():
     with pytest.raises(HTTPException) as caught:
         asyncio.run(check(_Request()))
     assert caught.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# The SQLite invariant
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "db_url",
+    [
+        "sqlite:///data/tidewall.db",
+        "sqlite:///:memory:",
+        "sqlite://",
+        "sqlite+pysqlite:///x.db",
+    ],
+)
+def test_every_sqlite_form_is_accepted(db_url):
+    from app.db.engine import require_sqlite
+
+    require_sqlite(db_url)
+
+
+@pytest.mark.parametrize(
+    "db_url",
+    [
+        "postgresql://u:p@h/db",
+        "mysql+pymysql://u:p@h/db",
+        # Starts with "sqlite" and is not SQLite. A prefix check let this
+        # through to fail later in dialect loading instead of here.
+        "sqliteevil://h/db",
+        "not a url at all",
+    ],
+)
+def test_a_non_sqlite_url_is_refused_clearly(db_url):
+    from app.db.engine import require_sqlite
+
+    with pytest.raises(RuntimeError) as caught:
+        require_sqlite(db_url)
+    assert "SQLite" in str(caught.value) or "not a valid database URL" in str(caught.value)
+
+
+def test_the_bootstrap_admin_has_no_content_access():
+    """Administering policies is not the same question as reading the prompts."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from app.db.models import APIKey, Base
+    from app.services.key_service import KeyService
+
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    try:
+        assert KeyService(session).install_bootstrap_admin_key("ak_bootstrap_secret_value") is True
+        key = session.query(APIKey).one()
+        assert key.role == "admin"
+        assert not (key.grants or []), "the bootstrap admin was given a content grant"
+        assert validate_grants(key.role, key.policy_id, key.grants) == frozenset()
+    finally:
+        session.close()
+        engine.dispose()

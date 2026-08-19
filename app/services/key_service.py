@@ -118,11 +118,18 @@ class KeyService:
         if self.has_any_key():
             return False
 
+        # Through the same validator as every other service entry point, even
+        # though the values here are fixed. The bootstrap admin holds no content
+        # grant -- administering policies is not the same question as reading
+        # the prompts -- and routing it through validate_grants means a future
+        # change to these fixed values cannot quietly drift past the rule.
+        grants = validate_grants("admin", None, None)
         api_key = APIKey(
             name="bootstrap-admin",
             key_hash=hash_key(raw_key),
             key_prefix=key_prefix(raw_key),
             role="admin",
+            grants=sorted(grants) if grants else None,
         )
         self._session.add(api_key)
         self._session.commit()

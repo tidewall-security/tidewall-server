@@ -5,8 +5,13 @@ access audit needs to be useful to an investigator.
 
 DEPLOYMENT PRECONDITION: a single migrator with writers quiesced. This
 application auto-migrates at startup and several serving processes can race a
-SQLite batch rebuild; batch mode is transactional but that does not make it
-online.
+SQLite batch rebuild.
+
+Alembic runs this environment with non-transactional DDL on SQLite, so raising
+part-way does NOT roll the schema back. Everything that can refuse is therefore
+checked before the first DDL statement, and the one check that cannot be
+(after the backfill) undoes its own column before raising -- so a refusal
+always leaves the previous schema, at the previous revision, and retryable.
 
 Revision ID: 56bc13c16fef
 Revises: 64c197391e55
@@ -26,6 +31,36 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    conn = op.get_bind()
+
+    # --- refuse before touching anything ------------------------------------
+    #
+    # Alembic reports "non-transactional DDL" on SQLite, so a raise part-way
+    # through leaves whatever DDL already ran. An earlier version of this
+    # migration added the column first and then aborted, leaving a database
+    # that was neither the old schema nor the new one -- and whose retry failed
+    # at ADD COLUMN instead of re-reporting the real problem.
+    #
+    # Step 4 made interactions.policy_id NOT NULL, so a conforming database
+    # cannot fail this. It catches the ones that are not conforming: edited by
+    # hand, or written over a connection with foreign keys off.
+    orphans = conn.execute(
+        sa.text(
+            """
+            SELECT COUNT(*)
+              FROM interaction_contents c
+              LEFT JOIN interactions i ON i.id = c.interaction_id
+             WHERE i.id IS NULL OR i.policy_id IS NULL OR i.policy_id = ''
+            """
+        )
+    ).scalar()
+    if orphans:
+        raise RuntimeError(
+            f"{orphans} interaction_contents row(s) have no resolvable policy: "
+            "their parent interaction is missing or has no policy. Refusing to "
+            "invent one. Investigate before migrating; nothing has been changed."
+        )
+
     # --- interaction_contents.policy_id -------------------------------------
     #
     # Nullable first: SQLite cannot add a populated NOT NULL column without a
@@ -42,17 +77,16 @@ def upgrade() -> None:
         """
     )
 
-    # Step 4 made interactions.policy_id NOT NULL, so a conforming database
-    # cannot produce a null here. This catches the databases that are not
-    # conforming: one edited by hand, or written over a connection with foreign
-    # keys off. Aborting leaves the old revision and the old table intact.
-    conn = op.get_bind()
+    # Belt and braces: the pre-check above should make this unreachable. If it
+    # is ever reached, undo the column before raising, so the refusal still
+    # leaves the previous schema and a retry re-reports the real problem rather
+    # than failing at ADD COLUMN.
     unresolved = conn.execute(sa.text("SELECT COUNT(*) FROM interaction_contents WHERE policy_id IS NULL")).scalar()
     if unresolved:
+        op.drop_column("interaction_contents", "policy_id")
         raise RuntimeError(
-            f"{unresolved} interaction_contents row(s) have no resolvable policy: "
-            "their parent interaction is missing or has no policy. Refusing to "
-            "invent one. Investigate before migrating."
+            f"{unresolved} interaction_contents row(s) were not backfilled. "
+            "Refusing to invent a policy. The schema has been left unchanged."
         )
 
     with op.batch_alter_table("interaction_contents") as batch:
