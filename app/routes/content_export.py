@@ -432,6 +432,19 @@ async def _reserve_and_send(*, request: Request, **ctx: Any) -> Response:
                 session.close()
             if winner is None:
                 return _error(503, "Export could not be recorded, so nothing was sent")
+            if winner.fingerprint != ctx["fingerprint"]:
+                # "Exactly the situation step 4 handles" has to include step 4's
+                # refusal, and for a while this branch only borrowed its replay.
+                # Two concurrent requests can reach here having used one
+                # idempotency key for two different exports: both miss the
+                # lookup at step 4, and the loser then received the WINNER's
+                # attempt id, state and view for a record it never asked about.
+                # Same key, different export, so the same 409 either way --
+                # whether the collision is discovered by the lookup or by the
+                # unique constraint.
+                return _error(
+                    409, "This idempotency key was used for a different export", reason="idempotency_key_reused"
+                )
             return _replay_response(winner)
 
         # 11. submit. The server-owned attempt id is the receiver's idempotency

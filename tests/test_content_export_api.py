@@ -549,6 +549,72 @@ def test_a_key_reused_for_a_different_export_is_refused(env):
     assert len(_Receiver.received) == 1
 
 
+def test_losing_the_reservation_race_with_a_different_export_is_still_409(env, monkeypatch):
+    """Same key, two different exports, discovered by the constraint not the lookup.
+
+    Sequentially this is a 409: the replay lookup at step 4 finds the earlier
+    attempt, sees a different fingerprint, and refuses. Concurrently, both
+    requests can pass that lookup before either has committed, and the loser
+    finds out at the unique constraint instead. For a while the loser then
+    borrowed step 4's REPLAY without step 4's REFUSAL, and was answered with
+    the winner's attempt id, state and view -- for a record it never asked
+    about.
+
+    The race is produced by committing the winner inside the window rather than
+    by threads: this fixture shares one SQLite connection, so two real threads
+    would contend on the connection rather than on the constraint, and would
+    prove something else.
+    """
+    import app.routes.content_export as route
+    import app.services.content_export as service
+
+    client, Session, port = env
+    headers = _key(Session, grants=[CONTENT_EXPORT])
+    mine = _interaction(Session)
+    theirs = _interaction(Session)
+    target_id = _target(Session, port)
+    keyed = {**headers, "Idempotency-Key": "shared-key-1"}
+
+    real_reserve = service.reserve
+    planted: list[str] = []
+
+    def _racing_reserve(session_factory, *, attempt_id, attempt):
+        if not planted:
+            # The winner commits here: after this request's replay lookup found
+            # nothing, and before its own insert.
+            winner_id = service.new_attempt_id()
+            planted.append(winner_id)
+            real_reserve(
+                session_factory,
+                attempt_id=winner_id,
+                attempt={
+                    **attempt,
+                    "interaction_id": theirs,
+                    "fingerprint": service.fingerprint_for(
+                        policy_id="policy-a", interaction_id=theirs, view="full", target_id=target_id
+                    ),
+                },
+            )
+        return real_reserve(session_factory, attempt_id=attempt_id, attempt=attempt)
+
+    monkeypatch.setattr(route.attempts, "reserve", _racing_reserve)
+
+    resp = client.post(
+        f"/v1/logs/{mine}/content-export",
+        json={"view": "full", "target_id": target_id},
+        headers=keyed,
+    )
+
+    assert planted, "the race never happened, so this proves nothing"
+    assert resp.status_code == 409, (
+        f"the loser was answered {resp.status_code} with {resp.text}; a key reused for a "
+        "different export is a 409 however the collision is discovered"
+    )
+    assert resp.json()["reason"] == "idempotency_key_reused"
+    assert planted[0] not in resp.text, "the loser was handed the winner's attempt id"
+    assert not _Receiver.received, "the loser sent content despite losing the race"
+
+
 def test_a_replay_is_answered_after_the_content_is_purged(env):
     """Replay sits above every gate that consults current state. Lower down it
     would return 404 after a purge instead of the result it actually had."""
