@@ -580,3 +580,90 @@ def test_an_unauthenticated_request_is_also_uncacheable(env):
     resp = client.post(f"/v1/logs/{interaction_id}/content-export", json={"view": "full", "target_id": "t"})
     assert resp.status_code == 401
     assert resp.headers["cache-control"] == "no-store"
+
+
+def test_the_canary_appears_in_the_submitted_body_and_nowhere_else(env, caplog):
+    """The one place it is expected, and no attempt column, note, response or
+    log line."""
+    import logging
+
+    from app.db.models import ContentExportNote
+
+    client, Session, port = env
+    headers = _key(Session, grants=[CONTENT_EXPORT])
+    interaction_id = _interaction(Session)
+    target_id = _target(Session, port)
+
+    with caplog.at_level(logging.DEBUG):
+        resp = client.post(
+            f"/v1/logs/{interaction_id}/content-export",
+            json={"view": "full", "target_id": target_id},
+            headers=headers,
+        )
+    assert resp.status_code == 202
+
+    # Expected: exactly here.
+    assert any(CANARY in body.decode() for body in _Receiver.received)
+
+    # And nowhere else.
+    assert CANARY not in resp.text
+    assert CANARY not in caplog.text
+
+    session = Session()
+    try:
+        for row in session.query(ContentExportAttempt).all():
+            serialised = str({c.name: getattr(row, c.name) for c in row.__table__.columns})
+            assert CANARY not in serialised, "an attempt row carried content"
+        for note in session.query(ContentExportNote).all():
+            assert CANARY not in note.detail
+    finally:
+        session.close()
+
+
+def test_an_ordinary_guard_export_carries_no_content_even_with_capture_on(env):
+    """The isolation that matters: turning capture on must not make the ordinary
+    export path start carrying prompts."""
+    import asyncio
+
+    from app.services.export_service import ExportService
+
+    client, Session, port = env
+    del client
+
+    session = Session()
+    session.add(
+        ExportTarget(
+            name="ordinary",
+            type="webhook",
+            config={"url": f"http://127.0.0.1:{port}/hook"},
+            format="ocsf",
+            events=["allowed"],
+            enabled=True,
+        )
+    )
+    session.commit()
+    session.close()
+
+    captured: list[dict] = []
+
+    class _Svc(ExportService):
+        async def _send_webhook(self, target, event):  # type: ignore[override]
+            captured.append(event)
+
+    asyncio.run(
+        _Svc(session_factory=Session).emit(
+            request_id="tw_00000000000000ff",
+            timestamp="2026-08-19T00:00:00Z",
+            event_type="input",
+            status="allowed",
+            policy_name="policy-a",
+            blocked=False,
+            transformed=False,
+            latency_ms=1.0,
+            detectors={"custom_entity": {"data": {"entities": [{"type": "CUSTOM", "value": CANARY}]}}},
+            guard_input={"messages": [{"content": CANARY}]},
+        )
+    )
+    assert captured, "nothing was exported, so this proves nothing"
+    for event in captured:
+        assert CANARY not in str(event)
