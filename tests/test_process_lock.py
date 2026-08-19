@@ -70,9 +70,7 @@ def test_a_second_process_is_refused_then_succeeds_once_the_first_exits(tmp_path
     """Two real processes. An in-process test shares a file descriptor table and
     cannot exhibit the conflict a second server actually hits."""
     db = tmp_path / "b.db"
-    holder = subprocess.Popen(
-        [sys.executable, "-c", _holder_script(db)], stdout=subprocess.PIPE, text=True
-    )
+    holder = subprocess.Popen([sys.executable, "-c", _holder_script(db)], stdout=subprocess.PIPE, text=True)
     try:
         assert holder.stdout.readline().strip() == "HELD"
         with pytest.raises(ProcessLockHeld):

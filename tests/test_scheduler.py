@@ -321,6 +321,7 @@ def test_a_scheduler_that_cannot_stop_does_not_break_shutdown(tmp_path):
         return real_error(self, msg, *args, **kwargs)
 
     disposals: list[int] = []
+    holder: list = []
     real_dispose = Engine.dispose
 
     def _count_dispose(self, *args, **kwargs):
@@ -335,14 +336,20 @@ def test_a_scheduler_that_cannot_stop_does_not_break_shutdown(tmp_path):
         with patch.object(Engine, "dispose", _count_dispose):
             # Must not raise: the scheduler cannot fail the shutdown.
             await ctx.__aexit__(None, None, None)
+        holder.append(app.state.process_lock)
 
     with patch.dict(os.environ, env, clear=False):
         with patch.object(scheduler_module.Scheduler, "stop", _explode):
             with patch.object(logging.Logger, "error", _record):
                 asyncio.run(_startup_then_shutdown())
 
-    assert any("did not stop cleanly" in m for m in records), "a failing stop() was swallowed quietly"
+    lock_after_shutdown = holder[0]
+    assert any("scheduler stop raised" in m for m in records), "a failing stop() was swallowed quietly"
     assert not disposals, "disposed the engine while a worker may still have owned a session"
+    # And the lock, which is the stronger guarantee step 8 added: holding it
+    # keeps a replacement instance from starting while a thread may still be
+    # writing.
+    assert lock_after_shutdown.held, "released the database lock although stop() raised"
 
 
 def test_a_scheduler_that_fails_midway_through_start_is_still_stopped(tmp_path):
@@ -478,3 +485,111 @@ def test_startup_migrations_do_not_silence_application_logging(tmp_path):
 
     silenced = [n for n in names if logging.getLogger(n).disabled]
     assert not silenced, f"startup migrations disabled these loggers for the rest of the process: {silenced}"
+
+
+def test_drain_workers_waits_for_a_detached_worker():
+    """stop() drains as part of stopping and runs first, so anything that
+    registers a worker afterwards needs a second drain. This is the case
+    drain_workers exists for, and a detached worker is the only thing that can
+    produce it -- cancelling an awaited thread leaves the thread running."""
+    import asyncio
+    import threading
+
+    from app.services.scheduler import Scheduler
+
+    entered = threading.Event()
+    released = threading.Event()
+
+    def _slow():
+        entered.set()
+        released.wait(5)
+        return None
+
+    async def _go():
+        scheduler = Scheduler()
+        task = asyncio.create_task(scheduler.run_in_worker(_slow))
+        await asyncio.to_thread(entered.wait, 5)
+
+        # Detach the awaiting coroutine; the thread runs on.
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+        drain = asyncio.create_task(scheduler.drain_workers(5.0))
+        await asyncio.sleep(0.05)
+        assert not drain.done(), "drain returned while a worker was still running"
+        released.set()
+        assert await drain is True
+
+    asyncio.run(_go())
+
+
+def test_a_raising_stop_holds_the_lock_even_when_no_workers_remain(tmp_path):
+    """stop() raising means producer quiescence was never established.
+
+    Zero workers then means "nothing is writing yet", not "nothing will": a
+    scheduler task may still be live and able to register one. Its return VALUE
+    is advisory -- it can say False for a worker drain_workers() then drains --
+    but whether it RAISED is a precondition.
+    """
+    import asyncio
+    import os
+    from unittest.mock import patch
+
+    import app.services.scheduler as scheduler_module
+    from app.main import create_app, lifespan
+
+    db = tmp_path / "quiesce.db"
+    env = {"DB_URL": f"sqlite:///{db}", "BOOTSTRAP_KEY": "test-bootstrap-key-0123456789"}
+
+    async def _raise(self, **kwargs):
+        raise RuntimeError("stop failed")
+
+    async def _run():
+        app = create_app()
+        ctx = lifespan(app)
+        await ctx.__aenter__()
+        lock = app.state.process_lock
+        await ctx.__aexit__(None, None, None)
+        return lock
+
+    with patch.dict(os.environ, env, clear=False):
+        with patch.object(scheduler_module.Scheduler, "stop", _raise):
+            lock = asyncio.run(_run())
+
+    assert lock.held, "the lock was released although stop() raised"
+    lock.release()
+
+
+def test_an_advisory_false_from_stop_still_releases_the_lock(tmp_path):
+    """Two answers to one question. stop() reports whether its OWN drain
+    completed and can say False for a worker drain_workers() then drains, so it
+    gates nothing; drain_workers() is the single predicate."""
+    import asyncio
+    import os
+    from unittest.mock import patch
+
+    import app.services.scheduler as scheduler_module
+    from app.main import create_app, lifespan
+
+    db = tmp_path / "advisory.db"
+    env = {"DB_URL": f"sqlite:///{db}", "BOOTSTRAP_KEY": "test-bootstrap-key-0123456789"}
+
+    async def _not_drained(self, **kwargs):
+        return False
+
+    async def _run():
+        app = create_app()
+        ctx = lifespan(app)
+        await ctx.__aenter__()
+        lock = app.state.process_lock
+        await ctx.__aexit__(None, None, None)
+        return lock
+
+    with patch.dict(os.environ, env, clear=False):
+        with patch.object(scheduler_module.Scheduler, "stop", _not_drained):
+            lock = asyncio.run(_run())
+
+    assert not lock.held, "an advisory False held the lock"

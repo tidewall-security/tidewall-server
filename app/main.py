@@ -16,6 +16,7 @@ services are unused).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import pathlib
@@ -218,52 +219,71 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # In a finally: an exception thrown into the lifespan context would
         # otherwise skip both, leaving the scheduler running against a disposed
         # engine.
-        # Stopping it is capture-only work too, so it cannot decide whether
-        # shutdown completes. Unguarded, an exception here escaped lifespan
-        # teardown and skipped engine.dispose() entirely.
+        # The order the lock's meaning depends on:
+        #   1. stop the scheduler
+        #   2. drain the settlement-task set
+        #   3. drain_workers()
+        #   4. release the lock
+        #   5. dispose the engine
         #
-        # A raising stop() means we do not know whether a worker still owns a
-        # session, so it counts as not drained: the same conservative answer
-        # stop() gives when it times out.
-        if scheduler is None:
-            drained = True
-        else:
+        # Two conditions gate 4 and 5, and they answer different questions.
+        #
+        # stop() must return WITHOUT RAISING: that is what establishes no
+        # scheduler task can still call run_in_worker. If it raises, tasks may
+        # be live, and a worker registered after drain_workers() observed zero
+        # would be missed entirely.
+        #
+        # Its return VALUE is advisory. It reports whether its own drain
+        # completed and can say False for a worker drain_workers() then drains
+        # successfully -- two answers to one question -- so it gates nothing. It
+        # is logged rather than discarded, because a stop() failure unrelated to
+        # live workers still deserves attention.
+        quiesced = scheduler is None
+        if scheduler is not None:
             try:
-                drained = await scheduler.stop()
+                if not await scheduler.stop():
+                    report(
+                        logging.getLogger(__name__),
+                        "warning",
+                        "scheduler stop reported work still running; re-draining before release",
+                    )
+                quiesced = True
             except Exception:
                 report(
                     logging.getLogger(__name__),
                     "error",
-                    "retention scheduler did not stop cleanly; assuming background work is still running",
+                    "scheduler stop raised, so producers may still be live; " "the database lock will not be released",
                     exc_info=True,
                 )
-                drained = False
-        if drained:
+
+        # 2. Settlements this process started, which may not have reached a
+        #    worker yet. Awaited rather than cancelled: cancelling a coroutine
+        #    that awaits a thread detaches the thread.
+        settlements = list(getattr(app.state, "export_settlements", ()) or ())
+        if settlements:
+            await asyncio.gather(*settlements, return_exceptions=True)
+
+        # 3. The single predicate for "nothing is still writing". Separate from
+        #    the drain stop() performs, which ran before step 2.
+        workers_drained = True
+        if scheduler is not None:
+            workers_drained = await scheduler.drain_workers()
+
+        if quiesced and workers_drained:
+            # Released only now. Closing it earlier would let a replacement
+            # instance start while this process was still writing.
+            process_lock.release()
             engine.dispose()
         else:
-            # Withheld because the pool class decides whether this is safe, and
-            # only one of the two is. Measured against this codebase's own
-            # get_engine(): a file-backed URL gets a QueuePool, where dispose()
-            # closes checked-in connections only — a worker holding a
-            # checked-out one keeps working, and the engine stays usable
-            # through its replacement pool. An in-memory URL gets a StaticPool,
-            # whose single shared connection dispose() closes outright; a
-            # worker still using it then fails with a ProgrammingError.
-            #
-            # So for the production configuration disposing here would be
-            # harmless, and an earlier version of this comment claimed the
-            # general case wrongly. Withholding it costs an idle pool on a path
-            # where the process is about to exit anyway, and is correct for
-            # both.
+            # Holding the lock keeps a replacement from starting while a thread
+            # may still be writing, which is the whole point of holding it.
+            # Leaking both on a shutdown path is the lesser fault.
             report(
                 logging.getLogger(__name__),
                 "error",
-                "not disposing the database engine: background work is still running",
+                "not releasing the database lock or disposing the engine: "
+                f"quiesced={quiesced} workers_drained={workers_drained}",
             )
-        # Released last, after every request and scheduler task has drained.
-        # Closing it earlier would let a replacement instance start while this
-        # process is still writing.
-        process_lock.release()
 
 
 def create_app() -> FastAPI:

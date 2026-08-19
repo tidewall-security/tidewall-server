@@ -91,6 +91,20 @@ class Scheduler:
 
         return await asyncio.to_thread(_tracked)
 
+    def drain_workers_sync(self, timeout_seconds: float = 30.0) -> bool:
+        """Block until no worker threads remain. Returns whether they drained.
+
+        Separate from :meth:`stop`, which drains as part of stopping and
+        therefore runs too early: a task that had not reached
+        :meth:`run_in_worker` when ``stop()`` completed registers a worker
+        afterwards, and nothing would wait for it.
+        """
+        return self._workers_idle.wait(timeout_seconds)
+
+    async def drain_workers(self, timeout_seconds: float = 30.0) -> bool:
+        """The awaitable form. The wait itself runs off the loop."""
+        return await asyncio.to_thread(self.drain_workers_sync, timeout_seconds)
+
     def start(self, jobs: list[Job]) -> None:
         """Create the job tasks.
 
