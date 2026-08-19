@@ -738,6 +738,30 @@ describe('the matches block is projected, not passed through', () => {
     expect(text).not.toContain(CANARY);
   });
 
+  it.each([
+    ['a malformed rule_id', { rule_id: { nested: CANARY } }],
+    ['a malformed source role', { source: { kind: 'message', index: 0, field: 'content', role: { n: CANARY } } }]
+  ])('rejects %s rather than rewriting it to null', async (_label, over) => {
+    // Coercing a malformed optional field to null would rewrite forensic
+    // evidence rather than reject it -- and would let a canary inside that
+    // field pass unnoticed, which is what the first version did.
+    const text = await attempt({ schema_version: 1, matches: [group(over)] });
+    expect(text).not.toContain(CANARY);
+    expect(text).toContain('could not be read');
+  });
+
+  it.each([
+    ['a negative index', { source: { kind: 'message', index: -1, field: 'content', role: null } }],
+    ['a fractional index', { source: { kind: 'message', index: 1.5, field: 'content', role: null } }],
+    ['a zero occurrences', { occurrences: 0 }],
+    ['a fractional occurrences', { occurrences: 1.5 }],
+    ['an empty detector', { detector: '' }],
+    ['an empty source kind', { source: { kind: '', index: 0, field: 'content', role: null } }]
+  ])('rejects %s, which the server would never send', async (_label, over) => {
+    const text = await attempt({ schema_version: 1, matches: [group(Object.assign({ value: CANARY }, over))] });
+    expect(text).not.toContain(CANARY);
+  });
+
   it('rejects a group with a malformed source', async () => {
     const text = await attempt({
       schema_version: 1,

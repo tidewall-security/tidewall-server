@@ -631,6 +631,14 @@
 
   function nullOrArray(v) { return v === null || Array.isArray(v); }
 
+  function nonEmptyString(v) { return typeof v === 'string' && v.length > 0; }
+
+  function stringOrNull(v) { return v === null || typeof v === 'string'; }
+
+  /** A non-negative integer, and not a boolean -- typeof true is 'boolean' in
+   *  JS, but a JSON body can still carry one where a number belongs. */
+  function isIndex(v) { return typeof v === 'number' && Number.isInteger(v) && v >= 0; }
+
   /**
    * Project the matches block, or reject it.
    *
@@ -654,21 +662,27 @@
       if (!g || typeof g !== 'object' || Array.isArray(g)) return null;
       var src = g.source;
       if (!src || typeof src !== 'object' || Array.isArray(src)) return null;
-      if (typeof g.detector !== 'string' || typeof g.match_type !== 'string') return null;
-      if (typeof g.value !== 'string' || typeof g.occurrences !== 'number') return null;
-      if (typeof src.kind !== 'string' || typeof src.field !== 'string') return null;
-      if (typeof src.index !== 'number') return null;
+      // Equivalent to what the server will actually send. Coercing a malformed
+      // optional field to null would rewrite forensic evidence rather than
+      // reject it, and accepting any JavaScript number would let a negative or
+      // fractional index through as if it were valid.
+      if (!nonEmptyString(g.detector) || !nonEmptyString(g.match_type)) return null;
+      if (typeof g.value !== 'string') return null;
+      if (!isIndex(g.occurrences) || g.occurrences < 1) return null;
+      if (!nonEmptyString(src.kind) || !nonEmptyString(src.field)) return null;
+      if (!isIndex(src.index)) return null;
+      if (!stringOrNull(g.rule_id) || !stringOrNull(src.role)) return null;
       // Copied field by field, so an extra key on the group or the source is
       // simply not carried rather than displayed.
       groups.push({
         detector: g.detector,
         match_type: g.match_type,
-        rule_id: typeof g.rule_id === 'string' ? g.rule_id : null,
+        rule_id: g.rule_id,
         source: {
           kind: src.kind,
           index: src.index,
           field: src.field,
-          role: typeof src.role === 'string' ? src.role : null
+          role: src.role
         },
         value: g.value,
         occurrences: g.occurrences

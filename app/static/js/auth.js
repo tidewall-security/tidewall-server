@@ -30,9 +30,15 @@
 
   function setStoredKey(key) {
     localStorage.setItem(STORAGE_KEY, key);
-    // On any accepted entry, including re-entering the same key. Detecting
-    // equality would be a cheaper-looking rule that is wrong the moment two
-    // keys share a value.
+    // Unconditionally, not only when the value differs.
+    //
+    // Today the prompt only appears after a 401, which has already cleared the
+    // stored key, so a write of an already-stored value does not arise through
+    // it -- which means no test can kill an equality check here, and saying so
+    // is better than implying one does. It is unconditional anyway because the
+    // rule "same string means same principal" is not true: two credentials can
+    // share a value, and a future flow that re-prompts without clearing would
+    // silently stop notifying.
     _notifyCredentialChange();
   }
 
@@ -145,14 +151,16 @@
     /**
      * Register a callback for when the stored credential changes.
      *
-     * Fires on a key being written, cleared, or re-entered, on a storage event
-     * from another tab, and on any 401 -- which is the only way an expired or
-     * revoked key becomes observable, so there is an unavoidable delay between
-     * revocation and the next response.
+     * Fires on a key being written, cleared, or re-entered, and on a storage
+     * event from another tab.
+     *
+     * A 401 reaches it indirectly: api.js calls clearKey() on any 401, and
+     * clearing notifies. That is the only way an expired or revoked key becomes
+     * observable, so there is an unavoidable delay between revocation and the
+     * next response. An earlier version exported the notifier with a comment
+     * saying api.js calls it directly, which it never did.
      */
     onCredentialChange: function (cb) { _credentialCallbacks.push(cb); },
-    /** Called by api.js on any 401. */
-    notifyCredentialChange: _notifyCredentialChange,
   };
 
   // Auto-check on page load

@@ -15,14 +15,17 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 describe('a key accepted through the prompt', () => {
-  it('notifies every time, including when the same key is re-entered', async () => {
+  it('notifies on each accepted entry', async () => {
     // Through the prompt's real submit path. An earlier version called
     // notifyCredentialChange() directly, which proved only that a function
     // invokes its callbacks -- and the test name claimed more than that.
     //
-    // Notifying on any accepted entry rather than comparing values is
-    // deliberate: detecting equality would be a cheaper-looking rule that is
-    // wrong the moment two credentials share a value.
+    // What this does NOT prove, deliberately: that writing an ALREADY-STORED
+    // value notifies. The prompt only appears after a 401, which clears the key
+    // first, so that case cannot be reached through this path and an equality
+    // check in setStoredKey would survive this test. setStoredKey is
+    // unconditional anyway, for the reason given there. Claiming the stronger
+    // property here would be claiming more than the test shows.
     document.body.innerHTML = '';
     localStorage.clear();
     globalThis.fetch = vi.fn(() => Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({}) }));
@@ -59,7 +62,7 @@ describe('a key accepted through the prompt', () => {
     await reopenThePrompt();      // the 401 clears the key, itself a notification
     const beforeSecond = counter.n;
 
-    await acceptTheSameKey();     // the SAME value, and it must notify again
+    await acceptTheSameKey();     // a second accepted entry notifies again
     expect(counter.n).toBeGreaterThan(beforeSecond);
     expect(localStorage.getItem('tidewall_api_key')).toBe('ak_the_same_key_every_time');
   });
