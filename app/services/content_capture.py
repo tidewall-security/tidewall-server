@@ -111,9 +111,15 @@ def capture_content(session: Session, *, interaction: Interaction, prepared: Pre
     Uses the caller's session because the content and the event have to commit
     together or not at all.
     """
+    # Duplicated from the parent rather than joined. The check the read path
+    # makes is that the credential's policy, the interaction's policy and the
+    # content row's *own* policy all agree; a join proves the first two and
+    # assumes the third. The parent has already been flushed, so this is a
+    # validated non-null value, not a hopeful one.
     session.add(
         InteractionContent(
             interaction_id=interaction.id,
+            policy_id=interaction.policy_id,
             input_json=prepared.input_json,
             output_json=prepared.output_json,
             matches_json=prepared.matches_json,

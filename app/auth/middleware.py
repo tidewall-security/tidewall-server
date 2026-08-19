@@ -8,6 +8,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from app.auth.dependencies import KNOWN_ROLES
+from app.auth.grants import GrantError, validate_grants
 from app.auth.key_utils import hash_key
 from app.db.models import AccessToken, APIKey, Device, RegistrationToken
 
@@ -45,6 +47,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         request.state.policy_id = None
         request.state.api_key_id = None
         request.state.device_id = None
+        request.state.grants = frozenset()
 
     async def dispatch(self, request: Request, call_next):
         # Public paths carry no identity.
@@ -97,10 +100,26 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if api_key.expires_at and api_key.expires_at < datetime.now(UTC):
                 return JSONResponse(status_code=401, content={"detail": "API key expired"})
 
+            # Validated on every request, not only at creation. A row can be
+            # written by a test, a script, a migration or a hand edit, so
+            # use-time validation is the fail-closed boundary and creation-time
+            # validation is only the friendly error.
+            #
+            # A defect makes the credential invalid -- 401 with the generic
+            # body, never 403, because 403 would confirm the bearer secret is
+            # real and merely misconfigured.
+            try:
+                grants = validate_grants(api_key.role, api_key.policy_id, api_key.grants)
+            except GrantError:
+                return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
+            if api_key.role not in KNOWN_ROLES:
+                return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
+
             request.state.role = api_key.role
             request.state.policy_id = api_key.policy_id
             request.state.api_key_id = api_key.id
             request.state.device_id = None
+            request.state.grants = grants
         finally:
             session.close()
 
@@ -135,6 +154,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             request.state.policy_id = None
             request.state.api_key_id = None
             request.state.device_id = None
+            request.state.grants = frozenset()
         finally:
             session.close()
 
@@ -163,6 +183,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if device is None or device.status != "active":
                 return JSONResponse(status_code=401, content={"detail": "Device inactive or not found"})
 
+            request.state.grants = frozenset()
             request.state.role = "api"
             request.state.policy_id = device.policy_id
             request.state.at_token_hash = hashed

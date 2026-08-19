@@ -12,8 +12,20 @@ Tidewall's own origin.
 
 from __future__ import annotations
 
+import re
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+
+#: The content endpoint. Everything it can return must be uncacheable, including
+#: a 401 short-circuited by authentication -- which is why this lives here
+#: rather than in the route: this middleware is registered after AuthMiddleware
+#: and middleware runs in reverse registration order, so it is the outer of the
+#: two and already sees those responses.
+#:
+#: An exact segment matcher, never a prefix. A trailing slash selects redirect
+#: or 404 behaviour rather than this route and is outside the contract.
+_CONTENT_PATH = re.compile(r"^/v1/logs/[^/]+/content$")
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -27,4 +39,11 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
+
+        # Retained prompt content must not sit in a shared cache or a proxy.
+        # setdefault throughout, so nothing here removes or contradicts the
+        # framing policy above.
+        if _CONTENT_PATH.match(request.url.path):
+            response.headers.setdefault("Cache-Control", "no-store")
+            response.headers.setdefault("Pragma", "no-cache")
         return response

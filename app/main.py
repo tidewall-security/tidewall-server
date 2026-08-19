@@ -285,11 +285,24 @@ def create_app() -> FastAPI:
     async def health() -> dict:
         return {"status": "ok"}
 
-    from app.routes import activity, dashboard, devices, guard, keys, logs, policies, registration, settings, unredact
+    from app.routes import (
+        activity,
+        content,
+        dashboard,
+        devices,
+        guard,
+        keys,
+        logs,
+        policies,
+        registration,
+        settings,
+        unredact,
+    )
 
     app.include_router(guard.router)
     app.include_router(unredact.router)
     app.include_router(logs.router)
+    app.include_router(content.router)
     app.include_router(dashboard.router)
     app.include_router(policies.router)
     app.include_router(keys.router)
