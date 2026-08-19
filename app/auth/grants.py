@@ -75,11 +75,20 @@ def validate_grants(role: object, policy_id: object, raw: object) -> frozenset[s
 
 
 def allows_view(grants: frozenset[str], view: str) -> bool:
-    """The one implication, and the only place it exists.
+    """The one implication, and the only place it is derived.
 
-    Holding the full-content grant permits the matches view. That is applied
-    here and nowhere else: it is never persisted, never returned by an API, and
-    never inherited by export.
+    Holding the full-content grant permits the matches view.
+
+    An earlier version of this docstring said the implication is "never returned
+    by an API". Step 7 made that false: /v1/me/capabilities reports effective
+    operation booleans, so a full-grant holder is told matches is available. The
+    invariant that was actually load-bearing is narrower, and this is it:
+
+        this function is the sole derivation point, and an API may report its
+        boolean result to the authenticated caller. A derived grant *string* is
+        still never persisted and never returned.
+
+    Derivation stays in one place; representation as a capability is new.
     """
     if view == "matches":
         return MATCHES_READ in grants or CONTENT_READ in grants

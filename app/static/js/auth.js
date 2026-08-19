@@ -10,6 +10,19 @@
   var STORAGE_KEY = 'tidewall_api_key';
   var _readyCallbacks = [];
   var _isReady = false;
+  var _credentialCallbacks = [];
+
+  // Anything holding data fetched under one credential needs to know when the
+  // credential changes, because a value read as one principal must not be shown
+  // as another. There was no way to observe that: setStoredKey and
+  // clearStoredKey are private and notified nobody, a storage event does not
+  // fire for same-tab writes, and re-entering the same key emits nothing at
+  // all. So every mutation routes through here.
+  function _notifyCredentialChange() {
+    _credentialCallbacks.forEach(function (cb) {
+      try { cb(); } catch (e) { /* one listener must not stop the others */ }
+    });
+  }
 
   function getStoredKey() {
     return localStorage.getItem(STORAGE_KEY);
@@ -17,11 +30,27 @@
 
   function setStoredKey(key) {
     localStorage.setItem(STORAGE_KEY, key);
+    // Unconditionally, not only when the value differs.
+    //
+    // Today the prompt only appears after a 401, which has already cleared the
+    // stored key, so a write of an already-stored value does not arise through
+    // it -- which means no test can kill an equality check here, and saying so
+    // is better than implying one does. It is unconditional anyway because the
+    // rule "same string means same principal" is not true: two credentials can
+    // share a value, and a future flow that re-prompts without clearing would
+    // silently stop notifying.
+    _notifyCredentialChange();
   }
 
   function clearStoredKey() {
     localStorage.removeItem(STORAGE_KEY);
+    _notifyCredentialChange();
   }
+
+  // Another tab replacing or clearing the key.
+  window.addEventListener('storage', function (e) {
+    if (e.key === STORAGE_KEY) _notifyCredentialChange();
+  });
 
   function _notifyReady() {
     _isReady = true;
@@ -119,6 +148,19 @@
       if (_isReady) { cb(); }
       else { _readyCallbacks.push(cb); }
     },
+    /**
+     * Register a callback for when the stored credential changes.
+     *
+     * Fires on a key being written, cleared, or re-entered, and on a storage
+     * event from another tab.
+     *
+     * A 401 reaches it indirectly: api.js calls clearKey() on any 401, and
+     * clearing notifies. That is the only way an expired or revoked key becomes
+     * observable, so there is an unavoidable delay between revocation and the
+     * next response. An earlier version exported the notifier with a comment
+     * saying api.js calls it directly, which it never did.
+     */
+    onCredentialChange: function (cb) { _credentialCallbacks.push(cb); },
   };
 
   // Auto-check on page load

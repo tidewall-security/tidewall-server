@@ -923,3 +923,103 @@ def test_keys_api_returns_persisted_grants_and_never_the_implied_one(env):
         assert MATCHES_READ not in rendered["grants"], "the implied grant was materialised"
     finally:
         session.close()
+
+
+# ---------------------------------------------------------------------------
+# /v1/me/capabilities
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def me_env(env):
+    """The capabilities route on the same app."""
+    client, Session = env
+    from app.routes import me
+
+    client.app.include_router(me.router)
+    return client, Session
+
+
+@pytest.mark.parametrize(
+    "role,policy_id,grants,expected",
+    [
+        # Effective operation booleans, derived through allows_view. A full
+        # grant reports matches true -- that is the honest effective capability,
+        # and the credential can already exercise it.
+        ("viewer", "policy-a", [CONTENT_READ], {"matches": True, "full": True}),
+        ("viewer", "policy-a", [MATCHES_READ], {"matches": True, "full": False}),
+        ("viewer", "policy-a", [CONTENT_EXPORT], {"matches": False, "full": False}),
+        ("viewer", "policy-a", None, {"matches": False, "full": False}),
+        ("admin", "policy-a", [CONTENT_READ], {"matches": True, "full": True}),
+        ("admin", "policy-a", None, {"matches": False, "full": False}),
+        # A valid credential with no content capability, answered in advance
+        # rather than as a 401 or 403.
+        ("admin", None, None, {"matches": False, "full": False}),
+    ],
+)
+def test_the_capabilities_contract(me_env, role, policy_id, grants, expected):
+    client, Session = me_env
+    headers = _key(Session, role=role, policy_id=policy_id, grants=grants)
+    resp = client.get("/v1/me/capabilities", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json() == {"content": expected}
+    for value in resp.json()["content"].values():
+        assert isinstance(value, bool), "a capability was not a JSON boolean"
+
+
+def test_capabilities_needs_a_credential(me_env):
+    client, _Session = me_env
+    assert client.get("/v1/me/capabilities").status_code == 401
+
+
+@pytest.mark.parametrize("role", ["api", "rt"])
+def test_capabilities_refuses_a_role_below_viewer(me_env, role):
+    client, Session = me_env
+    headers = _key(Session, role=role, policy_id="policy-a", grants=None)
+    assert client.get("/v1/me/capabilities", headers=headers).status_code == 403
+
+
+def test_capabilities_refuses_a_defective_credential(me_env):
+    client, Session = me_env
+    headers = _key(Session, role="viewer", policy_id="policy-a", grants=["nope"])
+    assert client.get("/v1/me/capabilities", headers=headers).status_code == 401
+
+
+def test_capabilities_never_returns_a_grant_string(me_env):
+    client, Session = me_env
+    headers = _key(Session, role="viewer", policy_id="policy-a", grants=[CONTENT_READ])
+    body = client.get("/v1/me/capabilities", headers=headers).text
+    assert "interaction:" not in body, "a grant string reached the response"
+
+
+def test_capabilities_takes_no_subject(me_env):
+    """There is no form of this that asks about somebody else."""
+    client, Session = me_env
+    mine = _key(Session, role="viewer", policy_id="policy-a", grants=None)
+    _theirs = _key(Session, role="viewer", policy_id="policy-a", grants=[CONTENT_READ])
+
+    for query in ("?key_id=other", "?api_key_id=other", "?subject=other", "?user=other"):
+        body = client.get(f"/v1/me/capabilities{query}", headers=mine).json()
+        assert body == {"content": {"matches": False, "full": False}}, f"{query} changed the answer"
+
+
+@pytest.mark.parametrize(
+    "headers_factory",
+    [
+        lambda Session: None,  # no credential: a 401 from AuthMiddleware
+        lambda Session: {"Authorization": "Bearer ak_not_a_real_key"},
+        lambda Session: _key(Session, role="viewer", policy_id="policy-a", grants=[CONTENT_READ]),
+        lambda Session: _key(Session, role="api", policy_id="policy-a", grants=None),
+    ],
+)
+def test_capabilities_is_uncacheable_on_every_path(me_env, headers_factory):
+    """Including the 401s AuthMiddleware returns before the route runs.
+
+    The route can only header its own responses, so those were cacheable while
+    the test checked a 200 only.
+    """
+    client, Session = me_env
+    headers = headers_factory(Session)
+    resp = client.get("/v1/me/capabilities", headers=headers or {})
+    assert resp.headers["cache-control"] == "no-store", f"{resp.status_code} was cacheable"
+    assert resp.headers["pragma"] == "no-cache"

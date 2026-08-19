@@ -17,7 +17,8 @@ import re
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-#: The content endpoint. Everything it can return must be uncacheable, including
+#: The content endpoint and the capability endpoint that describes access to it.
+#: Everything they can return must be uncacheable, including
 #: a 401 short-circuited by authentication -- which is why this lives here
 #: rather than in the route: this middleware is registered after AuthMiddleware
 #: and middleware runs in reverse registration order, so it is the outer of the
@@ -25,7 +26,7 @@ from starlette.requests import Request
 #:
 #: An exact segment matcher, never a prefix. A trailing slash selects redirect
 #: or 404 behaviour rather than this route and is outside the contract.
-_CONTENT_PATH = re.compile(r"^/v1/logs/[^/]+/content$")
+_CONTENT_PATH = re.compile(r"^(/v1/logs/[^/]+/content|/v1/me/capabilities)$")
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
