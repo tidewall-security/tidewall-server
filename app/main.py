@@ -97,6 +97,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.db.seed import seed_from_yaml
 
     os.makedirs(_PROJECT_ROOT / "data", exist_ok=True)
+
+    # Before anything touches the database, including the Alembic migration
+    # below: a migration running before the lock is a second writer by another
+    # name. Acquired here rather than at import, so a forked worker takes its
+    # own -- a lock inherited from a pre-fork parent is shared through the same
+    # open file description and excludes nothing.
+    from app.services.process_lock import ProcessLock
+
+    process_lock = ProcessLock()
+    process_lock.acquire(settings.DB_URL)
+    app.state.process_lock = process_lock
+    app.state.boot_id = process_lock.boot_id
+
     engine = get_engine(settings.DB_URL)
     SessionLocal = get_session_factory(engine)
 
@@ -192,6 +205,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Deliberately not reset to None: if start() got far enough to create a
         # task, that task is running and shutdown must still stop and drain it.
     app.state.scheduler = scheduler
+    # Settlement tasks this process started. A bare create_task is owned by
+    # nothing: the handler holds a strong reference only while it runs, and at
+    # shutdown the loop can close with one still in flight.
+    app.state.export_settlements = set()
 
     logging.info("Tidewall ready")
 
@@ -243,6 +260,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 "error",
                 "not disposing the database engine: background work is still running",
             )
+        # Released last, after every request and scheduler task has drained.
+        # Closing it earlier would let a replacement instance start while this
+        # process is still writing.
+        process_lock.release()
 
 
 def create_app() -> FastAPI:
