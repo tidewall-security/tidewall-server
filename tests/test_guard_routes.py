@@ -521,3 +521,43 @@ def test_a_capture_dependency_failure_still_commits_the_verdict(setup, monkeypat
         assert row.content_available is False
     finally:
         session.close()
+
+
+def test_a_capture_failure_that_cannot_even_be_logged_still_does_not_change_enforcement(setup, monkeypatch):
+    """The boundary has to include its own failure reporting.
+
+    Each capture-only operation is wrapped, but the report inside the handler
+    was not. A logging Filter raises straight through Logger.handle — unlike a
+    handler's emit(), which the logging module catches — so an operator's
+    broken filter could turn a contained capture failure back into a 500.
+    """
+    import logging
+
+    client, _admin_key, api_key, _viewer_key, session_factory = setup
+    headers = {"Authorization": f"Bearer {api_key}"}
+    payload = _guard_payload(messages=[{"role": "user", "content": f"my code is {CAPTURE_CANARY} ok"}])
+
+    _configure(session_factory, capture=False)
+    baseline = _enforcement(client.post("/v1/guard_chat_completions", json=payload, headers=headers))
+
+    _configure(session_factory, capture=True)
+    import app.services.audit_evidence as audit_evidence
+
+    def _explode(*args, **kwargs):
+        raise RuntimeError("collector unavailable")
+
+    class _HostileFilter(logging.Filter):
+        def filter(self, record):
+            raise RuntimeError("filter is broken")
+
+    monkeypatch.setattr(audit_evidence, "MatchCollector", _explode)
+    hostile = _HostileFilter()
+    guard_logger = logging.getLogger("app.routes.guard")
+    guard_logger.addFilter(hostile)
+    try:
+        on = client.post("/v1/guard_chat_completions", json=payload, headers=headers)
+    finally:
+        guard_logger.removeFilter(hostile)
+
+    assert on.status_code == 200, "a capture failure that could not be logged became an HTTP error"
+    assert _enforcement(on) == baseline

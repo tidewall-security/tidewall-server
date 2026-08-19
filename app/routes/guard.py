@@ -37,7 +37,7 @@ from app.interaction_log import _validated as _safe_meta
 from app.interaction_log import _validated_ip as _safe_ip
 from app.models import GuardRequest, GuardResponse, GuardResult
 from app.services.safe_export_evidence import project_detectors
-from app.services.safe_logging import describe
+from app.services.safe_logging import describe, report
 from app.utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
@@ -78,7 +78,7 @@ def _build_collector(messages: list[dict]) -> Any:
         collector.register_flattened(segments)
         return collector
     except Exception as exc:
-        logger.warning("exact-match capture setup failed; continuing without it: %s", describe(exc))
+        report(logger, "warning", "exact-match capture setup failed; continuing without it", exc)
         return None
 
 
@@ -308,7 +308,7 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             }
         except Exception as exc:
             # Capture failing must not fail the scan that already succeeded.
-            logger.warning("exact match capture failed: %s", describe(exc))
+            report(logger, "warning", "exact match capture failed", exc)
     latency_ms = (time.monotonic() - t0) * 1000
 
     # If any redacting detector mutated text, we need to re-scan each

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Interaction
 from app.services.safe_export_evidence import EVIDENCE_SCHEMA_VERSION, project_detectors
-from app.services.safe_logging import describe
+from app.services.safe_logging import report
 
 # Caller-supplied metadata is bounded and normalised. Without this, content
 # just moves into a different column — an integration is free to put a prompt
@@ -296,10 +296,7 @@ class InteractionLog:
                 except Exception as exc:
                     # No values in the message: this is the content being
                     # protected, on a path that reaches an operator's log.
-                    logger.error(
-                        "content capture failed for request; storing the event without it: %s",
-                        describe(exc),
-                    )
+                    report(logger, "error", "content capture failed for request; storing the event without it", exc)
                     prepared = None
 
                 if prepared is not None:
@@ -314,9 +311,8 @@ class InteractionLog:
                             capture_content(session, interaction=row, prepared=prepared)
                         row.content_available = True
                     except Exception as exc:
-                        logger.error(
-                            "content persistence failed for request; storing the event without it: %s",
-                            describe(exc),
+                        report(
+                            logger, "error", "content persistence failed for request; storing the event without it", exc
                         )
                         row.content_available = False
 

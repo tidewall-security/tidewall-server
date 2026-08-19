@@ -166,6 +166,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # "retention is not running" tells an unauthenticated caller that captured
     # content is accumulating. Operator-visible reporting on an authenticated
     # surface is worth adding and is not here yet.
+    from app.services.safe_logging import report
+
     scheduler = None
     try:
         from app.services.scheduler import Scheduler, retention_job
@@ -173,9 +175,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         scheduler = Scheduler()
         scheduler.start([retention_job(SessionLocal, scheduler=scheduler)])
     except Exception:
-        logging.getLogger(__name__).error(
+        report(
+            logging.getLogger(__name__),
+            "error",
             "retention scheduler did not start; expired content will not be reclaimed from disk "
             "(it remains undisclosable through the read gate)",
+            # Infrastructure, not a scan: the traceback carries no request
+            # content and is the most useful thing here.
             exc_info=True,
         )
         scheduler = None
@@ -202,7 +208,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             try:
                 drained = await scheduler.stop()
             except Exception:
-                logging.getLogger(__name__).error(
+                report(
+                    logging.getLogger(__name__),
+                    "error",
                     "retention scheduler did not stop cleanly; assuming background work is still running",
                     exc_info=True,
                 )
@@ -210,9 +218,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if drained:
             engine.dispose()
         else:
-            # A worker still owns a session. Disposing now would pull the
-            # connection out from under it; leaking the engine on a shutdown
-            # path is the lesser fault.
+            # Withheld because the pool class decides whether this is safe, and
+            # only one of the two is. Measured against this codebase's own
+            # get_engine(): a file-backed URL gets a QueuePool, where dispose()
+            # closes checked-in connections only — a worker holding a
+            # checked-out one keeps working, and the engine stays usable
+            # through its replacement pool. An in-memory URL gets a StaticPool,
+            # whose single shared connection dispose() closes outright; a
+            # worker still using it then fails with a ProgrammingError.
+            #
+            # So for the production configuration disposing here would be
+            # harmless, and an earlier version of this comment claimed the
+            # general case wrongly. Withholding it costs an idle pool on a path
+            # where the process is about to exit anyway, and is correct for
+            # both.
             logging.getLogger(__name__).error("not disposing the database engine: background work is still running")
 
 

@@ -26,7 +26,7 @@ import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from app.services.safe_logging import describe
+from app.services.safe_logging import report
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +109,7 @@ class Scheduler:
                 # A failing job must never take down the server or stop its own
                 # schedule; housekeeping that dies silently on first error is
                 # worse than none, because it looks like it is running.
-                logger.warning("scheduled job %s failed: %s", job.name, describe(exc))
+                report(logger, "warning", f"scheduled job {job.name} failed", exc)
             try:
                 await asyncio.wait_for(self._stopping.wait(), timeout=job.interval_seconds)
             except TimeoutError:

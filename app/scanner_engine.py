@@ -27,7 +27,7 @@ from typing import Any
 
 from app.config import OnDetectorFailure, PolicyConfig
 from app.detectors.base import BaseDetector, DetectorStatus, FailureCode
-from app.services.safe_logging import describe
+from app.services.safe_logging import describe, report
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +148,7 @@ def _open_batch(collector: Any, detector: str) -> Any:
         return collector.open_batch(detector)
     except Exception:
         # Capture is optional; the scan is not.
-        logger.debug("could not open a capture batch for %s", detector)
+        report(logger, "debug", f"could not open a capture batch for {detector}")
         return None
 
 
@@ -166,7 +166,7 @@ def _settle_batch(collector: Any, batch: Any, *, keep: bool) -> None:
         else:
             collector.discard_batch(batch)
     except Exception:
-        logger.debug("capture bookkeeping failed; discarding this detector's matches")
+        report(logger, "debug", "capture bookkeeping failed; discarding this detector's matches")
 
 
 def _discard_batch(collector: Any, batch: Any) -> None:
@@ -175,7 +175,7 @@ def _discard_batch(collector: Any, batch: Any) -> None:
     try:
         collector.discard_batch(batch)
     except Exception:
-        logger.debug("could not discard a capture batch")
+        report(logger, "debug", "could not discard a capture batch")
 
 
 @contextmanager
@@ -534,7 +534,7 @@ class ScannerEngine:
                 # After this detector's own batch has settled, so its matches
                 # remain eligible.
                 if matches is not None:
-                    logger.debug("text mutated by %s; exact-match capture stops here", det_name)
+                    report(logger, "debug", f"text mutated by {det_name}; exact-match capture stops here")
                     matches = None
 
             # --- reporting ---
