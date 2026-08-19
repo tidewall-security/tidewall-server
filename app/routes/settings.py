@@ -125,6 +125,42 @@ async def delete_prompt_list(entry_id: str, request: Request) -> None:
         session.close()
 
 
+_CONTENT_EXPORT_VIEWS = ("matches", "full")
+
+
+def validate_content_export_views(raw: object) -> list[str]:
+    """The closed list a target is approved for.
+
+    A duplicate is rejected rather than silently collapsed: it means the caller
+    believes something untrue about what they are configuring, and quietly
+    fixing it hides that.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("content_export_views must be a list")
+    seen: list[str] = []
+    for item in raw:
+        if not isinstance(item, str) or item not in _CONTENT_EXPORT_VIEWS:
+            raise ValueError(f"unknown content export view: {item!r}")
+        if item in seen:
+            raise ValueError(f"duplicate content export view: {item!r}")
+        seen.append(item)
+    return seen
+
+
+def _views_or_400(raw: object) -> list[str]:
+    """A caller misconfiguring the interlock is a client error, not a fault.
+
+    Only the expected validation failure is translated; anything else stays a
+    500 with a fixed body rather than becoming a 400 carrying exception text.
+    """
+    try:
+        return validate_content_export_views(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 class CreateExportTargetRequest(BaseModel):
     name: str
     type: str  # "webhook" | "syslog"
@@ -132,6 +168,9 @@ class CreateExportTargetRequest(BaseModel):
     format: str = "ocsf"  # "ocsf" | "aidr_compat" | "raw"
     events: list[str]  # ["blocked", "alerted", "transformed", "reported"]
     enabled: bool = True
+    allow_content_export: bool = False
+    content_export_policy_id: str | None = None
+    content_export_views: list[str] | None = None
 
 
 class UpdateExportTargetRequest(BaseModel):
@@ -140,6 +179,9 @@ class UpdateExportTargetRequest(BaseModel):
     format: str | None = None
     events: list[str] | None = None
     enabled: bool | None = None
+    allow_content_export: bool | None = None
+    content_export_policy_id: str | None = None
+    content_export_views: list[str] | None = None
 
 
 def _target_to_dict(target) -> dict:
@@ -151,6 +193,11 @@ def _target_to_dict(target) -> dict:
         "format": target.format,
         "events": target.events,
         "enabled": target.enabled,
+        # The content-export interlock and its scope, so an admin can see which
+        # destinations are marked for content and for what.
+        "allow_content_export": bool(target.allow_content_export),
+        "content_export_policy_id": target.content_export_policy_id,
+        "content_export_views": list(target.content_export_views or []),
         "created_at": str(target.created_at),
     }
 
@@ -183,6 +230,9 @@ async def create_export_target(body: CreateExportTargetRequest, request: Request
             format=body.format,
             events=body.events,
             enabled=body.enabled,
+            allow_content_export=body.allow_content_export,
+            content_export_policy_id=body.content_export_policy_id,
+            content_export_views=_views_or_400(body.content_export_views),
         )
         session.add(target)
         session.commit()
@@ -210,6 +260,12 @@ async def update_export_target(target_id: str, body: UpdateExportTargetRequest, 
             target.events = body.events
         if body.enabled is not None:
             target.enabled = body.enabled
+        if body.allow_content_export is not None:
+            target.allow_content_export = body.allow_content_export
+        if body.content_export_policy_id is not None:
+            target.content_export_policy_id = body.content_export_policy_id
+        if body.content_export_views is not None:
+            target.content_export_views = _views_or_400(body.content_export_views)
         session.commit()
         return _target_to_dict(target)
     finally:
