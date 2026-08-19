@@ -140,6 +140,44 @@ _DETECTOR_REGISTRY: dict[str, tuple[str, str]] = {
 }
 
 
+def _open_batch(collector: Any, detector: str) -> Any:
+    """Start a capture batch, or give up on capture for this detector."""
+    if collector is None:
+        return None
+    try:
+        return collector.open_batch(detector)
+    except Exception:
+        # Capture is optional; the scan is not.
+        logger.debug("could not open a capture batch for %s", detector)
+        return None
+
+
+def _settle_batch(collector: Any, batch: Any, *, keep: bool) -> None:
+    """Commit or discard, swallowing everything.
+
+    A failure here happens after the detector has already produced a verdict,
+    so it can only cost evidence — never the verdict.
+    """
+    if collector is None or batch is None:
+        return
+    try:
+        if keep:
+            collector.commit_batch(batch)
+        else:
+            collector.discard_batch(batch)
+    except Exception:
+        logger.debug("capture bookkeeping failed; discarding this detector's matches")
+
+
+def _discard_batch(collector: Any, batch: Any) -> None:
+    if collector is None or batch is None:
+        return
+    try:
+        collector.discard_batch(batch)
+    except Exception:
+        logger.debug("could not discard a capture batch")
+
+
 @contextmanager
 def _capture_scope(collector: Any, detector: str) -> Iterator[Any]:
     """One exact-match batch per detector run, or nothing when capture is off.
@@ -395,35 +433,31 @@ class ScannerEngine:
             if not _detector_applies(det_name, event_type):
                 continue
 
-            try:
-                # The collector is passed to detectors that can report exact
-                # matches. It is optional so a detector that does not is
-                # unaffected, and so a scan without capture pays nothing.
-                # One capture scope around each detector call, so anything it
-                # staged is discarded if it raises part-way. Opening a capture
-                # per match let a detector that failed later still persist a
-                # plausible partial set.
-                with _capture_scope(matches, det_name) as batch:
-                    extra: dict[str, Any] = {"matches": batch} if batch is not None else {}
-                    if det_name == "mcp_validation" and tools:
-                        det_result = detector.scan(current_text, tools=tools, **extra)
-                    elif det_name == "malicious_prompt" and messages:
-                        det_result = detector.scan(current_text, messages=messages, **extra)
-                    elif det_name == "confidential_and_pii_entity" and vault is not None:
-                        det_result = detector.scan(current_text, vault=vault, **extra)
-                    else:
-                        det_result = detector.scan(current_text, **extra)
+            # Capture is opened outside the detector's own error handling and
+            # never inside it. Anything capture does — opening, reporting,
+            # committing, even a MemoryError from the extra allocations — must
+            # not be able to become the detector's verdict, or turning audit on
+            # would change enforcement.
+            batch = _open_batch(matches, det_name)
+            extra: dict[str, Any] = {"matches": batch} if batch is not None else {}
 
-                    # Inside the scope, before it commits. A typed FAILED
-                    # return is a supported outcome, not an exception, and
-                    # checking it after the batch had already committed left
-                    # exact values from a detector whose verdict is a failure.
-                    if batch is not None and det_result.status is DetectorStatus.FAILED:
-                        batch.poisoned = True
+            try:
+                if det_name == "mcp_validation" and tools:
+                    det_result = detector.scan(current_text, tools=tools, **extra)
+                elif det_name == "malicious_prompt" and messages:
+                    det_result = detector.scan(current_text, messages=messages, **extra)
+                elif det_name == "confidential_and_pii_entity" and vault is not None:
+                    det_result = detector.scan(current_text, vault=vault, **extra)
+                else:
+                    det_result = detector.scan(current_text, **extra)
             except Exception as exc:
                 logger.error("Detector '%s' raised during scan: %s", det_name, describe(exc))
+                _discard_batch(matches, batch)
                 result.record_failure(det_name, FailureCode.SCAN_FAILED, detector.action)
                 continue
+
+            # Bookkeeping, after the verdict exists and unable to affect it.
+            _settle_batch(matches, batch, keep=det_result.status is not DetectorStatus.FAILED)
 
             # A detector may also report failure by value rather than raising —
             # most know far better than we do why they could not run.

@@ -790,3 +790,91 @@ def test_a_successful_detector_batch_is_kept():
     groups = collector.finalize()
     assert len(groups) == 1
     assert groups[0].value == "alice@example.com"
+
+
+# ---------------------------------------------------------------------------
+# Capture is observational: its failures cost evidence, never the verdict
+# ---------------------------------------------------------------------------
+
+
+def _engine_with(detector, collector):
+    from app.config import PolicyConfig
+    from app.scanner_engine import ScannerEngine
+
+    engine = ScannerEngine.__new__(ScannerEngine)
+    engine._detectors = [(detector.name, detector)]
+    engine._construction_failures = []
+    engine._policy = PolicyConfig(name="t")
+    engine._session_factory = None
+    return engine
+
+
+class _ReportingDetector:
+    """A detector that reports a match and succeeds."""
+
+    action = "report"
+    can_redact = False
+    can_block = False
+    available = True
+
+    @property
+    def name(self) -> str:
+        return "custom_entity"
+
+    def scan(self, text, **kwargs):
+        from app.detectors.base import DetectorResult
+        from app.services.audit_evidence import report_match
+
+        report_match(kwargs.get("matches"), "custom_entity", "CUSTOM", "alice", 0, 5)
+        return DetectorResult(detected=True)
+
+
+def test_a_collector_that_raises_on_commit_does_not_fail_the_detector():
+    """Capture bookkeeping happens after the verdict exists, so it can only
+    cost evidence. Previously the whole collector context sat inside the
+    detector's try, so a commit failure became SCAN_FAILED — and for a redactor
+    that means a redaction that should have happened did not."""
+
+    class _BadCollector(MatchCollector):
+        def commit_batch(self, staged):  # type: ignore[override]
+            raise RuntimeError("commit exploded")
+
+    collector = _BadCollector()
+    collector.register_flattened([(MSG, "alice and bob", 0)])
+
+    engine = _engine_with(_ReportingDetector(), collector)
+    result = engine.scan("alice and bob", "input", "vault-1", None, None, None, collector)
+
+    assert "custom_entity" in result.detectors
+    assert result.detectors["custom_entity"]["detected"] is True
+    assert not result.failures, f"capture failure became a detector failure: {result.failures}"
+
+
+def test_a_collector_that_raises_on_open_does_not_fail_the_detector():
+    class _BadCollector(MatchCollector):
+        def open_batch(self, detector):  # type: ignore[override]
+            raise RuntimeError("open exploded")
+
+    collector = _BadCollector()
+    collector.register_flattened([(MSG, "alice and bob", 0)])
+
+    engine = _engine_with(_ReportingDetector(), collector)
+    result = engine.scan("alice and bob", "input", "vault-1", None, None, None, collector)
+
+    assert result.detectors["custom_entity"]["detected"] is True
+    assert not result.failures
+
+
+def test_a_collector_that_raises_while_resolving_does_not_fail_the_detector():
+    class _BadCollector(MatchCollector):
+        def resolve_flattened(self, start, end):  # type: ignore[override]
+            raise RuntimeError("resolve exploded")
+
+    collector = _BadCollector()
+    collector.register_flattened([(MSG, "alice and bob", 0)])
+
+    engine = _engine_with(_ReportingDetector(), collector)
+    result = engine.scan("alice and bob", "input", "vault-1", None, None, None, collector)
+
+    assert result.detectors["custom_entity"]["detected"] is True
+    assert not result.failures

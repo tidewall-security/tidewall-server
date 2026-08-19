@@ -348,6 +348,44 @@ class MatchCollector:
             raise EvidenceError("source.conflicting_registration")
         self._originals[source] = original
 
+    def open_batch(self, detector: str) -> _DetectorCapture:
+        """Start a batch without a context manager.
+
+        The context form ties commit to control flow, which means a commit
+        failure propagates into whatever the caller was doing. The scanner
+        needs capture to be observational — its failures must not be able to
+        replace a detector's result — so it drives open/commit/discard itself.
+        """
+        if self._finalized:
+            raise EvidenceError("collector.finalized")
+        if self._capture_open:
+            raise EvidenceError("collector.capture_already_open")
+        _check_identifier(detector, "match.detector.invalid")
+        self._capture_open = True
+        return _DetectorCapture(detector, self)
+
+    def commit_batch(self, staged: _DetectorCapture) -> None:
+        """Commit a batch, or discard it if anything is wrong with it."""
+        try:
+            if self._finalized or staged.poisoned:
+                return
+            for match in staged._staged:
+                if match.detector != staged.detector:
+                    return
+                original = self._originals.get(match.source)
+                if original is None or validation_error(match, original) is not None:
+                    return
+            if len(self._matches) + len(staged._staged) > MAX_MATCHES_COLLECTED:
+                return
+            self._matches.extend(staged._staged)
+        finally:
+            self.discard_batch(staged)
+
+    def discard_batch(self, staged: _DetectorCapture) -> None:
+        staged._staged.clear()
+        staged._closed = True
+        self._capture_open = False
+
     @contextmanager
     def capture(self, detector: str) -> Iterator[_DetectorCapture]:
         """Stage one detector's matches, committing only if all of them pass.
@@ -598,15 +636,15 @@ def report_match(
     """
     if batch is None:
         return
-    resolved = batch._collector.resolve_flattened(start, end)
-    if resolved is None:
-        # Cannot be attributed to one message: drop the batch rather than
-        # record a fabricated origin.
-        batch.poisoned = True
-        logger.debug("exact match for %s could not be attributed to one message; discarding batch", detector)
-        return
-    source, local_start, local_end = resolved
     try:
+        resolved = batch._collector.resolve_flattened(start, end)
+        if resolved is None:
+            # Cannot be attributed to one message: drop the batch rather than
+            # record a fabricated origin.
+            batch.poisoned = True
+            logger.debug("exact match for %s could not be attributed to one message; discarding batch", detector)
+            return
+        source, local_start, local_end = resolved
         batch.add(
             ExactMatch(
                 detector=detector,
@@ -618,11 +656,11 @@ def report_match(
                 rule_id=rule_id,
             )
         )
-    except EvidenceError:
-        # Poison rather than raise. Raising propagated out of the detector and
-        # the engine converted it to SCAN_FAILED, so turning capture on could
-        # skip a redaction that would otherwise have happened — audit changing
-        # enforcement, which is exactly backwards. Poisoning still discards the
-        # whole batch, so a partial set is never stored.
+    except Exception:
+        # Everything, not only EvidenceError. This runs inside a detector's
+        # scan, so resolution, construction, normalisation, staging — even an
+        # allocation failure from the extra retained values — must not escape
+        # and become the detector's verdict. Poisoning still discards the whole
+        # batch, so a partial set is never stored.
         batch.poisoned = True
-        logger.debug("exact match for %s failed validation; discarding this detector's batch", detector)
+        logger.debug("exact match capture failed for %s; discarding this detector's batch", detector)
