@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 # a promise about what gets disclosed — enforced on read — so the cadence here
 # only governs how promptly the disk is reclaimed.
 DEFAULT_INTERVAL_SECONDS = 300.0
+_MAX_CONCURRENT_WORKERS = 8
 
 
 @dataclass
@@ -48,6 +50,45 @@ class Scheduler:
     def __init__(self) -> None:
         self._tasks: list[asyncio.Task[None]] = []
         self._stopping = asyncio.Event()
+        # Threads outlive the tasks awaiting them. Cancelling a task that is
+        # awaiting asyncio.to_thread detaches the worker rather than stopping
+        # it, so a timeout that only cancels lets shutdown dispose the database
+        # engine underneath a live session. This tracks the workers themselves.
+        self._workers = threading.BoundedSemaphore(value=_MAX_CONCURRENT_WORKERS)
+        self._worker_count = 0
+        self._worker_lock = threading.Lock()
+        self._workers_idle = threading.Event()
+        self._workers_idle.set()
+
+    def _worker_started(self) -> None:
+        with self._worker_lock:
+            self._worker_count += 1
+            self._workers_idle.clear()
+
+    def _worker_finished(self) -> None:
+        with self._worker_lock:
+            self._worker_count -= 1
+            if self._worker_count == 0:
+                self._workers_idle.set()
+
+    async def run_in_worker(self, fn: Callable[[], object]) -> object:
+        """Run blocking work off the loop, tracked so shutdown can wait for it.
+
+        The bookkeeping happens *inside* the thread. A ``finally`` around the
+        await would run when the awaiting task is cancelled — which is exactly
+        the moment the thread is still running — so the counter would drop to
+        zero while a worker still held a session, and shutdown would stop
+        waiting for the thing it is meant to wait for.
+        """
+        self._worker_started()
+
+        def _tracked() -> object:
+            try:
+                return fn()
+            finally:
+                self._worker_finished()
+
+        return await asyncio.to_thread(_tracked)
 
     def start(self, jobs: list[Job]) -> None:
         for job in jobs:
@@ -73,7 +114,7 @@ class Scheduler:
             except TimeoutError:
                 continue
 
-    async def stop(self, *, timeout_seconds: float = 30.0) -> None:
+    async def stop(self, *, timeout_seconds: float = 30.0, worker_drain_seconds: float = 30.0) -> None:
         """Signal the loops and wait for any in-flight run to finish.
 
         Deliberately does not cancel first. A retention run is awaiting
@@ -97,10 +138,32 @@ class Scheduler:
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
         self._tasks.clear()
+
+        # Cancelling above only unblocked the loop; a detached worker may still
+        # hold a session. Wait for the threads themselves, because the caller
+        # disposes the engine as soon as this returns.
+        if not self._workers_idle.is_set():
+            # Its own bound, not the task timeout. That one limits how long a
+            # loop may take to notice the stop signal; this one is about not
+            # disposing the database engine underneath a thread that still owns
+            # a session, which is the harm being prevented.
+            logger.info("waiting for %d background worker(s) to finish", self._worker_count)
+            await asyncio.to_thread(self._workers_idle.wait, worker_drain_seconds)
+            if not self._workers_idle.is_set():
+                # Said out loud rather than silently disposing under live work.
+                logger.error(
+                    "background worker(s) still running after %.0fs; database disposal may race them",
+                    worker_drain_seconds,
+                )
         logger.info("Scheduler stopped")
 
 
-def retention_job(session_factory: Callable[[], object], *, interval_seconds: float = DEFAULT_INTERVAL_SECONDS) -> Job:
+def retention_job(
+    session_factory: Callable[[], object],
+    *,
+    interval_seconds: float = DEFAULT_INTERVAL_SECONDS,
+    scheduler: Scheduler | None = None,
+) -> Job:
     """The content retention purge, as a scheduled job."""
 
     async def _run() -> None:
@@ -111,8 +174,9 @@ def retention_job(session_factory: Callable[[], object], *, interval_seconds: fl
                 return purge_expired(session)
 
         # Off the event loop: this is synchronous database work, and blocking
-        # the loop would stall every in-flight guard request.
-        purged = await asyncio.to_thread(_purge)
+        # the loop would stall every in-flight guard request. Through the
+        # scheduler so shutdown can wait for the thread, not just the task.
+        purged = await (scheduler.run_in_worker(_purge) if scheduler else asyncio.to_thread(_purge))
         if purged:
             logger.info("Retention purged %d expired content row(s)", purged)
 

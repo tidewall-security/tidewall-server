@@ -1,11 +1,9 @@
 """Tests for KeyService — key CRUD and bootstrap."""
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
 from app.db.engine import get_engine, get_session_factory
-from app.db.models import Base, APIKey, Policy
+from app.db.models import APIKey, Base, Policy
 
 
 @pytest.fixture

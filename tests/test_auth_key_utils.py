@@ -1,7 +1,5 @@
 """Tests for API key utilities."""
 
-import pytest
-
 
 def test_generate_key_has_prefix():
     from app.auth.key_utils import generate_key

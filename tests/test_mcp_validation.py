@@ -1,7 +1,5 @@
 """Tests for MCPValidationDetector — tool name validation."""
 
-import pytest
-
 
 def test_no_tools_not_detected():
     from app.detectors.mcp_validation import MCPValidationDetector

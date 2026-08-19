@@ -1,7 +1,5 @@
 """Tests for OCSF Data Security Finding event builder."""
 
-import pytest
-
 
 def test_build_ocsf_blocked_event():
     from app.services.ocsf_builder import build_ocsf_event

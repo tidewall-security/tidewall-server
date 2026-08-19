@@ -1,6 +1,12 @@
 name: "default_policy"
 report_only: false
 
+# Raw prompt capture. Off by default: Tidewall stores what was detected, not
+# the prompt itself. Turning this on retains full prompts, gated behind a
+# separate grant, with no expiry unless you set one.
+raw_content_enabled: false
+raw_content_retention_days: null
+
 detectors:
   malicious_prompt:
     enabled: true

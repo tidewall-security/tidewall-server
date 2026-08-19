@@ -200,21 +200,32 @@ def test_stop_waits_for_an_in_flight_threaded_job():
     assert asyncio.run(_main()), "stop() returned while the worker thread was still running"
 
 
-def test_stop_cancels_a_job_that_overruns_the_timeout():
-    """A stuck job must not hold shutdown open forever."""
+def test_stop_waits_for_a_tracked_worker_past_the_task_timeout():
+    """Cancelling the task only unblocks the loop; the thread keeps its session.
+
+    My previous test for the overrun case explicitly required the unsafe
+    behaviour: it measured only that stop() returned promptly, never whether
+    the worker was still running, so it would have passed while shutdown
+    disposed the engine underneath live database work.
+    """
     import threading
     import time
 
-    async def _run() -> None:
-        await asyncio.to_thread(lambda: time.sleep(5))
+    finished = threading.Event()
 
-    async def _main() -> float:
+    async def _run(sched) -> None:
+        def _slow() -> None:
+            time.sleep(0.4)
+            finished.set()
+
+        await sched.run_in_worker(_slow)
+
+    async def _main() -> bool:
         scheduler = Scheduler()
-        scheduler.start([Job(name="stuck", interval_seconds=3600, run=_run)])
+        scheduler.start([Job(name="slow", interval_seconds=3600, run=lambda: _run(scheduler))])
         await asyncio.sleep(0.05)
-        started = time.monotonic()
-        await scheduler.stop(timeout_seconds=0.1)
-        return time.monotonic() - started
+        # Task timeout far shorter than the worker.
+        await scheduler.stop(timeout_seconds=0.05)
+        return finished.is_set()
 
-    elapsed = asyncio.run(_main())
-    assert elapsed < 2.0, f"stop() took {elapsed:.1f}s; it should give up on a stuck job"
+    assert asyncio.run(_main()), "stop() returned while a tracked worker was still holding a session"

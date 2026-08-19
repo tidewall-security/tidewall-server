@@ -1,8 +1,7 @@
 """Tests for ExportService — event dispatch to webhooks and syslog."""
 
-import json
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+
 from app.db.engine import get_engine, get_session_factory
 from app.db.models import Base, ExportTarget
 

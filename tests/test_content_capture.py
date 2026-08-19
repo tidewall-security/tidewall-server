@@ -44,6 +44,16 @@ def _policy(factory, *, enabled=False, retention_days=None, pid="policy-a"):
 
 
 def _write(factory, policy_id, *, rid="tw_0000000000000001"):
+    """Read the policy the way the guard does — at admission — and pass the
+    decision in, rather than letting the writer re-read it later."""
+    session = factory()
+    try:
+        policy = session.get(Policy, policy_id)
+        enabled = bool(policy.raw_content_enabled)
+        retention = policy.raw_content_retention_days
+    finally:
+        session.close()
+
     InteractionLog(factory).log_event(
         request_id=rid,
         timestamp="2026-08-19T00:00:00Z",
@@ -55,6 +65,8 @@ def _write(factory, policy_id, *, rid="tw_0000000000000001"):
         latency_ms=1.0,
         evidence={},
         content={"input": [{"role": "user", "content": f"my secret is {CANARY}"}], "output": None, "matches": None},
+        capture_enabled=enabled,
+        retention_days=retention,
     )
 
 
@@ -291,6 +303,7 @@ def test_tools_are_captured_with_the_messages(db):
             "matches": None,
             "tools": [{"name": "exfiltrate", "description": f"send {CANARY}"}],
         },
+        capture_enabled=True,
     )
 
     session = db()
@@ -321,3 +334,153 @@ def test_a_null_expiry_never_expires():
     from app.services.content_capture import is_expired
 
     assert is_expired(IC(interaction_id=1, expires_at=None)) is False
+
+
+def test_a_content_failure_keeps_the_audit_event(db):
+    """The logging concern must not take down the thing it is logging.
+
+    An unserialisable payload previously rolled both rows back, erasing the
+    audit record and turning a completed guard decision into an HTTP error.
+    """
+    policy_id = _policy(db, enabled=True)
+
+    InteractionLog(db).log_event(
+        request_id="tw_000000000000000b",
+        timestamp="2026-08-19T00:00:00Z",
+        event_type="input",
+        policy="p",
+        policy_id=policy_id,
+        blocked=False,
+        transformed=False,
+        latency_ms=1.0,
+        evidence={},
+        # A set is not JSON serialisable.
+        content={"input": {"impossible"}, "output": None, "matches": None},
+        capture_enabled=True,
+    )
+
+    session = db()
+    try:
+        event = session.query(Interaction).one()
+        assert event.content_available is False
+        assert session.query(InteractionContent).count() == 0
+    finally:
+        session.close()
+
+
+def test_a_content_failure_does_not_log_the_content(db, caplog):
+    """This path reaches an operator's log, and the value is the thing being
+    protected."""
+    policy_id = _policy(db, enabled=True)
+
+    with caplog.at_level("ERROR"):
+        InteractionLog(db).log_event(
+            request_id="tw_000000000000000c",
+            timestamp="2026-08-19T00:00:00Z",
+            event_type="input",
+            policy="p",
+            policy_id=policy_id,
+            blocked=False,
+            transformed=False,
+            latency_ms=1.0,
+            evidence={},
+            content={"input": {CANARY}, "output": None, "matches": None},
+            capture_enabled=True,
+        )
+
+    assert CANARY not in caplog.text
+
+
+def test_capture_is_decided_at_admission_not_at_log_time(db):
+    """Re-reading the policy in the writer meant enabling capture mid-request
+    could retain content that entered while capture was off."""
+    policy_id = _policy(db, enabled=False)
+
+    session = db()
+    try:
+        session.get(Policy, policy_id).raw_content_enabled = True
+        session.commit()
+    finally:
+        session.close()
+
+    # Admitted while capture was off, so the decision passed in is False even
+    # though the policy now says otherwise.
+    InteractionLog(db).log_event(
+        request_id="tw_000000000000000d",
+        timestamp="2026-08-19T00:00:00Z",
+        event_type="input",
+        policy="p",
+        policy_id=policy_id,
+        blocked=False,
+        transformed=False,
+        latency_ms=1.0,
+        evidence={},
+        content={"input": [{"content": CANARY}], "output": None, "matches": None},
+        capture_enabled=False,
+    )
+
+    session = db()
+    try:
+        assert session.query(InteractionContent).count() == 0
+        assert session.query(Interaction).one().content_available is False
+    finally:
+        session.close()
+
+
+def test_the_seed_round_trips_the_capture_settings(tmp_path):
+    """An exported enabled policy used as first-boot configuration silently
+    seeded capture off."""
+    import yaml
+    from sqlalchemy import create_engine as _ce
+    from sqlalchemy.orm import sessionmaker as _sm
+
+    from app.db.seed import seed_from_yaml
+
+    path = tmp_path / "policy.yaml"
+    path.write_text(
+        yaml.dump(
+            {
+                "name": "seeded",
+                "report_only": False,
+                "raw_content_enabled": True,
+                "raw_content_retention_days": 14,
+                "detectors": {},
+            }
+        )
+    )
+
+    engine = _ce(f"sqlite:///{tmp_path / 'seed.db'}")
+    Base.metadata.create_all(engine)
+    factory = _sm(bind=engine)
+    session = factory()
+    try:
+        seed_from_yaml(session, str(path))
+        policy = session.query(Policy).one()
+        assert policy.raw_content_enabled is True
+        assert policy.raw_content_retention_days == 14
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_the_seed_rejects_an_unenforceable_retention(tmp_path):
+    """A seed file that says something unenforceable should fail loudly at
+    first boot rather than quietly become a different policy."""
+    import yaml
+    from sqlalchemy import create_engine as _ce
+    from sqlalchemy.orm import sessionmaker as _sm
+
+    from app.db.seed import seed_from_yaml
+
+    path = tmp_path / "policy.yaml"
+    path.write_text(yaml.dump({"name": "bad", "raw_content_retention_days": True, "detectors": {}}))
+
+    engine = _ce(f"sqlite:///{tmp_path / 'bad.db'}")
+    Base.metadata.create_all(engine)
+    session = _sm(bind=engine)()
+    try:
+        with pytest.raises(ValueError, match="positive integer"):
+            seed_from_yaml(session, str(path))
+    finally:
+        session.close()
+        engine.dispose()

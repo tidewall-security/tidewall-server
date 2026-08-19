@@ -1,8 +1,9 @@
 """Tests for AccessRuleService — CRUD operations."""
 
 import pytest
+
 from app.db.engine import get_engine, get_session_factory
-from app.db.models import Base, Policy, RuleSet, AccessRule
+from app.db.models import AccessRule, Base, Policy, RuleSet
 
 
 @pytest.fixture

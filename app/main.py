@@ -156,7 +156,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.services.scheduler import Scheduler, retention_job
 
     scheduler = Scheduler()
-    scheduler.start([retention_job(SessionLocal)])
+    scheduler.start([retention_job(SessionLocal, scheduler=scheduler)])
     app.state.scheduler = scheduler
 
     logging.info("Tidewall ready")

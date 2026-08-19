@@ -187,6 +187,10 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             # path — without this, capture-on quietly meant capture-on-except-
             # when-an-access-rule-fired.
             content={"input": messages, "output": None, "matches": None, "tools": tools},
+            # Resolved when the request was admitted, so a mid-request policy
+            # change cannot retroactively capture or suppress this one.
+            capture_enabled=bool(getattr(policy, "raw_content_enabled", False)),
+            retention_days=getattr(policy, "raw_content_retention_days", None),
             app_id=body.app_id,
             user_id=body.user_id,
             llm_provider=body.llm_provider,
@@ -432,6 +436,8 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             # null rather than pretending otherwise.
             "matches": None,
         },
+        capture_enabled=bool(getattr(policy, "raw_content_enabled", False)),
+        retention_days=getattr(policy, "raw_content_retention_days", None),
         app_id=body.app_id,
         user_id=body.user_id,
         llm_provider=body.llm_provider,

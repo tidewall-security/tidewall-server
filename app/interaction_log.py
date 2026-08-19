@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Interaction
 from app.services.safe_export_evidence import EVIDENCE_SCHEMA_VERSION, project_detectors
+from app.services.safe_logging import describe
 
 # Caller-supplied metadata is bounded and normalised. Without this, content
 # just moves into a different column — an integration is free to put a prompt
@@ -207,6 +208,12 @@ class InteractionLog:
         # Passed rather than fetched so the writer does not have to know how
         # the caller assembled the request.
         content: dict[str, Any] | None = None,
+        # Decided when the request was admitted, not re-read here. Re-reading
+        # meant enabling capture mid-request could retain content that entered
+        # while capture was off, and disabling could silently drop a capture the
+        # operator had been promised.
+        capture_enabled: bool = False,
+        retention_days: int | None = None,
         api_key_id: str | None = None,
         app_id: str | None = None,
         user_id: str | None = None,
@@ -265,23 +272,35 @@ class InteractionLog:
             # Same transaction as the event. A content row without its event,
             # or an event claiming content_available when the write failed,
             # would both be worse than not capturing at all.
-            if content is not None:
-                from app.db.models import Policy
-                from app.services.content_capture import capture_content
+            #
+            # But the event must survive a content failure. Rolling both back
+            # meant an unserialisable payload erased the audit record and
+            # turned a completed guard decision into an HTTP error — the
+            # logging concern taking down the thing it was logging.
+            if content is not None and capture_enabled:
+                from app.services.content_capture import build_content, capture_content
 
-                # Not `policy` — that parameter is the policy *name*.
-                policy_row = session.get(Policy, row.policy_id)
-                if policy_row is not None:
-                    session.flush()
-                    row.content_available = capture_content(
-                        session,
-                        interaction=row,
-                        policy=policy_row,
+                try:
+                    prepared = build_content(
                         input_messages=content.get("input"),
                         output_messages=content.get("output"),
                         matches=content.get("matches"),
                         tools=content.get("tools"),
+                        retention_days=retention_days,
                     )
+                except Exception as exc:
+                    # No values in the message: this is the content being
+                    # protected, on a path that reaches an operator's log.
+                    logger.error(
+                        "content capture failed for request; storing the event without it: %s",
+                        describe(exc),
+                    )
+                    prepared = None
+
+                if prepared is not None:
+                    session.flush()
+                    capture_content(session, interaction=row, prepared=prepared)
+                    row.content_available = True
 
             session.commit()
 

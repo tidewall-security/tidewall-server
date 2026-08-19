@@ -26,12 +26,13 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.db.models import Interaction, InteractionContent, Policy
+from app.db.models import Interaction, InteractionContent
 
 logger = logging.getLogger(__name__)
 
@@ -46,45 +47,77 @@ def _byte_size(*payloads: Any) -> int:
     return total
 
 
-def capture_content(
-    session: Session,
+@dataclass(frozen=True)
+class PreparedContent:
+    """Content that has already been serialised successfully.
+
+    Built before the event commits, so a payload that cannot be stored is
+    discovered while the audit record can still be written without it.
+    """
+
+    input_json: Any
+    output_json: Any
+    matches_json: Any
+    byte_size: int
+    expires_at: datetime | None
+
+
+def build_content(
     *,
-    interaction: Interaction,
-    policy: Policy,
     input_messages: Any,
     output_messages: Any,
     matches: dict[str, Any] | None,
     tools: Any = None,
-) -> bool:
-    """Write raw content for this event, if the policy asks for it.
+    retention_days: int | None,
+) -> PreparedContent:
+    """Assemble and serialise the payload, raising if it cannot be stored.
 
-    Returns whether content was stored, which the caller records on the event
-    so a reader can tell "not retained" from "retained but withheld from you".
-
-    Uses the caller's session rather than opening its own: the content and the
-    event have to commit together or not at all.
+    Serialising here rather than at commit is the point: the canonical bytes
+    are produced once, used for the size accounting, and prove the value will
+    survive persistence — so a bad payload fails before it can take the event
+    down with it.
     """
-    if not policy.raw_content_enabled:
-        return False
+    # Tools travel with the input: they are scanned, so a captured tool-listing
+    # event without them records less than was evaluated. The wrapper is used
+    # whenever tools were supplied at all, including an empty list, so the
+    # stored shape does not depend on whether any happened to be present.
+    payload_in: Any = {"messages": input_messages, "tools": tools} if tools is not None else input_messages
 
-    expires_at = None
-    if policy.raw_content_retention_days:
-        expires_at = datetime.now(UTC) + timedelta(days=policy.raw_content_retention_days)
+    # The same strict serializer persistence will use — no default=str — so
+    # accounting and storage cannot disagree about what is representable.
+    encoded = json.dumps(
+        {"input": payload_in, "output": output_messages, "matches": matches},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
 
+    expires_at = datetime.now(UTC) + timedelta(days=retention_days) if retention_days else None
+    return PreparedContent(
+        input_json=payload_in,
+        output_json=output_messages,
+        matches_json=matches,
+        byte_size=len(encoded),
+        expires_at=expires_at,
+    )
+
+
+def capture_content(session: Session, *, interaction: Interaction, prepared: PreparedContent) -> None:
+    """Add the already-serialised content to the caller's transaction.
+
+    Uses the caller's session because the content and the event have to commit
+    together or not at all.
+    """
     session.add(
         InteractionContent(
             interaction_id=interaction.id,
-            # Tools travel with the input: they are scanned, so a captured
-            # tool-listing event without them records less than was evaluated.
-            input_json={"messages": input_messages, "tools": tools} if tools else input_messages,
-            output_json=output_messages,
-            matches_json=matches,
-            byte_size=_byte_size(input_messages, output_messages, matches, tools),
+            input_json=prepared.input_json,
+            output_json=prepared.output_json,
+            matches_json=prepared.matches_json,
+            byte_size=prepared.byte_size,
             captured_at=datetime.now(UTC),
-            expires_at=expires_at,
+            expires_at=prepared.expires_at,
         )
     )
-    return True
 
 
 def purge_expired(session: Session, *, now: datetime | None = None) -> int:

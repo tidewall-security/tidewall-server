@@ -1,7 +1,5 @@
 """Tests for ScannerEngine with dict-based construction."""
 
-import pytest
-
 
 def test_engine_from_detectors_dict():
     from app.scanner_engine import ScannerEngine

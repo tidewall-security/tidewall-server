@@ -1,8 +1,9 @@
 """Tests for PromptListService — CRUD and pattern matching."""
 
 import pytest
+
 from app.db.engine import get_engine, get_session_factory
-from app.db.models import Base, GlobalPromptList
+from app.db.models import Base
 
 
 @pytest.fixture
