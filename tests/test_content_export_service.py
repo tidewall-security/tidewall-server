@@ -60,7 +60,7 @@ def _attempt(**over):
 
 
 def test_reserve_writes_pending_before_any_io(factory):
-    attempt_id, replay = svc.reserve(factory, attempt=_attempt())
+    attempt_id, replay = svc.reserve(factory, attempt_id=svc.new_attempt_id(), attempt=_attempt())
     assert replay is False
     with factory() as s:
         row = s.get(ContentExportAttempt, attempt_id)
@@ -72,8 +72,12 @@ def test_reserve_writes_pending_before_any_io(factory):
 
 def test_a_repeated_key_replays_rather_than_reserving_again(factory):
     digest = svc.digest_key("k1")
-    first, replay1 = svc.reserve(factory, attempt=_attempt(idempotency_key_digest=digest))
-    second, replay2 = svc.reserve(factory, attempt=_attempt(idempotency_key_digest=digest))
+    first, replay1 = svc.reserve(
+        factory, attempt_id=svc.new_attempt_id(), attempt=_attempt(idempotency_key_digest=digest)
+    )
+    second, replay2 = svc.reserve(
+        factory, attempt_id=svc.new_attempt_id(), attempt=_attempt(idempotency_key_digest=digest)
+    )
     assert replay1 is False and replay2 is True
     assert first == second
     with factory() as s:
@@ -84,14 +88,22 @@ def test_a_different_credential_may_reuse_the_same_key(factory):
     """Scoped to the credential, because global uniqueness would let one admin's
     key collide with or probe another's."""
     digest = svc.digest_key("shared")
-    a, _ = svc.reserve(factory, attempt=_attempt(api_key_id="k1", idempotency_key_digest=digest))
-    b, replay = svc.reserve(factory, attempt=_attempt(api_key_id="k2", idempotency_key_digest=digest))
+    a, _ = svc.reserve(
+        factory, attempt_id=svc.new_attempt_id(), attempt=_attempt(api_key_id="k1", idempotency_key_digest=digest)
+    )
+    b, replay = svc.reserve(
+        factory, attempt_id=svc.new_attempt_id(), attempt=_attempt(api_key_id="k2", idempotency_key_digest=digest)
+    )
     assert a != b
     assert replay is False
 
 
 def test_the_key_itself_is_never_stored(factory):
-    svc.reserve(factory, attempt=_attempt(idempotency_key_digest=svc.digest_key("super-secret")))
+    svc.reserve(
+        factory,
+        attempt_id=svc.new_attempt_id(),
+        attempt=_attempt(idempotency_key_digest=svc.digest_key("super-secret")),
+    )
     with factory() as s:
         row = s.query(ContentExportAttempt).one()
         assert row.idempotency_key_digest != "super-secret"
@@ -99,7 +111,7 @@ def test_the_key_itself_is_never_stored(factory):
 
 
 def test_settlement_is_a_compare_and_set(factory):
-    attempt_id, _ = svc.reserve(factory, attempt=_attempt())
+    attempt_id, _ = svc.reserve(factory, attempt_id=svc.new_attempt_id(), attempt=_attempt())
     assert svc.settle(factory, attempt_id=attempt_id, state="succeeded", transport_status=204, peer="1.2.3.4") is True
     # A row already settled is not overwritten: the caller answers 502 with the
     # stored state rather than 202.
@@ -115,8 +127,10 @@ def test_settlement_is_a_compare_and_set(factory):
 def test_only_foreign_boot_ids_are_abandoned(factory):
     """A row from the CURRENT boot is owned by a live coroutine and is never
     touched, however old: age has no role in this protocol."""
-    mine, _ = svc.reserve(factory, attempt=_attempt(boot_id="boot-current"))
-    theirs, _ = svc.reserve(factory, attempt=_attempt(boot_id="boot-old", idempotency_key_digest="d2"))
+    mine, _ = svc.reserve(factory, attempt_id=svc.new_attempt_id(), attempt=_attempt(boot_id="boot-current"))
+    theirs, _ = svc.reserve(
+        factory, attempt_id=svc.new_attempt_id(), attempt=_attempt(boot_id="boot-old", idempotency_key_digest="d2")
+    )
     with factory() as s:
         assert svc.abandon_foreign_pending(s, boot_id="boot-current") == 1
         s.commit()
@@ -131,7 +145,7 @@ def test_an_aged_row_from_the_current_boot_is_still_left_alone(factory):
     time threshold got wrong."""
     from datetime import UTC, datetime, timedelta
 
-    attempt_id, _ = svc.reserve(factory, attempt=_attempt(boot_id="boot-current"))
+    attempt_id, _ = svc.reserve(factory, attempt_id=svc.new_attempt_id(), attempt=_attempt(boot_id="boot-current"))
     with factory() as s:
         s.execute(
             sa.update(ContentExportAttempt)
@@ -143,14 +157,14 @@ def test_an_aged_row_from_the_current_boot_is_still_left_alone(factory):
 
 
 def test_a_settled_row_is_not_abandoned(factory):
-    attempt_id, _ = svc.reserve(factory, attempt=_attempt(boot_id="boot-old"))
+    attempt_id, _ = svc.reserve(factory, attempt_id=svc.new_attempt_id(), attempt=_attempt(boot_id="boot-old"))
     svc.settle(factory, attempt_id=attempt_id, state="failed", transport_status=500, peer=None)
     with factory() as s:
         assert svc.abandon_foreign_pending(s, boot_id="boot-current") == 0
 
 
 def test_notes_are_best_effort_and_bounded(factory):
-    attempt_id, _ = svc.reserve(factory, attempt=_attempt())
+    attempt_id, _ = svc.reserve(factory, attempt_id=svc.new_attempt_id(), attempt=_attempt())
     svc.write_note(factory, attempt_id=attempt_id, kind="settlement_lost", detail="x" * 5000)
     with factory() as s:
         note = s.query(ContentExportNote).one()
@@ -170,7 +184,7 @@ def test_pending_health_is_derived_from_the_rows(factory):
     """Not an in-memory counter: that is lost on exactly the crash most likely
     to have created the row."""
     assert svc.pending_health(factory()) == (0, None)
-    svc.reserve(factory, attempt=_attempt())
+    svc.reserve(factory, attempt_id=svc.new_attempt_id(), attempt=_attempt())
     count, age = svc.pending_health(factory())
     assert count == 1
     assert age is not None and age >= 0
@@ -191,7 +205,9 @@ def test_two_concurrent_reservations_with_one_key_produce_one_attempt(tmp_path):
     def _go():
         try:
             barrier.wait(10)
-            results.append(svc.reserve(factory, attempt=_attempt(idempotency_key_digest=digest)))
+            results.append(
+                svc.reserve(factory, attempt_id=svc.new_attempt_id(), attempt=_attempt(idempotency_key_digest=digest))
+            )
         except BaseException as exc:  # noqa: BLE001 - recorded and re-raised by the assertions
             errors.append(exc)
 
@@ -216,7 +232,7 @@ def test_the_sweep_abandons_a_dead_process_and_sends_nothing(factory):
 
     from app.services.scheduler import export_abandon_job
 
-    svc.reserve(factory, attempt=_attempt(boot_id="boot-old"))
+    svc.reserve(factory, attempt_id=svc.new_attempt_id(), attempt=_attempt(boot_id="boot-old"))
     job = export_abandon_job(factory, boot_id="boot-current")
 
     import app.services.export_transport as transport
@@ -246,7 +262,7 @@ def test_the_sweep_leaves_this_process_alone(factory):
 
     from app.services.scheduler import export_abandon_job
 
-    svc.reserve(factory, attempt=_attempt(boot_id="boot-current"))
+    svc.reserve(factory, attempt_id=svc.new_attempt_id(), attempt=_attempt(boot_id="boot-current"))
     asyncio.run(export_abandon_job(factory, boot_id="boot-current").run())
     with factory() as s:
         assert s.query(ContentExportAttempt).one().state == "pending"

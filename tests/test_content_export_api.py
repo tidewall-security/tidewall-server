@@ -667,3 +667,217 @@ def test_an_ordinary_guard_export_carries_no_content_even_with_capture_on(env):
     assert captured, "nothing was exported, so this proves nothing"
     for event in captured:
         assert CANARY not in str(event)
+
+
+def test_expired_content_is_never_exported(env):
+    """The gate that was missing entirely: an expired row retention has not yet
+    purged would otherwise be sent externally."""
+    from datetime import timedelta
+
+    client, Session, port = env
+    headers = _key(Session, grants=[CONTENT_EXPORT])
+    interaction_id = _interaction(Session, expires_at=datetime.now(UTC) - timedelta(days=1))
+    target_id = _target(Session, port)
+
+    resp = client.post(
+        f"/v1/logs/{interaction_id}/content-export",
+        json={"view": "full", "target_id": target_id},
+        headers=headers,
+    )
+    assert resp.status_code == 404, "expired content was exportable"
+    assert _Receiver.received == [], "expired content left the system"
+    assert _attempts(Session) == []
+
+
+def test_content_still_within_its_retention_window_is_exported(env):
+    """Otherwise the test above would pass on any 404."""
+    from datetime import timedelta
+
+    client, Session, port = env
+    headers = _key(Session, grants=[CONTENT_EXPORT])
+    interaction_id = _interaction(Session, expires_at=datetime.now(UTC) + timedelta(days=1))
+    target_id = _target(Session, port)
+
+    resp = client.post(
+        f"/v1/logs/{interaction_id}/content-export",
+        json={"view": "full", "target_id": target_id},
+        headers=headers,
+    )
+    assert resp.status_code == 202
+    assert len(_Receiver.received) == 1
+
+
+def test_expiry_is_decided_before_the_target(env):
+    """So an expired record cannot be used to probe destination configuration."""
+    from datetime import timedelta
+
+    client, Session, port = env
+    headers = _key(Session, grants=[CONTENT_EXPORT])
+    interaction_id = _interaction(Session, expires_at=datetime.now(UTC) - timedelta(days=1))
+    target_id = _target(Session, port, allow=False)
+
+    resp = client.post(
+        f"/v1/logs/{interaction_id}/content-export",
+        json={"view": "full", "target_id": target_id},
+        headers=headers,
+    )
+    assert resp.status_code == 404, "the target was evaluated before expiry"
+
+
+def test_the_attempt_records_the_real_payload_size(env):
+    """payload_bytes is the schema's deliberate size evidence. Recording zero
+    would make every attempt claim the same false thing."""
+    client, Session, port = env
+    headers = _key(Session, grants=[CONTENT_EXPORT])
+    interaction_id = _interaction(Session)
+    target_id = _target(Session, port)
+
+    resp = client.post(
+        f"/v1/logs/{interaction_id}/content-export",
+        json={"view": "full", "target_id": target_id},
+        headers=headers,
+    )
+    assert resp.status_code == 202
+    row = _attempts(Session)[0]
+    assert row.payload_bytes == len(_Receiver.received[0]), "the recorded size is not the sent size"
+    assert row.payload_bytes > 0
+
+
+def test_an_oversized_projection_costs_neither_a_row_nor_a_connection(env, monkeypatch):
+    """413 before admission and before the reservation."""
+    import app.routes.content_export as route
+
+    client, Session, port = env
+    headers = _key(Session, grants=[CONTENT_EXPORT])
+    interaction_id = _interaction(Session)
+    target_id = _target(Session, port)
+
+    monkeypatch.setattr(route, "_MAX_PAYLOAD_BYTES", 10)
+    resp = client.post(
+        f"/v1/logs/{interaction_id}/content-export",
+        json={"view": "full", "target_id": target_id},
+        headers=headers,
+    )
+    assert resp.status_code == 413
+    assert _attempts(Session) == [], "an oversized projection reserved an attempt"
+    assert _Receiver.received == []
+
+
+def test_a_destination_refused_at_send_time_is_409_before_any_reservation(env, monkeypatch):
+    """The SSRF controls have their own suite; this pins where their refusal
+    lands in the order."""
+    import app.routes.content_export as route
+    from app.services.export_transport import DestinationRefused
+
+    client, Session, port = env
+    headers = _key(Session, grants=[CONTENT_EXPORT])
+    interaction_id = _interaction(Session)
+    target_id = _target(Session, port)
+
+    def _refuse(url):
+        raise DestinationRefused("the destination resolves to a non-public address")
+
+    monkeypatch.setattr(route, "validate_destination", _refuse)
+    resp = client.post(
+        f"/v1/logs/{interaction_id}/content-export",
+        json={"view": "full", "target_id": target_id},
+        headers=headers,
+    )
+    assert resp.status_code == 409
+    assert resp.json()["reason"] == "destination_refused"
+    assert _attempts(Session) == []
+
+
+def test_a_cleanup_failure_is_a_note_and_does_not_change_the_response(env, monkeypatch):
+    """Cleanup runs after settlement and outside the thing that owns a state, so
+    it cannot contradict one. Before this, CLEANUP_BUDGET_SECONDS was dead code
+    and cleanup_failed could never be written."""
+    import app.services.export_transport as transport
+    from app.db.models import ContentExportNote
+
+    client, Session, port = env
+    headers = _key(Session, grants=[CONTENT_EXPORT])
+    interaction_id = _interaction(Session)
+    target_id = _target(Session, port)
+
+    original = transport.send_payload
+
+    async def _send_then_break_cleanup(**kwargs):
+        result = await original(**kwargs)
+        real_closer = result.closer
+
+        async def _boom():
+            if real_closer is not None:
+                await real_closer()
+            raise RuntimeError("close failed")
+
+        result.closer = _boom
+        return result
+
+    monkeypatch.setattr(transport, "send_payload", _send_then_break_cleanup)
+    import app.routes.content_export as route
+
+    monkeypatch.setattr(route, "send_payload", _send_then_break_cleanup)
+
+    resp = client.post(
+        f"/v1/logs/{interaction_id}/content-export",
+        json={"view": "full", "target_id": target_id},
+        headers=headers,
+    )
+    assert resp.status_code == 202, "a cleanup failure changed the response"
+    row = _attempts(Session)[0]
+    assert row.state == "succeeded", "a cleanup failure changed the state"
+
+    session = Session()
+    try:
+        kinds = [n.kind for n in session.query(ContentExportNote).all()]
+    finally:
+        session.close()
+    assert "cleanup_failed" in kinds
+
+
+def test_cleanup_is_bounded(env, monkeypatch):
+    """An unbounded close would hold the handler and its admission permit
+    indefinitely."""
+    import asyncio
+    import time
+
+    import app.routes.content_export as route
+    import app.services.export_transport as transport
+
+    client, Session, port = env
+    headers = _key(Session, grants=[CONTENT_EXPORT])
+    interaction_id = _interaction(Session)
+    target_id = _target(Session, port)
+
+    monkeypatch.setattr(route, "CLEANUP_BUDGET_SECONDS", 0.2)
+    original = transport.send_payload
+
+    async def _send_then_hang_cleanup(**kwargs):
+        result = await original(**kwargs)
+        real_closer = result.closer
+
+        async def _hang():
+            if real_closer is not None:
+                await real_closer()
+            await asyncio.sleep(30)
+
+        result.closer = _hang
+        return result
+
+    monkeypatch.setattr(route, "send_payload", _send_then_hang_cleanup)
+
+    started = time.monotonic()
+    resp = client.post(
+        f"/v1/logs/{interaction_id}/content-export",
+        json={"view": "full", "target_id": target_id},
+        headers=headers,
+    )
+    elapsed = time.monotonic() - started
+
+    assert resp.status_code == 202
+    assert _attempts(Session)[0].state == "succeeded"
+    # The wall clock is the assertion. Without it the test cannot tell a bounded
+    # close from one that merely finished eventually -- the hang is 30s and an
+    # unbounded close would still return 202, just much later.
+    assert elapsed < 5, f"cleanup was not bounded: {elapsed:.1f}s"

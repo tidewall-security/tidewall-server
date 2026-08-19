@@ -68,7 +68,17 @@ def fingerprint_for(*, policy_id: str, interaction_id: int, view: str, target_id
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def reserve(session_factory: Any, *, attempt: dict[str, Any]) -> tuple[str, bool]:
+def new_attempt_id() -> str:
+    """Generated before the payload is built, because the payload contains it.
+
+    That ordering is what lets the payload be serialised and size-checked before
+    anything is reserved, so an oversized projection never creates an attempt
+    and the recorded byte count is the real one.
+    """
+    return uuid.uuid4().hex
+
+
+def reserve(session_factory: Any, *, attempt_id: str, attempt: dict[str, Any]) -> tuple[str, bool]:
     """Write the pending row, or discover that this key already reserved one.
 
     Returns ``(attempt_id, is_replay)``.
@@ -79,7 +89,6 @@ def reserve(session_factory: Any, *, attempt: dict[str, Any]) -> tuple[str, bool
     deferred read transaction upgrading to a write can raise ``SQLITE_BUSY``
     instead of the ``IntegrityError`` this protocol expects.
     """
-    attempt_id = uuid.uuid4().hex
     session = session_factory()
     try:
         session.execute(sa.text(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}"))

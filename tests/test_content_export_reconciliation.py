@@ -30,6 +30,7 @@ def factory(tmp_path):
 def _settled(factory, state="indeterminate"):
     attempt_id, _ = svc.reserve(
         factory,
+        attempt_id=svc.new_attempt_id(),
         attempt=dict(
             interaction_id=1,
             policy_id="p",

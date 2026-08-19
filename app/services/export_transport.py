@@ -184,6 +184,11 @@ class SendResult:
     status: int | None = None
     peer: str | None = None
     error: str | None = None
+    #: The client is NOT closed here. Cleanup is the caller's, as its own task
+    #: with its own budget and its own cancellation-resistant join -- closing it
+    #: inside the submission would put an unbounded await inside a cancellable
+    #: region, where a cancellation can interrupt it and leak the connection.
+    closer: Any = None
 
 
 def state_for_phase(result: SendResult) -> str:
@@ -356,10 +361,5 @@ async def send_payload(
         if isinstance(exc, BaseException) and not isinstance(exc, Exception):
             # Genuine cancellation is not ours to swallow.
             raise
-    finally:
-        # Bounded and best effort: a close failure never changes a state.
-        try:
-            await client.aclose()
-        except Exception:
-            pass
+    result.closer = client.aclose
     return result

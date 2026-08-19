@@ -17,6 +17,7 @@ import asyncio
 import hashlib
 import json
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 import sqlalchemy as sa
@@ -25,7 +26,12 @@ from fastapi import APIRouter, Request, Response
 from app.auth.grants import CONTENT_EXPORT
 from app.db.models import ContentExportAttempt, ExportTarget, Interaction, InteractionContent
 from app.services import content_export as attempts
-from app.services.content_projection import Corrupt, canonical_json, project_content
+from app.services.content_projection import (
+    Corrupt,
+    canonical_json,
+    parse_stored_timestamp,
+    project_content,
+)
 from app.services.export_transport import (
     DestinationRefused,
     send_payload,
@@ -197,6 +203,12 @@ async def _join_and_drain(task: asyncio.Task, *, on_error: Any) -> bool:
             await asyncio.shield(task)
         except asyncio.CancelledError:
             cancelled = True
+        except Exception:
+            # The shield re-raises whatever the task raised. Letting that
+            # propagate here would skip the drain below and, for settlement,
+            # skip cleanup entirely -- so it is swallowed at this point and
+            # handled once, from task.result().
+            break
     try:
         task.result()
     except asyncio.CancelledError:
@@ -279,7 +291,23 @@ async def _authorize_and_export(request: Request) -> Response:
             # is the security property here.
             return _error(404, "Not found")
 
-        # 6. resolve the target.
+        # 6. expiry, from the parsed canonical timestamp -- ABOVE the target,
+        #    so content past its retention window is never exported and the
+        #    answer is the same ambiguous 404 as everything else here.
+        #
+        #    Parsed rather than compared in SQL: SQL cannot both classify expiry
+        #    and vouch that the stored value is a valid datetime, so a malformed
+        #    value would sort one way or the other and give two different
+        #    answers for the same corruption.
+        try:
+            expires_at = None if row.expires_raw is None else parse_stored_timestamp(row.expires_raw)
+        except Corrupt as exc:
+            report(logger, "error", "stored expiry is corrupt; not exporting", exc)
+            return _error(500, "Stored content is unreadable")
+        if expires_at is not None and expires_at <= datetime.now(UTC):
+            return _error(404, "Not found")
+
+        # 7. resolve the target.
         target = session.get(ExportTarget, target_id)
         if target is None:
             return _error(404, "Not found")
@@ -302,7 +330,7 @@ async def _authorize_and_export(request: Request) -> Response:
                 detail_reason=str(exc),
             )
 
-        # 7. build and serialise the projection, and bound it.
+        # 8. build the projection.
         try:
             projection = project_content(
                 view=view,
@@ -352,19 +380,28 @@ async def _reserve_and_send(*, request: Request, **ctx: Any) -> Response:
     session_factory = request.app.state.session_factory
     boot_id = getattr(request.app.state, "boot_id", "unknown")
 
+    # The id is generated before the payload because the payload contains it.
+    # That ordering is what lets the bytes be built and bounded BEFORE anything
+    # is reserved: an oversized projection then costs neither a transport slot
+    # nor a row, and the size recorded on the attempt is the real one rather
+    # than a placeholder nobody notices is always zero.
+    attempt_id = attempts.new_attempt_id()
     payload_body = {
         "schema": PAYLOAD_SCHEMA,
-        "attempt_id": "",  # filled once reserved
+        "attempt_id": attempt_id,
         "interaction_id": ctx["interaction_id"],
         "view": ctx["view"],
-        "exported_at": "",
+        "exported_at": ctx["projection"]["captured_at"],
         "content": ctx["projection"],
     }
     # Deliberately absent: policy_id, the API key id, and the guard's request_id.
     # No receiving system has been shown to need them, and each hands a tenant or
     # control-plane identifier to an external destination.
+    encoded = canonical_json(payload_body).encode("utf-8")
+    if len(encoded) > _MAX_PAYLOAD_BYTES:
+        return _error(413, "The projection is too large to export")
 
-    # 8. admission. Before the reservation, so a refusal never leaves a pending
+    # 9. admission. Before the reservation, so a refusal never leaves a pending
     #    row -- and a replay never reaches here at all, because it takes no
     #    transport slot.
     try:
@@ -381,10 +418,11 @@ async def _reserve_and_send(*, request: Request, **ctx: Any) -> Response:
             _admission.release()
 
     try:
-        # 9. reserve: pending, committed, before any I/O.
+        # 10. reserve: pending, committed, before any I/O.
         try:
-            attempt_id, is_replay = attempts.reserve(
+            _, is_replay = attempts.reserve(
                 session_factory,
+                attempt_id=attempt_id,
                 attempt={
                     "interaction_id": ctx["interaction_id"],
                     "policy_id": ctx["policy_id"],
@@ -393,7 +431,7 @@ async def _reserve_and_send(*, request: Request, **ctx: Any) -> Response:
                     "actor_role": ctx["role"],
                     "view": ctx["view"],
                     "grant_used": CONTENT_EXPORT,
-                    "payload_bytes": 0,
+                    "payload_bytes": len(encoded),
                     "idempotency_key_digest": ctx["digest"],
                     "fingerprint": ctx["fingerprint"],
                     "destination_host": ctx["host"],
@@ -414,25 +452,20 @@ async def _reserve_and_send(*, request: Request, **ctx: Any) -> Response:
             _release()
             session = session_factory()
             try:
-                winner = session.get(ContentExportAttempt, attempt_id)
+                # The WINNER's row, not the id this request generated: it lost
+                # the race, so its own id was never written.
+                winner = (
+                    session.query(ContentExportAttempt)
+                    .filter_by(api_key_id=ctx["api_key_id"], idempotency_key_digest=ctx["digest"])
+                    .one_or_none()
+                )
             finally:
                 session.close()
+            if winner is None:
+                return _error(503, "Export could not be recorded, so nothing was sent")
             return _replay_response(winner)
 
-        payload_body["attempt_id"] = attempt_id
-        payload_body["exported_at"] = ctx["projection"]["captured_at"]
-        encoded = canonical_json(payload_body).encode("utf-8")
-        if len(encoded) > _MAX_PAYLOAD_BYTES:
-            attempts.settle(
-                session_factory,
-                attempt_id=attempt_id,
-                state="failed",
-                transport_status=None,
-                peer=None,
-            )
-            return _error(413, "The projection is too large to export")
-
-        # 10. submit. The server-owned attempt id is the receiver's idempotency
+        # 11. submit. The server-owned attempt id is the receiver's idempotency
         #     token; the caller's key never leaves.
         result = await send_payload(
             url=ctx["url"],
@@ -443,19 +476,28 @@ async def _reserve_and_send(*, request: Request, **ctx: Any) -> Response:
             max_request_bytes=_MAX_PAYLOAD_BYTES,
         )
 
-        # 11. settle. Its own task, uncancelled by anything here, so the database
+        # 12. settle. Its own task, uncancelled by anything here, so the database
         #     work cannot be detached by a cancellation arriving mid-flight.
         state = state_for_phase(result)
-        settle_task = asyncio.create_task(
-            asyncio.to_thread(
-                attempts.settle,
+
+        def _settle() -> bool:
+            return attempts.settle(
                 session_factory,
                 attempt_id=attempt_id,
                 state=state,
                 transport_status=result.status,
                 peer=result.peer,
             )
-        )
+
+        # Through the scheduler's worker registry when there is one, so shutdown
+        # waits for the THREAD rather than the coroutine: registration happens
+        # before dispatch and deregistration inside the thread, and cancelling
+        # an awaited thread detaches it rather than stopping it.
+        scheduler = getattr(request.app.state, "scheduler", None)
+        if scheduler is not None:
+            settle_task = asyncio.create_task(scheduler.run_in_worker(_settle))
+        else:
+            settle_task = asyncio.create_task(asyncio.to_thread(_settle))
         settlements = getattr(request.app.state, "export_settlements", None)
         if settlements is not None:
             # Owned by the process: a bare create_task is owned by nothing, and
@@ -466,8 +508,25 @@ async def _reserve_and_send(*, request: Request, **ctx: Any) -> Response:
         settle_errors: list[Exception] = []
         cancelled = await _join_and_drain(settle_task, on_error=settle_errors.append)
 
-        cleanup_cancelled = False  # the sender closes its own client; nothing further to release
-        cancelled = cancelled or cleanup_cancelled
+        # 13. cleanup, after settlement is joined and with its own budget. Its
+        #     failure is a note and nothing else: it runs outside the thing that
+        #     owns a state, so it cannot contradict one.
+        cleanup_errors: list[Exception] = []
+        if result.closer is not None:
+
+            async def _close() -> None:
+                async with asyncio.timeout(CLEANUP_BUDGET_SECONDS):
+                    await result.closer()
+
+            cleanup_task = asyncio.create_task(_close())
+            cancelled = await _join_and_drain(cleanup_task, on_error=cleanup_errors.append) or cancelled
+        if cleanup_errors:
+            attempts.write_note(
+                session_factory,
+                attempt_id=attempt_id,
+                kind="cleanup_failed",
+                detail=type(cleanup_errors[0]).__name__,
+            )
 
         if result.error and result.phase == "headers_received":
             attempts.write_note(session_factory, attempt_id=attempt_id, kind="body_read_failed", detail=result.error)
