@@ -29,6 +29,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+from starlette.requests import Request
 
 from app.auth.grants import CONTENT_EXPORT
 from app.auth.key_utils import generate_key, hash_key, key_prefix
@@ -355,12 +356,12 @@ def test_a_cancelled_export_never_emits_a_success_response(monkeypatch):
     nothing awaiting after the handler -- so this drives the app as a raw ASGI
     callable and asks a different question: what did it SEND?
 
-    Note what this does and does not establish. It proves the observable
-    property -- a cancelled export is never answered with a success status.
-    It does NOT kill removing the route's re-raise, because the pending
-    cancellation fires at Starlette's send() before the response goes out, so
-    both builds send nothing. That statement is unkillable and the route says
-    so at the point it appears.
+    Note the division of labour. This proves the externally observable
+    property -- a cancelled export is never answered with a success status --
+    and it holds through the whole stack. It does NOT bind the route's own
+    re-raise, because the pending cancellation fires at Starlette's send()
+    before any response goes out, so both builds send nothing. The line itself
+    is bound by the direct-handler test below.
     """
     import app.routes.content_export as route
     import app.services.content_export as service
@@ -436,3 +437,91 @@ def test_a_cancelled_export_never_emits_a_success_response(monkeypatch):
     # The disclosure still has its terminal record: absorbing the cancellation
     # is about the RESPONSE, never about the evidence.
     assert _state(Session) == "succeeded"
+
+
+def test_the_handler_re_raises_a_deferred_cancellation_instead_of_returning_202(monkeypatch):
+    """The route's final re-raise, bound directly.
+
+    Through the full stack this line is invisible: asyncio has the cancellation
+    pending and delivers it at Starlette's send(), so removing the re-raise
+    changes nothing anyone can observe from outside. An earlier version of this
+    file concluded the line was untestable and said so in a comment. That was
+    wrong, and the fix is to call the handler itself -- the function whose
+    RETURN VALUE the line governs -- with nothing downstream to mask it.
+    """
+    import app.routes.content_export as route
+    import app.services.content_export as service
+
+    app, Session, path, body, headers = _build(monkeypatch)
+
+    entered = threading.Event()
+    release = threading.Event()
+    real_settle = service.settle
+
+    def _blocking_settle(*args, **kwargs):
+        entered.set()
+        release.wait(10)
+        return real_settle(*args, **kwargs)
+
+    async def _closer():
+        return None
+
+    async def _send_payload(**kwargs):
+        return SendResult(phase="headers_received", status=204, peer="127.0.0.1", closer=_closer)
+
+    monkeypatch.setattr(route.attempts, "settle", _blocking_settle)
+    monkeypatch.setattr(route, "send_payload", _send_payload)
+
+    payload = json.dumps(body).encode()
+
+    async def _receive():
+        return {"type": "http.request", "body": payload, "more_body": False}
+
+    async def _go():
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.1"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode(),
+            "query_string": b"",
+            "root_path": "",
+            "headers": [(b"host", b"test"), (b"content-type", b"application/json")],
+            "client": ("127.0.0.1", 51234),
+            "server": ("test", 80),
+            "app": app,
+            # Normally the router's path match supplies this.
+            "path_params": {"interaction_id": path.split("/")[3]},
+        }
+        request = Request(scope, _receive)
+        # What the auth middleware would have established. This test is about
+        # the cancellation contract, not about authentication, which has its
+        # own suite; supplying it here keeps the handler reachable without a
+        # stack that would mask the very line under test.
+        request.state.role = "admin"
+        request.state.grants = frozenset({CONTENT_EXPORT})
+        request.state.policy_id = "policy-a"
+        request.state.api_key_id = None
+
+        handler = asyncio.create_task(route._authorize_and_export(request))
+        await asyncio.to_thread(entered.wait, 10)
+
+        if handler.done():
+            returned = handler.result()
+            raise AssertionError(
+                f"the handler returned {returned.status_code} before reaching settlement, so "
+                f"nothing below this point was exercised: {bytes(returned.body)!r}"
+            )
+        assert handler.cancel() is True, "nothing live was cancelled, so this proves nothing"
+        assert await _stays_pending(handler), "the handler returned while its settlement was writing"
+
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            returned = await handler
+            raise AssertionError(f"the handler answered a cancelled request with {returned.status_code}")
+
+        assert _state(Session) == "succeeded", "the disclosure lost its terminal record"
+
+    asyncio.run(_go())

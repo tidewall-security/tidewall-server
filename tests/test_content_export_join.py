@@ -19,7 +19,7 @@ import asyncio
 
 import pytest
 
-from app.routes.content_export import _join_and_drain
+from app.services.cancellation import join_and_drain
 
 
 def _run(coro):
@@ -30,7 +30,7 @@ def test_a_result_is_retrieved():
     async def _go():
         task = asyncio.create_task(asyncio.sleep(0, result="done"))
         errors: list[Exception] = []
-        cancelled = await _join_and_drain(task, on_error=errors.append)
+        cancelled = await join_and_drain(task, on_error=errors.append)
         return cancelled, errors, task.result()
 
     cancelled, errors, result = _run(_go())
@@ -50,7 +50,7 @@ def test_an_exception_is_handed_to_on_error_exactly_once():
     async def _go():
         task = asyncio.create_task(_boom())
         errors: list[Exception] = []
-        cancelled = await _join_and_drain(task, on_error=errors.append)
+        cancelled = await join_and_drain(task, on_error=errors.append)
         return cancelled, errors
 
     cancelled, errors = _run(_go())
@@ -68,7 +68,7 @@ def test_the_exception_does_not_escape_the_join():
 
     async def _go():
         task = asyncio.create_task(_boom())
-        await _join_and_drain(task, on_error=lambda exc: None)
+        await join_and_drain(task, on_error=lambda exc: None)
         reached.append("after")
 
     _run(_go())
@@ -91,7 +91,7 @@ def test_a_cancellation_during_the_wait_is_deferred_not_obeyed():
         await started.wait()
 
         async def _joiner():
-            return await _join_and_drain(task, on_error=lambda exc: None)
+            return await join_and_drain(task, on_error=lambda exc: None)
 
         joiner = asyncio.create_task(_joiner())
         await asyncio.sleep(0)
@@ -115,7 +115,7 @@ def test_the_task_is_never_cancelled_by_the_join():
         await started.wait()
 
         async def _joiner():
-            return await _join_and_drain(task, on_error=lambda exc: None)
+            return await join_and_drain(task, on_error=lambda exc: None)
 
         joiner = asyncio.create_task(_joiner())
         await asyncio.sleep(0)
@@ -146,7 +146,7 @@ def test_a_task_that_completes_on_the_cancelling_tick_still_has_its_result_drain
         task = asyncio.create_task(_boom())
 
         async def _joiner():
-            return await _join_and_drain(task, on_error=errors.append)
+            return await join_and_drain(task, on_error=errors.append)
 
         joiner = asyncio.create_task(_joiner())
         await asyncio.sleep(0)
@@ -166,10 +166,16 @@ def test_a_task_that_completes_on_the_cancelling_tick_still_has_its_result_drain
 # Two attempts were made. The first held the task in a local of its own and
 # then called gc.collect(), which can only ever show that a strongly
 # referenced object is not collected. The second passed the task straight into
-# a function and collected from inside it, which is no better: the running
-# loop holds its own strong reference to every scheduled task, so a control
-# that keeps NO reference at all also survives collection. Anything asserting
-# otherwise would pass for a reason that has nothing to do with the join.
+# a function and collected from inside it, which is no better -- a control
+# keeping NO reference at all also survived.
+#
+# The reason for that survival matters, because an earlier version of this note
+# got it wrong and said the loop holds a strong reference to every scheduled
+# task. It does not: asyncio keeps only weak references to tasks, which is
+# exactly why a task nobody owns can be collected mid-flight. What kept the
+# control alive was the machinery around it -- the ready-queue handle for a
+# task about to run, and the future an awaiting task is suspended on. Neither
+# is the join's parameter, so neither proves anything about it.
 #
 # The property that does matter, and that can be tested, is ownership by the
 # PROCESS rather than by the loop: a settlement must be reachable from
@@ -194,7 +200,7 @@ def test_repeated_cancellation_is_absorbed(attempts_count):
         await started.wait()
 
         async def _joiner():
-            return await _join_and_drain(task, on_error=lambda exc: None)
+            return await join_and_drain(task, on_error=lambda exc: None)
 
         joiner = asyncio.create_task(_joiner())
         for _ in range(attempts_count):

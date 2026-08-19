@@ -8,6 +8,7 @@ primitive, and every control here exists so it does not become one.
 from __future__ import annotations
 
 import ipaddress
+from unittest.mock import patch
 
 import pytest
 
@@ -52,45 +53,63 @@ def test_a_refused_url_shape_never_resolves(url, why, monkeypatch):
 
 
 #: Every entry in the IANA IPv4 and IPv6 Special-Purpose Address Registries
-#: that is marked "Globally Reachable: False", plus the deprecated site-local
-#: range. Sampled at the first, second and last address of each prefix so an
-#: off-by-one at either edge is caught.
+#: marked ``Globally Reachable = False``, transcribed from the registry CSVs
+#: (iana-ipv4-special-registry-1.csv and iana-ipv6-special-registry-1.csv,
+#: fetched 2026-08-19), plus the deprecated site-local range, which predates
+#: the registry's reachability column.
 #:
-#: The point of enumerating the whole set rather than a few interesting cases:
-#: only three of these are actually admitted by a naive "not private and not
-#: reserved" rule (100.64/10, 192.88.99/24 and fec0::/10, plus ORCHIDv2), and
-#: which three depends on the runtime's tables. A runtime that moves an entry
-#: out of is_reserved should fail a test, not silently open a hole.
+#: Transcribed rather than fetched: a test that reaches the network to decide
+#: what to assert fails for reasons that have nothing to do with this server.
+#: The cost is that this list ages, so it records where it came from.
+#:
+#: Nested entries are listed in their own right even where a broader block
+#: already covers them. That is the point of them being here: sampling the
+#: edges of 192.0.0.0/24 never touches 192.0.0.8, and forcing that one address
+#: public survived the whole transport suite when only the broad block was
+#: listed.
+#:
+#: What this asserts is that the SAMPLED addresses are refused, not that every
+#: address under every prefix is. The registry itself has non-global parents
+#: with globally reachable children -- 2001:1::1 is inside 2001::/23 -- so the
+#: stronger claim would be false about the registry, never mind the code.
 _NOT_GLOBALLY_REACHABLE = [
     ("0.0.0.0/8", "this network"),
-    ("10.0.0.0/8", "private"),
+    ("0.0.0.0/32", "this host on this network"),
+    ("10.0.0.0/8", "private use"),
     ("100.64.0.0/10", "shared address space, RFC 6598 -- CGNAT and Tailscale"),
     ("127.0.0.0/8", "loopback"),
     ("169.254.0.0/16", "link local, includes the cloud metadata address"),
-    ("172.16.0.0/12", "private"),
+    ("172.16.0.0/12", "private use"),
     ("192.0.0.0/24", "IETF protocol assignments"),
-    ("192.0.2.0/24", "TEST-NET-1"),
-    ("192.88.99.0/24", "6to4 relay anycast, deprecated by RFC 7526"),
-    ("192.168.0.0/16", "private"),
+    ("192.0.0.0/29", "IPv4 service continuity prefix"),
+    ("192.0.0.8/32", "IPv4 dummy address"),
+    ("192.0.0.170/32", "NAT64/DNS64 discovery"),
+    ("192.0.0.171/32", "NAT64/DNS64 discovery"),
+    ("192.0.2.0/24", "documentation, TEST-NET-1"),
+    ("192.88.99.2/32", "6a44 relay anycast"),
+    ("192.168.0.0/16", "private use"),
     ("198.18.0.0/15", "benchmarking"),
-    ("198.51.100.0/24", "TEST-NET-2"),
-    ("203.0.113.0/24", "TEST-NET-3"),
-    ("240.0.0.0/4", "reserved for future use"),
+    ("198.51.100.0/24", "documentation, TEST-NET-2"),
+    ("203.0.113.0/24", "documentation, TEST-NET-3"),
+    ("240.0.0.0/4", "reserved"),
     ("255.255.255.255/32", "limited broadcast"),
     ("::/128", "unspecified"),
     ("::1/128", "loopback"),
-    ("64:ff9b:1::/48", "local-use NAT64, RFC 8215"),
+    ("::ffff:0.0.0.0/96", "IPv4-mapped -- see the deliberate deviation below"),
+    ("64:ff9b:1::/48", "local-use IPv4/IPv6 translation, RFC 8215"),
     ("100::/64", "discard only"),
-    ("2001::/32", "Teredo"),
+    ("100:0:0:1::/64", "dummy IPv6 prefix"),
+    ("2001::/23", "IETF protocol assignments"),
     ("2001:2::/48", "benchmarking"),
-    ("2001:20::/28", "ORCHIDv2, RFC 7343 -- not routable at all"),
     ("2001:db8::/32", "documentation"),
     ("3fff::/20", "documentation, RFC 9637"),
-    ("5f00::/16", "SRv6 SIDs"),
+    ("5f00::/16", "segment routing SIDs"),
     ("fc00::/7", "unique local"),
-    ("fe80::/10", "link local"),
-    ("fec0::/10", "site local, deprecated by RFC 3879 but still deployed"),
-    ("ff00::/8", "multicast"),
+    ("fe80::/10", "link-local unicast"),
+    # Not in the registry's reachability column at all: deprecated by RFC 3879,
+    # which explicitly left existing deployments using it. This runtime reports
+    # it global, not private and not reserved, so nothing generic rejects it.
+    ("fec0::/10", "site local, deprecated"),
 ]
 
 
@@ -152,6 +171,45 @@ def test_an_address_that_wears_a_disguise_is_refused(literal, why, monkeypatch):
     monkeypatch.setattr(t, "_resolve", lambda host, port: [host.strip("[]")])
     with pytest.raises(DestinationRefused):
         validate_destination(f"https://{literal}/hook")
+
+
+@pytest.mark.parametrize(
+    "literal,accepted,why",
+    [
+        # IANA marks the whole IPv4-mapped block non-global, and this refuses
+        # every mapped address whose embedded IPv4 is non-public -- but it
+        # accepts one whose embedded IPv4 is public, because it normalises and
+        # re-checks rather than judging the wrapper. The wrapper is not the
+        # destination; the address inside it is.
+        ("[::ffff:8.8.8.8]", True, "mapped, public inside"),
+        ("[::ffff:10.0.0.1]", False, "mapped, private inside"),
+        # IANA marks the NAT64 well-known prefix globally reachable, and RFC
+        # 6052 requires it to carry only global IPv4. Refused anyway: see the
+        # policy note in export_transport, which also records what this cannot
+        # see -- an operator's own translation prefix.
+        ("[64:ff9b::808:808]", False, "NAT64 well-known prefix, refused as policy"),
+        # IANA marks ORCHIDv2 globally reachable. RFC 7343 addresses are
+        # cryptographic identifiers rather than destinations, so this refuses
+        # them; the registry's column is not the whole question.
+        ("[2001:20::1]", False, "ORCHIDv2, refused as policy"),
+    ],
+)
+def test_the_places_this_policy_and_the_registry_disagree(literal, accepted, why, monkeypatch):
+    """Stated, not buried.
+
+    Three prefixes get an answer the IANA reachability column would not give on
+    its own. Each is a deliberate choice, and writing them down here is what
+    stops the table above quietly claiming to be the registry.
+    """
+    import app.services.export_transport as t
+
+    monkeypatch.setattr(t, "_resolve", lambda host, port: [host.strip("[]")])
+    if accepted:
+        host, port, addrs = validate_destination(f"https://{literal}/hook")
+        assert addrs == [literal.strip("[]")]
+    else:
+        with pytest.raises(DestinationRefused):
+            validate_destination(f"https://{literal}/hook")
 
 
 def test_a_public_destination_is_accepted(monkeypatch):
@@ -717,7 +775,10 @@ def test_an_underscore_alias_would_otherwise_merge_at_the_gateway():
     async def _go():
         return await t.send_payload(
             url=f"http://127.0.0.1:{port}/hook",
-            headers={"Idempotency_Key": "attacker-chosen"},
+            # BOTH, which is the whole point: an earlier version sent only
+            # the underscore form and asserted it arrived, which shows nothing
+            # about a merge. The collision is two spellings becoming one value.
+            headers={"Idempotency_Key": "configured", "Idempotency-Key": "server-owned"},
             body=b"{}",
             addresses=["127.0.0.1"],
             deadline_seconds=5,
@@ -732,7 +793,102 @@ def test_an_underscore_alias_would_otherwise_merge_at_the_gateway():
         asyncio.run(result.closer())
 
     assert seen, "the receiver was never reached, so this proves nothing"
-    assert "attacker-chosen" in seen[0], (
-        f"the gateway did not merge the underscore alias (saw {seen[0]!r}); if that is "
-        "now true of gateways generally, the underscore fold needs a new rationale"
+    assert seen[0] == "configured,server-owned", (
+        f"the gateway did not merge the two spellings into one value (saw {seen[0]!r}); if "
+        "gateways no longer do this, the underscore fold needs a new rationale"
     )
+
+
+def test_a_cancellation_during_submission_still_closes_the_client():
+    """The connection carrying the content is not abandoned by a cancellation.
+
+    This is the one cleanup path the route cannot own. Everywhere else the
+    sender returns a SendResult whose `closer` the route joins and drains --
+    but a cancellation mid-submission propagates an exception instead, so there
+    is no result and no closer. If the sender did not close here, nothing else
+    ever would.
+    """
+    import asyncio
+
+    import app.services.export_transport as t
+
+    closed = asyncio.Event()
+    sending = asyncio.Event()
+
+    class _Client:
+        def build_request(self, *args, **kwargs):
+            return object()
+
+        async def send(self, request, stream=False):
+            sending.set()
+            await asyncio.Event().wait()  # never completes; only cancellation ends this
+
+        async def aclose(self):
+            closed.set()
+
+    async def _go():
+        with patch.object(t.httpx, "AsyncClient", lambda **kwargs: _Client()):
+            task = asyncio.create_task(
+                t.send_payload(
+                    url="https://pinned.invalid/hook",
+                    headers={},
+                    body=b"{}",
+                    addresses=["203.0.113.1"],
+                    deadline_seconds=30,
+                )
+            )
+            await asyncio.wait_for(sending.wait(), 5)
+            assert task.cancel() is True, "nothing live was cancelled, so this proves nothing"
+
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+            # Asserted in the loop, before teardown could do it for us: the
+            # close must already have happened by the time the cancellation
+            # reaches the caller.
+            assert closed.is_set(), (
+                "the client was abandoned: a cancellation during submission left the "
+                "connection carrying the content open"
+            )
+
+    asyncio.run(_go())
+
+
+def test_a_cancellation_during_submission_does_not_wait_forever_to_close():
+    """The close is bounded. A receiver that will not let go of the connection
+    must not turn a cancellation into a hang."""
+    import asyncio
+
+    import app.services.export_transport as t
+
+    sending = asyncio.Event()
+
+    class _Client:
+        def build_request(self, *args, **kwargs):
+            return object()
+
+        async def send(self, request, stream=False):
+            sending.set()
+            await asyncio.Event().wait()
+
+        async def aclose(self):
+            await asyncio.Event().wait()  # never returns
+
+    async def _go():
+        with patch.object(t, "CLOSE_BUDGET_SECONDS", 0.05):
+            with patch.object(t.httpx, "AsyncClient", lambda **kwargs: _Client()):
+                task = asyncio.create_task(
+                    t.send_payload(
+                        url="https://pinned.invalid/hook",
+                        headers={},
+                        body=b"{}",
+                        addresses=["203.0.113.1"],
+                        deadline_seconds=30,
+                    )
+                )
+                await asyncio.wait_for(sending.wait(), 5)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(asyncio.shield(task), 5)
+
+    asyncio.run(_go())

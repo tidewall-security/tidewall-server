@@ -26,6 +26,7 @@ from fastapi import APIRouter, Request, Response
 from app.auth.grants import CONTENT_EXPORT
 from app.db.models import ContentExportAttempt, ExportTarget, Interaction, InteractionContent
 from app.services import content_export as attempts
+from app.services.cancellation import join_and_drain
 from app.services.content_projection import (
     Corrupt,
     canonical_json,
@@ -182,42 +183,6 @@ def _target_refusal(target: Any, policy_id: str, view: str) -> str | None:
     if view not in (target.content_export_views or []):
         return "view_not_approved"
     return None
-
-
-async def _join_and_drain(task: asyncio.Task, *, on_error: Any) -> bool:
-    """Wait for a task without letting a cancellation abandon it.
-
-    A plain ``await`` is not enough: a cancel arriving *during* it unwinds the
-    caller and leaves the task running unobserved. Shield in a loop, remember
-    every cancellation rather than obeying it, and only then drain.
-
-    The drain is not optional. The loop can exit on the tick where the shield
-    raised and the task completed, having retrieved nothing -- so a failure would
-    go unobserved and its outcome unapplied.
-
-    Returns whether a cancellation was deferred.
-    """
-    cancelled = False
-    while not task.done():
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            cancelled = True
-        except Exception:
-            # The shield re-raises whatever the task raised. Letting that
-            # propagate here would skip the drain below and, for settlement,
-            # skip cleanup entirely -- so it is swallowed at this point and
-            # handled once, from task.result().
-            break
-    try:
-        task.result()
-    except asyncio.CancelledError:
-        # Deferred, not obeyed. Re-raising here would skip the cleanup that
-        # follows and leak the connection -- the case cleanup exists for.
-        cancelled = True
-    except Exception as exc:
-        on_error(exc)
-    return cancelled
 
 
 @router.post("/v1/logs/{interaction_id}/content-export")
@@ -506,7 +471,7 @@ async def _reserve_and_send(*, request: Request, **ctx: Any) -> Response:
             settle_task.add_done_callback(settlements.discard)
 
         settle_errors: list[Exception] = []
-        cancelled = await _join_and_drain(settle_task, on_error=settle_errors.append)
+        cancelled = await join_and_drain(settle_task, on_error=settle_errors.append)
 
         # 13. cleanup, after settlement is joined and with its own budget. Its
         #     failure is a note and nothing else: it runs outside the thing that
@@ -519,7 +484,7 @@ async def _reserve_and_send(*, request: Request, **ctx: Any) -> Response:
                     await result.closer()
 
             cleanup_task = asyncio.create_task(_close())
-            cancelled = await _join_and_drain(cleanup_task, on_error=cleanup_errors.append) or cancelled
+            cancelled = await join_and_drain(cleanup_task, on_error=cleanup_errors.append) or cancelled
         if cleanup_errors:
             attempts.write_note(
                 session_factory,
@@ -562,16 +527,14 @@ async def _reserve_and_send(*, request: Request, **ctx: Any) -> Response:
                 raise asyncio.CancelledError
             return _json_response(502, {"attempt_id": attempt_id, "state": stored_state})
 
-        # Deliberate, and NOT independently killable by a test -- worth saying
-        # rather than implying otherwise. Removing this leaves every test green,
-        # because asyncio still has the cancellation pending and delivers it at
-        # the next await, which is Starlette's send(); the response never
-        # reaches the wire either way. It stays because that redelivery is an
-        # asyncio implementation detail that has already changed once (3.11's
-        # uncancel/cancelling), while "a handler that absorbed a cancellation
-        # does not then report success" is a property this route should state
-        # for itself. The observable half has a test:
-        # test_a_cancelled_export_never_emits_a_success_response.
+        # A handler that absorbed a cancellation does not then report success.
+        #
+        # Through the full stack this is invisible: asyncio still has the
+        # cancellation pending and delivers it at Starlette's send(), so
+        # removing this line changes nothing an HTTP client can see. That is
+        # why it is bound by a test that calls this function directly, where
+        # its return value is the only thing that answers:
+        # test_the_handler_re_raises_a_deferred_cancellation_instead_of_returning_202.
         if cancelled:
             raise asyncio.CancelledError
 

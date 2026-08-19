@@ -23,6 +23,12 @@ from urllib.parse import urlsplit
 import httpcore
 import httpx
 
+from app.services.cancellation import join_and_drain
+
+#: How long a client may take to close on the cancellation path. Bounded
+#: because the cancellation behind it is already waiting on this.
+CLOSE_BUDGET_SECONDS = 5.0
+
 #: Only 443. A non-standard port is a destination nobody expects this server to
 #: reach, and an allowlist is easier to reason about than a denylist.
 ALLOWED_PORTS = frozenset({443})
@@ -47,36 +53,47 @@ _FORBIDDEN_HEADERS = frozenset(
     }
 )
 
-#: Prefixes the IANA special-purpose registries mark as not globally
-#: reachable, which this Python's `ipaddress` tables nonetheless report as
-#: global. Determined by sweeping both registries against the predicate below;
-#: everything else in them is already rejected by it.
+#: Prefixes refused by name, because the general rule below lets them through.
 #:
-#: This list is a snapshot of a registry that changes. It is not a substitute
-#: for the general rule beneath it, and it needs revisiting when either the
-#: registry or the runtime's tables move.
+#: Neither is as simple as "IANA says non-global", and an earlier version of
+#: this comment claimed exactly that about both. What the registry actually
+#: says, checked against the CSVs on 2026-08-19:
+#:
+#: - 192.88.99.0/24 carries no reachability value at all; it is marked
+#:   deprecated (RFC 7526). Only the more specific 192.88.99.2/32, the 6a44
+#:   relay anycast address, is marked not globally reachable. The whole /24 is
+#:   refused here because a deprecated anycast prefix reaches whichever relay
+#:   the local network happens to route it to, which is not a destination
+#:   anyone configured.
+#: - 2001:20::/28 is marked globally REACHABLE. It is refused anyway: ORCHIDv2
+#:   addresses (RFC 7343) are cryptographic identifiers, not destinations, so
+#:   a resolver answering with one is not describing somewhere to send content.
+#:
+#: Both are therefore policy, not transcription. The registry is a source, not
+#: the rule.
 _REFUSED_NETWORKS = (
-    # 6to4 relay anycast, deprecated by RFC 7526. Reaches whichever relay the
-    # local network routes it to.
     ipaddress.ip_network("192.88.99.0/24"),
-    # ORCHIDv2 (RFC 7343): not routable addresses at all.
     ipaddress.ip_network("2001:20::/28"),
 )
 
 #: NAT64, stated rather than implied.
 #:
 #: 64:ff9b::/96 (RFC 6052 well-known prefix) and 64:ff9b:1::/48 (RFC 8215
-#: local use) are refused, the first because this Python marks it reserved and
-#: the second because it is local by definition. That is deliberately
-#: conservative: a NAT64-only deployment cannot export through the well-known
-#: prefix and needs an IPv4 or dual-stack route to its receiver.
+#: local use) are both refused: the first because this runtime marks it
+#: reserved, the second because it is local by definition. Note that IANA
+#: marks the well-known prefix globally reachable and RFC 6052 requires it to
+#: carry only global IPv4, so refusing it is a conservative policy rather than
+#: a classification -- a NAT64-only deployment cannot export through it and
+#: needs an IPv4 or dual-stack route to its receiver.
 #:
-#: What this predicate CANNOT see is a Network-Specific Prefix. An operator's
-#: own NAT64 prefix is ordinary global IPv6 as far as any classification can
-#: tell, and the IPv4 address behind it may be internal. No address predicate
-#: can close that; it is a property of the network the server runs on, not of
-#: the address. It is a residual risk, and the runbook says so rather than
-#: this module implying otherwise.
+#: The residual: a Network-Specific Prefix is ordinary global IPv6, and the
+#: IPv4 address behind it may be internal. A predicate that sees only the
+#: address cannot close that -- one that knew the deployment's translation
+#: prefixes could, which is configuration this module does not have and is not
+#: the place to invent. It is a property of the network the server runs on,
+#: it is recorded here, and it belongs in the operator runbook (step 9), which
+#: does not exist yet: this comment is currently the only place it is written
+#: down.
 
 #: Headers this server sets itself on a content export. They are refused in a
 #: target's configuration rather than allowed to lose a merge, because HTTP
@@ -429,8 +446,26 @@ async def send_payload(
             result.phase = backend.phase
             result.peer = backend.peer
         result.error = result.error or type(exc).__name__
-        if isinstance(exc, BaseException) and not isinstance(exc, Exception):
-            # Genuine cancellation is not ours to swallow.
+        if not isinstance(exc, Exception):
+            # Genuine cancellation is not ours to swallow -- but it is also not
+            # a licence to abandon the client. Nothing downstream can clean up
+            # here: the caller receives an exception, not a result, so there is
+            # no `closer` for it to own. If this simply re-raised, a
+            # cancellation landing mid-submission would leave the connection
+            # that is carrying the content open for the process's lifetime.
+            #
+            # So the close happens here, under the same protocol the route uses
+            # for its own joins: its own task, bounded, joined through shields
+            # so this second cancellation cannot abandon it either. Then the
+            # original cancellation is re-propagated -- deferred by exactly as
+            # long as closing one client takes, and no longer.
+            close_errors: list[Exception] = []
+
+            async def _close_bounded() -> None:
+                async with asyncio.timeout(CLOSE_BUDGET_SECONDS):
+                    await client.aclose()
+
+            await join_and_drain(asyncio.create_task(_close_bounded()), on_error=close_errors.append)
             raise
     result.closer = client.aclose
     return result
