@@ -19,7 +19,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Interaction
 from app.services.safe_export_evidence import EVIDENCE_SCHEMA_VERSION, project_detectors
-from app.services.safe_logging import describe
 
 # Caller-supplied metadata is bounded and normalised. Without this, content
 # just moves into a different column — an integration is free to put a prompt
@@ -284,30 +283,6 @@ class InteractionLog:
                     )
 
             session.commit()
-
-            if row.content_available:
-                self._maybe_purge(session)
-
-    # Rate limited: retention is a promise about disclosure, not about deleting
-    # within milliseconds, and purging on every write would put a delete in the
-    # hot path of every guarded request.
-    _last_purge: float = 0.0
-    _PURGE_INTERVAL_SECONDS = 60.0
-
-    def _maybe_purge(self, session: Session) -> None:
-        import time
-
-        from app.services.content_capture import purge_expired
-
-        now = time.monotonic()
-        if now - InteractionLog._last_purge < self._PURGE_INTERVAL_SECONDS:
-            return
-        InteractionLog._last_purge = now
-        try:
-            purge_expired(session)
-        except Exception as exc:
-            # Never fail a guarded request because housekeeping failed.
-            logger.warning("content retention purge failed: %s", describe(exc))
 
     def get_recent(
         self,
