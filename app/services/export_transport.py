@@ -94,10 +94,11 @@ _REFUSED_NETWORKS = (
 #: IPv4 address behind it may be internal. A predicate that sees only the
 #: address cannot close that -- one that knew the deployment's translation
 #: prefixes could, which is configuration this module does not have and is not
-#: the place to invent. It is a property of the network the server runs on,
-#: it is recorded here, and it belongs in the operator runbook, which the
-#: step 9 design now carries -- but no runbook has shipped, so nothing an
-#: operator reads says it yet.
+#: the place to invent. It is a property of the network the server runs on.
+#: `docs/operations/content-runbook.md` section 12 states it as a deployment
+#: requirement, and states explicitly that saying so does not close it:
+#: `internal/findings/P1-nat64-nsp-sender-bypass.md` is the release blocker,
+#: and it is still open.
 
 #: Headers this server sets itself on a content export. They are refused in a
 #: target's configuration rather than allowed to lose a merge, because HTTP
