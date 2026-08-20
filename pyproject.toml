@@ -71,6 +71,11 @@ dev = [
     "ruff>=0.8,<0.9",
     "types-pyyaml>=6.0",
     "pre-commit>=4.0",
+    # Ruff lints neither shell nor Markdown. The operator runbook publishes a
+    # shell script and two shell blocks that are executed by the test suite and
+    # pasted by operators, so both need a linter of their own.
+    "shellcheck-py>=0.10",
+    "pymarkdownlnt>=0.9",
 ]
 # Browser tests, opt-in. Kept out of `dev` because Playwright is irrelevant to
 # server work and needs a further ~150MB of browser binaries installed by

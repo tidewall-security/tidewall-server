@@ -45,6 +45,7 @@ does not recompute rows that already exist.
 > `PRAGMA journal_mode=WAL` explicitly, then run this again.
 
 <!-- runbook:session -->
+
 ```bash
 DB=/path/to/tidewall.db
 REV=1b42ababed28
@@ -130,6 +131,7 @@ representations — the plain text, its JSON-escaped form, its `\uXXXX`-escaped
 form, and its raw bytes.
 
 <!-- runbook:postclose -->
+
 ```bash
 : "${DB:?set DB to the database path}"
 : "${CANARY_PLAIN:?}" "${CANARY_JSON:?}" "${CANARY_UNICODE:?}" "${CANARY_RAW:?}"
