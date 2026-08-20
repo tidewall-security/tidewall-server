@@ -10,6 +10,15 @@ against an expected program, and the link, lint, fixture-shape and rehearsal
 tests inspect artifacts rather than running them. The universal claim would be
 false, and this file is about not making those.
 
+What pinning cannot do, stated because it is the boundary of this whole
+approach: every pin here was generated FROM the artifact it guards. Change the
+artifact, regenerate the pin, and the suite goes green -- that is not a hole to
+be closed, it is what a pin is. What it buys is that the change becomes
+impossible to make *silently*: it turns a one-line edit in a Markdown file into
+a two-file diff with an expected-value change in a test, which is exactly the
+shape a reviewer notices. The gate is the diff; these tests make sure there is
+one.
+
 Where the block gates stop: they cover BLOCK-level code -- fenced blocks,
 indented blocks, raw HTML. They do not cover inline code spans, and cannot: the
 runbook is full of them, because that is how prose names a command or a
