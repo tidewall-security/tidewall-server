@@ -209,6 +209,27 @@ def test_a_canary_is_matched_literally_not_as_a_pattern(tmp_path):
 # --------------------------------------------------------------------------
 
 
+#: Fenced shell, as a Markdown renderer would find it -- not as one exact
+#: spelling. CommonMark allows whitespace between the fence and its info
+#: string, and tilde fences as well as backticks, so a block written
+#: ``` bash was invisible to a `\`\`\`bash` pattern while rendering, and being
+#: pasted, exactly like the others.
+_SHELL_FENCE = re.compile(r"^(?P<fence>```+|~~~+)[ \t]*(?:bash|sh|shell)[ \t]*$", re.M)
+
+
+def _shell_blocks(text: str) -> list[str]:
+    blocks = []
+    for match in _SHELL_FENCE.finditer(text):
+        fence = match.group("fence")[0] * 3
+        end = text.index(f"\n{fence}", match.end())
+        blocks.append(text[match.end() + 1 : end + 1])
+    return blocks
+
+
+def _canary_block() -> str:
+    return next(b for b in _shell_blocks(RUNBOOK.read_text()) if b.lstrip().startswith("# As it"))
+
+
 def _extract(marker: str) -> str:
     """The one fenced block under `marker`. Fails unless there is exactly one."""
     blocks = re.findall(rf"<!-- {re.escape(marker)} -->\s*```bash\n(.*?)```", RUNBOOK.read_text(), re.S)
@@ -1097,6 +1118,24 @@ def test_the_post_close_block_is_exactly_the_permitted_program():
     assert lines == _PERMITTED_POSTCLOSE
 
 
+#: The worked canary example's complete program. Executing it and asserting its
+#: four values is a semantic oracle, not a program gate: an extra command
+#: inside it ran, and every test stayed green, because the values it produced
+#: were still four distinct non-empty strings.
+_PERMITTED_CANARY = [
+    """CANARY_PLAIN='café "acct\\4111"'""",
+    """CANARY_JSON='café \\"acct\\\\4111\\"'""",
+    """CANARY_UNICODE='caf\\u00e9 \\"acct\\\\4111\\"'""",
+    """CANARY_RAW=$'caf\\xe9 "acct\\\\4111"'""",
+]
+
+
+def test_the_worked_canary_block_is_exactly_the_permitted_program():
+    """Four assignments and nothing else."""
+    lines = [line.strip() for line in _canary_block().splitlines() if line.strip() and not line.strip().startswith("#")]
+    assert lines == _PERMITTED_CANARY
+
+
 def test_every_shell_block_in_the_runbook_is_a_gated_one():
     """No fenced shell an operator could paste that no test knows about.
 
@@ -1104,13 +1143,7 @@ def test_every_shell_block_in_the_runbook_is_a_gated_one():
     example is evaluated -- but a fourth block could be added with all tests
     green, and a reader has no way to tell a gated block from an ungated one.
     """
-    blocks = re.findall(r"```bash\n(.*?)```", RUNBOOK.read_text(), re.S)
-    gated = [
-        _extract("runbook:session"),
-        _extract("runbook:postclose"),
-        # The worked canary example, bound by
-        # test_the_worked_canary_examples_are_four_distinct_values.
-        next(b for b in blocks if b.lstrip().startswith("# As it was written")),
-    ]
+    blocks = _shell_blocks(RUNBOOK.read_text())
+    gated = [_extract("runbook:session"), _extract("runbook:postclose"), _canary_block()]
     ungated = [b for b in blocks if b not in gated]
     assert not ungated, "the runbook publishes shell that no test executes or compares:\n" + "\n---\n".join(ungated)
