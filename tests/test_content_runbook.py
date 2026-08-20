@@ -802,3 +802,35 @@ def test_the_published_shell_passes_shellcheck():
             cwd=REPO,
         )
         assert result.returncode == 0, f"{name}:\n{result.stdout}"
+
+
+# --------------------------------------------------------------------------
+# Task 7: the rehearsal record (the release gate)
+# --------------------------------------------------------------------------
+
+REHEARSAL = REPO / "docs" / "operations" / "rehearsals" / "2026-08-20-migration-rehearsal.md"
+
+
+def test_the_rehearsal_record_is_complete():
+    """The release gate. It fails while any field is outstanding.
+
+    Three of the four are produced by the rehearsal itself and are populated.
+    `Owner` names the person accountable for the backup taken before a real
+    upgrade; a test run cannot produce it, and inventing it would make the
+    acceptance record a fiction. So this test fails until an operator supplies
+    it -- which is what a release-blocking input means.
+    """
+    assert REHEARSAL.exists(), REHEARSAL
+
+    rows = dict(re.findall(r"^\|\s*([^|]+?)\s*\|\s*(.*?)\s*\|$", REHEARSAL.read_text(), re.M))
+    outstanding = []
+    for field in ("Backup identifiers", "Owner", "Retention or deletion disposition", "Date"):
+        value = rows.get(field, "")
+        if not value or "OUTSTANDING" in value:
+            outstanding.append(field)
+
+    assert not outstanding, (
+        f"the rehearsal record is incomplete: {outstanding}. "
+        "This is the release gate, not a formatting check -- see the record's "
+        "'Outstanding' section for what is missing and why it cannot be invented."
+    )
