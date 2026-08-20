@@ -1119,16 +1119,30 @@ def test_the_post_close_block_is_exactly_the_permitted_program():
 #: inside it ran, and every test stayed green, because the values it produced
 #: were still four distinct non-empty strings.
 _PERMITTED_CANARY = [
-    """CANARY_PLAIN='café "acct\\4111"'""",
-    """CANARY_JSON='café \\"acct\\\\4111\\"'""",
-    """CANARY_UNICODE='caf\\u00e9 \\"acct\\\\4111\\"'""",
-    """CANARY_RAW=$'caf\\xe9 "acct\\\\4111"'""",
+    "# As it was written.",
+    "CANARY_PLAIN='café \"acct\\4111\"'",
+    "# As a JSON string value: the quotes and the backslash are escaped.",
+    "CANARY_JSON='café \\\"acct\\\\4111\\\"'",
+    "# As some writers encode non-ASCII: the é becomes a \\uXXXX escape. Writers",
+    "# may also escape ASCII characters, so this form is worth searching for even",
+    "# when your canary is plain -- it costs nothing if it is absent.",
+    "CANARY_UNICODE='caf\\u00e9 \\\"acct\\\\4111\\\"'",
+    "# The same characters under a DIFFERENT encoding -- here latin-1, where é is",
+    "# the single byte 0xe9 rather than UTF-8's 0xc3 0xa9. This is the form to use",
+    "# when the value may have been written by something that did not agree with",
+    "# your database about encoding. If everything in the path was UTF-8, this is",
+    "# byte-for-byte the plain form.",
+    "CANARY_RAW=$'caf\\xe9 \"acct\\\\4111\"'",
 ]
 
 
 def test_the_worked_canary_block_is_exactly_the_permitted_program():
     """Four assignments and nothing else."""
-    lines = [line.strip() for line in _canary_block().splitlines() if line.strip() and not line.strip().startswith("#")]
+    # Comments included. They are not decoration here: each one tells the
+    # operator what that representation is for, and rewriting one to say a form
+    # is optional changed what an operator would do while every gate stayed
+    # green.
+    lines = [line.rstrip() for line in _canary_block().splitlines() if line.strip()]
     assert lines == _PERMITTED_CANARY
 
 
