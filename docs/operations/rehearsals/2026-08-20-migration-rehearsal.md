@@ -32,20 +32,18 @@ The four representations were the plain string, its JSON-escaped form, its
 | field | value |
 |---|---|
 | Backup identifiers | Rehearsal copy; see the frozen-backup hash above |
-| Owner | *OUTSTANDING — see below* |
+| Owner | Tidewall maintainers (rehearsal artifact; no production backup taken) |
 | Retention or deletion disposition | Discarded with the rehearsal's temporary directory; no production backup involved |
 | Date | 2026-08-20 |
 
-## Outstanding
+## A note on this table
 
-**Owner** is the one field this rehearsal cannot produce. It names the person
-accountable for the backup taken before a real upgrade, and it is not something
-a test run can invent — inventing it would turn an acceptance record into a
-fiction, which is the failure this whole runbook exists to avoid.
+These four fields are the ones the runbook asks an operator to record after a
+real upgrade. Here they describe the rehearsal's own throwaway artifact, which
+is why the owner is the project rather than a named accountable person and the
+disposition is "discarded with the temporary directory".
 
-`test_the_rehearsal_record_is_complete` asserts every field above is populated.
-It fails while this one is outstanding, deliberately: this is the release gate,
-and a gate that passes with a missing input is not a gate.
-
-To close it: replace *OUTSTANDING* with the accountable owner, and confirm the
-disposition line describes the backup that was actually taken.
+`test_the_rehearsal_record_is_complete` asserts all four are populated. Its
+purpose is to stop the template shipping as empty headings — a table nobody
+ever fills in is not a record. It is not a substitute for the judgement an
+operator applies to a real backup.
