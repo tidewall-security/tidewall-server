@@ -1192,14 +1192,25 @@ def test_the_runbook_renders_exactly_the_declared_sections():
     assert _rendered_headings() == _HEADINGS
 
 
-def test_every_rendered_code_block_is_a_gated_one():
-    """Every fenced block a renderer produces, at any indentation, in any
-    container, must be one of the three the suite compares line by line."""
-    gated = [_extract("runbook:session"), _extract("runbook:postclose"), _canary_block()]
-    ungated = [t.content for t in _rendered_fences() if t.content not in gated]
-    assert not ungated, "the runbook renders a code block that no test executes or compares:\n" + "\n---\n".join(
-        ungated
-    )
+def test_the_rendered_code_blocks_are_exactly_the_three_gated_ones():
+    """An ordered inventory, not a membership test.
+
+    Membership establishes that nothing unknown appears. It does not establish
+    that there are three, that each appears once, that they appear in the order
+    the procedure runs, or that they are tagged the way a renderer expects --
+    and each of those was demonstrably exploitable:
+
+    * an exact copy of the post-close verifier placed BEFORE the session shows
+      an operator the verification before the operation it verifies;
+    * a copy of the worked example tagged `mermaid` renders as a diagram on
+      GitHub, so identical content is not identical to what a reader sees.
+    """
+    expected = [
+        ("bash", _extract("runbook:session")),
+        ("bash", _canary_block()),
+        ("bash", _extract("runbook:postclose")),
+    ]
+    assert [(token.info, token.content) for token in _rendered_fences()] == expected
 
 
 def test_the_runbook_renders_no_indented_code_block():
