@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrading — this release is destructive
+
+Upgrading deletes every row in `interactions` and drops four columns that held
+prompt content. There is no data rollback in either direction: `alembic
+downgrade` restores the schema, not the data. Take a backup first, and read
+[the content runbook](docs/operations/content-runbook.md) before upgrading —
+it covers the destructive migration, reclaiming the space the deleted content
+still occupies on disk, and what that reclamation does and does not achieve.
+
 ### Security
 
 - **Device takeover via fingerprint (P0-11).** `POST /v1/devices/check`
