@@ -1170,12 +1170,16 @@ def test_every_shell_block_in_the_runbook_is_a_gated_one():
     )
 
 
-#: Any line that opens or closes a fence under CommonMark: up to three spaces
-#: of indentation, optionally inside a block quote, backticks or tildes. Three
-#: successive versions of this gate anchored at column one and were bypassed by
-#: a form a renderer accepts -- so this counts MARKERS rather than trying to
-#: parse structure, and the count failing is the signal.
-_FENCE_MARKER = re.compile(r"^ {0,3}(?:> ?)* {0,3}(?:```|~~~)", re.M)
+#: Every maximal run of three or more backticks or tildes, ANYWHERE, with no
+#: line anchor at all.
+#:
+#: The previous version claimed to count markers rather than parse CommonMark,
+#: and then anchored itself to a guessed line prefix -- `^ {0,3}(?:> ?)*` --
+#: which is modelling the grammar with fewer rules and no parser. CommonMark
+#: strips container prefixes recursively, so legal spacing between nested
+#: block-quote markers hid a fence from it. Counting runs is the thing I said
+#: I was doing.
+_FENCE_RUN = re.compile(r"`{3,}|~{3,}")
 
 
 def test_the_runbook_contains_no_undeclared_fence():
@@ -1188,7 +1192,7 @@ def test_the_runbook_contains_no_undeclared_fence():
     marker anywhere in the document fails this count, and whoever adds one has
     to say what it is.
     """
-    markers = _FENCE_MARKER.findall(RUNBOOK.read_text())
+    markers = _FENCE_RUN.findall(RUNBOOK.read_text())
     assert len(markers) == 6, (
         f"expected 6 fence markers (3 blocks, opened and closed), found {len(markers)}. "
         "If you added a block, add it to the gated set in "
@@ -1200,6 +1204,49 @@ def test_the_runbook_contains_no_undeclared_fence():
 #: `<pre>`, `<code>`, a `<script>` -- renders as content a reader may copy while
 #: adding no fence marker at all, so the count above cannot see it.
 _ALLOWED_HTML = re.compile(r"^<!-- runbook:(?:session|postclose) -->$")
+
+
+#: The runbook's headings, in order. Pinned because an operator step can be
+#: added as ordinary prose carrying an inline code span -- no fence, no HTML,
+#: nothing the block gates can see. This does not police prose inside a
+#: section, and cannot; it does mean a NEW step has to be declared here, which
+#: is the form the bypass actually took.
+_HEADINGS = [
+    "# Reclaiming deleted content",
+    "## 1. Upgrading to this release is destructive",
+    "## 2. Reclaiming the space",
+    "### Before you start",
+    "### Why the heredoc is quoted",
+    "### Why two checkpoints",
+    "### Reading the result",
+    "### After the session has closed",
+    "# As it was written.",
+    "# As a JSON string value: the quotes and the backslash are escaped.",
+    "# As some writers encode non-ASCII: the é becomes a \\uXXXX escape. Writers",
+    "# may also escape ASCII characters, so this form is worth searching for even",
+    "# when your canary is plain -- it costs nothing if it is absent.",
+    "# The same characters under a DIFFERENT encoding -- here latin-1, where é is",
+    "# the single byte 0xe9 rather than UTF-8's 0xc3 0xa9. This is the form to use",
+    "# when the value may have been written by something that did not agree with",
+    "# your database about encoding. If everything in the path was UTF-8, this is",
+    "# byte-for-byte the plain form.",
+    "## 3. What this does, and what it does not",
+    "## 4. Where the bytes may still be",
+    "## 5. Backup and snapshot disposition",
+    "## 6. Where content crosses the network",
+    "## 7. Retention",
+    "## 8. Grants",
+    "## 9. Export targets",
+    "## 10. One live server per database",
+    "## 11. Export attempts that did not resolve",
+    "## 12. A deployment requirement: NAT64",
+    "## Deviations from the accepted design",
+]
+
+
+def test_the_runbook_has_exactly_the_declared_sections():
+    """A new step cannot be appended without saying so."""
+    assert re.findall(r"(?m)^#{1,6} .*$", RUNBOOK.read_text()) == _HEADINGS
 
 
 def test_the_runbook_contains_no_html_but_its_two_markers():
@@ -1224,7 +1271,7 @@ def test_the_runbook_uses_no_indented_code_blocks():
     inside_fence = False
     offenders = []
     for number, line in enumerate(RUNBOOK.read_text().splitlines(), start=1):
-        if _ANY_FENCE.match(line):
+        if _FENCE_RUN.search(line):
             inside_fence = not inside_fence
         elif not inside_fence and line.startswith("    ") and line.strip():
             offenders.append(f"{number}: {line!r}")
