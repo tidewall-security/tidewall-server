@@ -1162,6 +1162,32 @@ def test_every_shell_block_in_the_runbook_is_a_gated_one():
     )
 
 
+#: Any line that opens or closes a fence under CommonMark: up to three spaces
+#: of indentation, optionally inside a block quote, backticks or tildes. Three
+#: successive versions of this gate anchored at column one and were bypassed by
+#: a form a renderer accepts -- so this counts MARKERS rather than trying to
+#: parse structure, and the count failing is the signal.
+_FENCE_MARKER = re.compile(r"^ {0,3}(?:> ?)* {0,3}(?:```|~~~)", re.M)
+
+
+def test_the_runbook_contains_no_undeclared_fence():
+    """Six markers: three blocks, each opened and closed.
+
+    A fence indented by up to three spaces, or nested in a list item or block
+    quote, renders as code and reads as something to paste while being
+    invisible to a column-one pattern. Rather than teaching the enumeration
+    CommonMark -- which has now been wrong three times -- any additional fence
+    marker anywhere in the document fails this count, and whoever adds one has
+    to say what it is.
+    """
+    markers = _FENCE_MARKER.findall(RUNBOOK.read_text())
+    assert len(markers) == 6, (
+        f"expected 6 fence markers (3 blocks, opened and closed), found {len(markers)}. "
+        "If you added a block, add it to the gated set in "
+        "test_every_shell_block_in_the_runbook_is_a_gated_one."
+    )
+
+
 def test_the_runbook_uses_no_indented_code_blocks():
     """Because the fence enumeration cannot see them.
 
