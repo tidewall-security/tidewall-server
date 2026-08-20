@@ -194,6 +194,16 @@ CANARY_UNICODE='caf\u00e9 \"acct\\4111\"'
 CANARY_RAW=$'caf\xe9 "acct\\4111"'
 ```
 
+**Choose a canary long enough not to occur by chance.** These are literal byte
+searches over a binary file: a one- or two-character canary will match
+something in almost any database, and you will be told `FOUND` for content that
+is not there. Verified — a canary of `x` reports `FOUND` against a freshly
+migrated, empty database.
+
+That error is in the safe direction: a too-short canary can only produce a
+false `FOUND`, never a false clean. But it will send you looking for a leak
+that does not exist, so use a distinctive string of a dozen characters or more.
+
 If your canary is pure ASCII, all four forms collapse towards the plain one and
 the `\uXXXX` form may not appear at all. That is fine — pass them anyway; the
 scan refuses an empty argument, not a redundant one. It is also the reason this
@@ -219,6 +229,10 @@ test ! -e "$DB-journal" || { echo "a rollback journal exists"; exit 1; }
 `scan-artifacts.sh` exits `0` if it scanned and found nothing, `1` if it found
 something, and `2` if it could not scan. Treat `2` as "no result", never as
 "clean".
+
+If you are not in the repository root you will get exit `127` and
+`./scripts/scan-artifacts.sh: No such file or directory`. That is the working
+directory, not a problem with your database.
 
 ## 3. What this does, and what it does not
 
