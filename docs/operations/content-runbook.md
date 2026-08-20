@@ -107,11 +107,31 @@ printf '%s\n' "$out"
 Keep that output. It is the record that the procedure ran, and the only one
 you get.
 
+### Why two checkpoints
+
+The first does **not** exist to make data visible to `VACUUM` — a reader in WAL
+mode already sees a coherent snapshot of the main file plus committed frames.
+It clears any WAL residue that was already there, gives the procedure a clean
+boundary, and fails early if something else is holding the database.
+
+`VACUUM` then rebuilds the database into fresh pages, which is what drops the
+free pages still holding deleted content. In WAL mode that rebuild is an
+ordinary write transaction, so it is written *into the WAL*.
+
+The second checkpoint moves those rebuilt pages into the main file and
+truncates the WAL. Closing the last connection may also do that, but relying on
+it means relying on incidental behaviour.
+
 ### Reading the result
 
-Each `_assert` row is a precondition. A failure stops the sequence with a
-`CHECK constraint failed` error and a non-zero exit, before anything is
-written.
+The first seven `_assert` rows are **preconditions**. A failure stops the
+sequence with a `CHECK constraint failed` error and a non-zero exit, before
+anything is written.
+
+The last one, `integrity ok`, is a **postcondition**: it runs after `VACUUM`
+and the second checkpoint. If it fails, the database has already been
+rewritten. That is not a reason to remove it — an integrity failure is exactly
+what you want to hear about — but it is not a check that protects the file.
 
 The two `0|0|0` lines are the checkpoint results. Only the first column
 matters: `0` means the checkpoint completed, `1` means it did not because
@@ -125,10 +145,38 @@ quiescence and run it again.
 
 ### After the session has closed
 
-These inspect artifacts that only exist once SQLite has let go of them. Set
-`CANARY_*` to a string you know was in a deleted record, in each of its
-representations — the plain text, its JSON-escaped form, its `\uXXXX`-escaped
-form, and its raw bytes.
+These inspect artifacts that only exist once SQLite has let go of them.
+
+**Run this from a checkout of this repository**, because it invokes
+`scripts/scan-artifacts.sh` by a relative path. The published container image
+ships neither `scripts/` nor `docs/`, and does not install the `sqlite3` CLI —
+so this whole procedure is run from a host with a checkout, against the
+database file, not from inside the container.
+
+Prerequisites: `sqlite3`, `grep`, and read access to the database and its
+sidecars.
+
+Set `CANARY_*` to a string you know was in a deleted record, in each of its
+representations. Worked example, for a prompt containing
+`acct 4111-1111-1111-1111`:
+
+```bash
+CANARY_PLAIN='acct 4111-1111-1111-1111'
+# As it appears inside a JSON column: quotes and backslashes escaped. Here
+# there are none, so it differs from the plain form only by its surrounding
+# quotes -- which is why both are searched.
+CANARY_JSON='"acct 4111-1111-1111-1111"'
+# As a \uXXXX escape, which is how some writers encode non-ASCII. Use this
+# form for the characters in your canary that are not ASCII; for an all-ASCII
+# canary it will not appear, and searching for it costs nothing.
+CANARY_UNICODE='acct \u0034111'
+# The raw bytes, if the value reached the database through a path that did not
+# encode it as text at all.
+CANARY_RAW=$'acct 4111-1111-1111-1111'
+```
+
+Single quotes matter: without them the shell will interpret `$`, backslashes
+and spaces, and you will scan for something other than what you meant.
 
 <!-- runbook:postclose -->
 
@@ -162,8 +210,12 @@ file unchanged.
 content rows remain, because that is the only state in which the claim it
 supports is checkable. After a routine retention purge, with in-policy content
 still live, no scan of the resulting files can distinguish "the expired rows
-are gone" from "the expired rows were never there". Reclaiming space after
-routine purges is not supported yet.
+are gone" from "the expired rows were never there".
+
+Reclaiming space after routine purges is not supported yet. It needs a way for
+an operator to state the deletion boundary they mean and for the procedure to
+check it. That is open work, recorded as the open question in §9 of
+`internal/reviews/2026-08-19-p006-step9-design-v10.md`.
 
 ## 4. Where the bytes may still be
 
@@ -286,3 +338,24 @@ Deny egress to the Pref64, or apply to the IPv4-embedded address the same
 policy you would apply to the embedded IPv4 (RFC 6052 §5.3).
 
 This is an operational control for a defect in the sender, not a closure of it.
+
+---
+
+## Deviations from the accepted design
+
+Recorded here rather than left for a reader to discover by diffing.
+
+1. **The session block prints its captured output.** The accepted design said
+   every line of that output was load-bearing and nothing printed it, so an
+   operator had no record and no test could assert one.
+2. **`REV` names a concrete revision** rather than a placeholder. The design's
+   `REV=<the alembic revision this deployment expects>` is not valid shell, so
+   the published block could not be syntax-checked or run as printed.
+3. **The explanatory SQL comments were dropped** from the block, and the
+   explanation they carried is in the prose above instead. The block is meant
+   to be pasted; the reasoning is meant to be read.
+4. **§12 carries the NAT64 deployment control.** The design said the release
+   blocker is "not a runbook paragraph", and it is not one — the blocker is
+   `internal/findings/P1-nat64-nsp-sender-bypass.md`. What is here is the
+   operational control an operator needs meanwhile, stated as a requirement
+   and explicitly not as a closure.

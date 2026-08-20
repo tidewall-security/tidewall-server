@@ -1,9 +1,14 @@
 """The operator runbook, executed rather than read.
 
-Every test here runs text extracted from `docs/operations/content-runbook.md`
-or the script it publishes. A test that reimplemented either would prove only
-that the reimplementation works, and the runbook could drift away from it
-silently -- which is the failure this whole step exists to prevent.
+Every test that RUNS a procedure runs text extracted from
+`docs/operations/content-runbook.md` or the script it publishes. A test that
+reimplemented either would prove only that the reimplementation works, and the
+runbook could drift away from it silently.
+
+Not every test executes something: the whitelists compare extracted text
+against an expected program, and the link, lint, fixture-shape and rehearsal
+tests inspect artifacts rather than running them. The universal claim would be
+false, and this file is about not making those.
 
 One deliberate gap, stated rather than implied: `scan-artifacts.sh` ends with a
 `scanned=0` backstop that no test here kills. On a stable filesystem the
@@ -134,6 +139,56 @@ def test_a_scan_that_could_not_read_an_artifact_is_not_a_clean_result(tmp_path, 
     assert "scan FAILED" in result.stdout
 
 
+@pytest.mark.parametrize("artifact", ["", "-wal", "-shm"])
+def test_the_scan_searches_every_artifact_it_names(tmp_path, artifact):
+    """One positive case per artifact.
+
+    With the canary only ever planted in the -shm, the loop could drop the WAL
+    entirely -- or skip the main database while still counting it as scanned --
+    and every other test stayed green. "Nothing was found" only means something
+    if each named artifact was actually searched.
+    """
+    db = tmp_path / "t.db"
+    _sqlite_file(db, CANARY if not artifact else "nothing interesting")
+    target = pathlib.Path(f"{db}{artifact}")
+    if artifact:
+        target.write_text(CANARY)
+
+    result = _run_scan(db, CANARY)
+    assert result.returncode == 1, f"{target.name} was not searched: {result.stdout}"
+    assert target.name in result.stdout
+
+
+@pytest.mark.parametrize("canary", ["-n", "-e", "--", "-v"])
+def test_a_canary_that_looks_like_an_option_is_still_a_canary(tmp_path, canary):
+    """`grep -e` and `--` are load-bearing, not stylistic.
+
+    Without `-e`, a canary of `-n` is consumed as an option: the script reports
+    clean for a database that contains it. The existing `.*` case binds `-F`
+    and nothing else.
+    """
+    db = tmp_path / "t.db"
+    _sqlite_file(db, f"prefix {canary} suffix")
+    assert _run_scan(db, canary).returncode == 1, f"a canary of {canary!r} was not searched for"
+
+    clean = tmp_path / "clean.db"
+    _sqlite_file(clean, "nothing interesting")
+    assert _run_scan(clean, canary).returncode == 0
+
+
+def test_a_database_path_that_looks_like_an_option_is_still_a_path(tmp_path):
+    """`--` protects the operand, which `-e` does not.
+
+    Only reachable through a relative path beginning with a dash, which is
+    unlikely but costs one token to defend. Without `--`, grep reads the
+    filename as options.
+    """
+    db = tmp_path / "-dashed.db"
+    _sqlite_file(db, CANARY)
+    result = subprocess.run([str(SCAN), "-dashed.db", CANARY], capture_output=True, text=True, cwd=tmp_path)
+    assert result.returncode == 1, f"the dashed path was not searched: {result.stdout}"
+
+
 def test_a_canary_is_matched_literally_not_as_a_pattern(tmp_path):
     """`.*` is a string an operator might plausibly be searching for, and it
     must not match everything. Without grep -F it reported a find for a canary
@@ -236,6 +291,65 @@ _PERMITTED = [
 ]
 
 
+#: The shell around the heredoc, which decides what the SQL's output MEANS.
+#: `_sql_statements` stops at the heredoc terminator, so without this the two
+#: result checks could be deleted with all 63 tests green -- and they are the
+#: mechanism that turns a missing completion marker or a busy checkpoint into a
+#: failure.
+_PERMITTED_SHELL = [
+    'out=$(sqlite3 "$DB" <<SQL 2>&1',
+    ") || { printf 'the sequence stopped before completing:\\n%s\\n' \"$out\"; exit 1; }",
+    "printf '%s\\n' \"$out\" | grep -qx 'SEQUENCE-COMPLETE' || { echo \"incomplete\"; exit 1; }",
+    "[ \"$(printf '%s\\n' \"$out\" | grep -cx '0|0|0')\" -eq 2 ] || {",
+    "printf 'a checkpoint did not complete:\\n%s\\n' \"$out\"; exit 1; }",
+    "printf '%s\\n' \"$out\"",
+]
+
+
+def _shell_lines(block: str) -> list[str]:
+    """The block's shell, with the heredoc body and comments removed."""
+    lines = block.splitlines()
+    start = next(i for i, line in enumerate(lines) if "<<SQL" in line)
+    end = next(i for i, line in enumerate(lines) if i > start and line.strip() == "SQL")
+    outside = lines[:start] + [lines[start]] + lines[end + 1 :]
+    return [
+        line.strip()
+        for line in outside
+        if line.strip() and not line.strip().startswith("#") and not line.startswith(("DB=", "REV="))
+    ]
+
+
+def test_the_session_block_shell_is_exactly_the_permitted_program():
+    """The SQL whitelist proves the statements are there. This proves their
+    results are checked."""
+    assert _shell_lines(_extract("runbook:session")) == _PERMITTED_SHELL
+
+
+def test_a_busy_checkpoint_makes_the_whole_block_fail(tmp_path):
+    """The two-`0|0|0` check, bound dynamically as well as statically.
+
+    A reader pinning WAL frames makes a checkpoint report busy. The SQL still
+    runs to completion and prints `SEQUENCE-COMPLETE`; only the shell's row
+    check turns that into a refusal. Delete it and this passes.
+    """
+    db = _head_db(tmp_path)
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE probe(x)")
+    conn.commit()
+    reader = sqlite3.connect(db)
+    reader.execute("BEGIN")
+    reader.execute("SELECT count(*) FROM probe").fetchall()
+    conn.execute("INSERT INTO probe VALUES(1)")
+    conn.commit()
+    try:
+        result = _run_session(db)
+        assert result.returncode != 0, f"a busy checkpoint was accepted: {result.stdout}"
+        assert "a checkpoint did not complete" in result.stdout
+    finally:
+        reader.close()
+        conn.close()
+
+
 def test_the_session_block_is_exactly_the_permitted_program():
     """Not "the expected statements appear in order" -- that nothing else
     appears at all, and that each one is what it claims to be."""
@@ -288,7 +402,7 @@ def _assert_fixture_shape(db):
         conn.close()
 
 
-def _head_db(tmp_path):
+def _head_db(tmp_path, page_size=None):
     """A WAL database at head, in two explicit stages.
 
     `alembic upgrade head` leaves the database in `delete` mode -- verified --
@@ -298,22 +412,40 @@ def _head_db(tmp_path):
     from app.db.engine import get_engine
 
     db = tmp_path / "head.db"
+    if page_size is not None:
+        # Before Alembic, and with a write, or it does nothing. SQLite ignores
+        # PRAGMA page_size once the schema exists, and only persists it to the
+        # header when the file is first written -- so setting it on an empty
+        # connection and closing leaves the default. An earlier version of this
+        # fixture set it after Alembic and ran all three "page sizes" against
+        # one 4096-byte database.
+        seed = sqlite3.connect(db)
+        seed.execute(f"PRAGMA page_size={page_size}")
+        seed.execute("VACUUM")
+        seed.close()
     _alembic(db, "upgrade", "head")
     engine = get_engine(f"sqlite:///{db}")
     with engine.connect():
         pass
     engine.dispose()
     _assert_fixture_shape(db)
+    if page_size is not None:
+        conn = sqlite3.connect(db)
+        try:
+            actual = conn.execute("PRAGMA page_size").fetchone()[0]
+        finally:
+            conn.close()
+        assert actual == page_size, f"asked for page_size {page_size}, got {actual}"
     return db
 
 
 def _run_session(db, revision=HEAD_REVISION):
     """Run the published session block against `db`.
 
-    Only the two assignment templates are replaced, and both must be found:
-    the published `REV=<the alembic revision this deployment expects>` is not
-    even valid shell, so a syntax or lint check over the raw block fails on the
-    template rather than on the program.
+    Only the two assignment lines are replaced, and both must be found. The
+    published block names a concrete database path and revision, so it is valid
+    shell as printed; substituting them here points it at the fixture rather
+    than at whatever the runbook happens to use as its example.
     """
     block = _substituted_session(db, revision)
     return subprocess.run(["bash", "-c", block], capture_output=True, text=True, cwd=REPO)
@@ -574,8 +706,15 @@ def test_the_post_close_block_refuses_to_run_without_its_inputs(tmp_path, variab
     canary would hand the scan an argument it must refuse anyway, but the
     refusal belongs at the top where the operator sees it."""
     db = _clean_reclaimed_db(tmp_path)
+    # Something the scan script would otherwise catch, so that a coarse
+    # "non-zero" oracle cannot pass on the script's refusal instead of the
+    # block's. Changing every `:?` to `:-` left the old form green.
     result = _run_postclose(db, **{variable: ""})
     assert result.returncode != 0
+    assert variable in result.stderr, (
+        f"the block did not refuse at its own ${{{variable}:?}} check: "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
 
 
 def test_the_second_checkpoint_is_what_truncates_the_wal(tmp_path):
@@ -677,7 +816,7 @@ def test_the_first_checkpoint_reports_its_own_result(tmp_path):
 # --------------------------------------------------------------------------
 
 
-def _plant_canary(db, representations, page_size):
+def _plant_canary(db, representations):
     """Leave every representation as deleted residue in BOTH the main file and
     the WAL, with `interaction_contents` empty again afterwards.
 
@@ -690,12 +829,19 @@ def _plant_canary(db, representations, page_size):
     * a checkpoint after the insert. Holding a connection preserves a sidecar;
       it does not move inserted pages into the main file, so without this the
       canary is in the WAL and nowhere else.
-    * `page_size` before the schema exists, or it is ignored.
+    The page size is `_head_db`'s job, because it has to be set before Alembic
+    creates the schema.
     """
     conn = sqlite3.connect(db)
+    # Start from ON, so that turning it OFF is doing work. This build defaults
+    # to OFF, so without this the OFF line below could be deleted with every
+    # test still green -- while /usr/bin/sqlite3 on the same machine reports 2
+    # (FAST), where the delete scrubs the WAL page image and the canary lands
+    # only in the main file.
+    conn.execute("PRAGMA secure_delete=ON")
+    assert conn.execute("PRAGMA secure_delete").fetchone()[0] == 1
     conn.execute("PRAGMA secure_delete=OFF")
     assert conn.execute("PRAGMA secure_delete").fetchone()[0] == 0
-    conn.execute(f"PRAGMA page_size={page_size}")
     conn.execute("PRAGMA journal_mode=WAL")
     # One content row per interaction: interaction_contents.interaction_id is
     # unique, so four representations need four parents.
@@ -746,8 +892,8 @@ def test_the_procedure_removes_every_representation_from_both_artifacts(tmp_path
         "canary-raw-\x01\x02bytes",
     ]
 
-    db = _head_db(tmp_path)
-    holder = _plant_canary(db, representations, page_size)
+    db = _head_db(tmp_path, page_size=page_size)
+    holder = _plant_canary(db, representations)
     try:
         copy = _copy_database(db, tmp_path / "copy")
         main_bytes = copy.read_bytes()
@@ -770,24 +916,52 @@ def test_the_runbook_publishes_exactly_one_of_each_block():
     _extract("runbook:postclose")
 
 
-def test_the_changelog_points_at_the_runbook():
+def test_the_changelog_links_to_the_runbook():
+    """A Markdown link, not a pathname that happens to appear in prose.
+
+    Checking only for the string passed when the link was replaced with plain
+    text ending in the same path, which is the drift this gate exists to catch.
+    """
     changelog = (REPO / "CHANGELOG.md").read_text()
-    assert "docs/operations/content-runbook.md" in changelog
+    targets = re.findall(r"\]\(([^)]+)\)", changelog)
+    assert any(
+        target.endswith("docs/operations/content-runbook.md") for target in targets
+    ), f"no Markdown link to the runbook; found {targets}"
+    assert (REPO / "docs/operations/content-runbook.md").exists()
     assert "destructive" in changelog.lower()
 
 
-def test_every_relative_link_in_the_runbook_resolves():
-    text = RUNBOOK.read_text()
-    for target in re.findall(r"\]\((?!https?:)([^)#]+)", text):
-        assert (RUNBOOK.parent / target).resolve().exists(), target
+@pytest.mark.parametrize(
+    "document",
+    [RUNBOOK, REPO / "docs" / "operations" / "rehearsals" / "2026-08-20-migration-rehearsal.md"],
+    ids=["runbook", "rehearsal"],
+)
+def test_every_relative_link_resolves(document):
+    """Both documents, and at least one link somewhere.
+
+    Iterating only the runbook was vacuous: it contains no relative links, so
+    the loop never ran, and the rehearsal record's link to it could be broken
+    with this test green.
+    """
+    targets = re.findall(r"\]\((?!https?:)([^)#]+)", document.read_text())
+    for target in targets:
+        assert (document.parent / target).resolve().exists(), f"{document.name}: {target}"
+
+
+def test_at_least_one_relative_link_exists_to_check():
+    """Otherwise the loop above is a no-op that reports success."""
+    rehearsal = REPO / "docs" / "operations" / "rehearsals" / "2026-08-20-migration-rehearsal.md"
+    assert re.findall(
+        r"\]\((?!https?:)([^)#]+)", rehearsal.read_text()
+    ), "the rehearsal record no longer links to the runbook, so the link gate checks nothing"
 
 
 def test_the_published_shell_passes_shellcheck():
-    """Over the SUBSTITUTED session block, not the raw one.
+    """Over the substituted session block.
 
-    The published `REV=<the alembic revision this deployment expects>` is not
-    valid shell -- a check over the raw text fails on the template rather than
-    on the program, which would be a gate that reports on the wrong thing.
+    The block is valid shell as published, so this would pass either way; it
+    runs over the substituted form so that shellcheck sees the same program the
+    dynamic tests execute.
     """
     for name, script in (
         ("scan-artifacts.sh", SCAN.read_text()),
@@ -814,11 +988,10 @@ REHEARSAL = REPO / "docs" / "operations" / "rehearsals" / "2026-08-20-migration-
 def test_the_rehearsal_record_is_complete():
     """The release gate. It fails while any field is outstanding.
 
-    Three of the four are produced by the rehearsal itself and are populated.
-    `Owner` names the person accountable for the backup taken before a real
-    upgrade; a test run cannot produce it, and inventing it would make the
-    acceptance record a fiction. So this test fails until an operator supplies
-    it -- which is what a release-blocking input means.
+    What it actually asserts: each of the four fields is present and neither
+    empty nor marked outstanding. It cannot tell a considered value from an
+    arbitrary one -- no test can -- so it is a gate against the table shipping
+    as empty headings, which is what it was asked to prevent.
     """
     assert REHEARSAL.exists(), REHEARSAL
 
