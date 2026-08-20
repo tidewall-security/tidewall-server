@@ -222,31 +222,8 @@ def test_a_canary_is_matched_literally_not_as_a_pattern(tmp_path):
 #: string, and tilde fences as well as backticks, so a block written
 #: ``` bash was invisible to a `\`\`\`bash` pattern while rendering, and being
 #: pasted, exactly like the others.
-#: EVERY fenced block, whatever its info string. Guessing which info strings
-#: mean "shell an operator will paste" is a losing game: a bare fence,
-#: `console`, `shell-session` and a capitalised `Bash` were each invisible to a
-#: bash/sh/shell list, and every one renders as something a reader copies. So
-#: the rule is inverted -- every fence must be accounted for, and this document
-#: happens to contain only shell.
-_ANY_FENCE = re.compile(r"^(?P<fence>```+|~~~+)[ \t]*(?P<info>[^\n]*)$", re.M)
-
-
-def _shell_blocks(text: str) -> list[str]:
-    """Every fenced block, in document order."""
-    blocks = []
-    position = 0
-    while True:
-        match = _ANY_FENCE.search(text, position)
-        if match is None:
-            return blocks
-        fence = match.group("fence")
-        end = text.index(f"\n{fence}", match.end())
-        blocks.append(text[match.end() + 1 : end + 1])
-        position = end + len(fence) + 1
-
-
 def _canary_block() -> str:
-    return next(b for b in _shell_blocks(RUNBOOK.read_text()) if b.lstrip().startswith("# As it"))
+    return next(t.content for t in _rendered_fences() if t.content.lstrip().startswith("# As it"))
 
 
 def _extract(marker: str) -> str:
@@ -1155,144 +1132,84 @@ def test_the_worked_canary_block_is_exactly_the_permitted_program():
     assert lines == _PERMITTED_CANARY
 
 
-def test_every_shell_block_in_the_runbook_is_a_gated_one():
-    """No fenced shell an operator could paste that no test knows about.
+def _rendered(document=None):
+    """What a CommonMark renderer sees.
 
-    The two published blocks are compared line by line and the worked canary
-    example is evaluated -- but a fourth block could be added with all tests
-    green, and a reader has no way to tell a gated block from an ungated one.
+    Four hand-rolled patterns tried to answer this and each was defeated by a
+    form a renderer accepts: a fence with whitespace before its info string, a
+    fence indented three spaces, a fence inside nested block quotes with legal
+    internal spacing, and a heading inside a block quote or list item. The
+    question these gates ask is "what does a reader see?", and that is a
+    question for a parser.
     """
-    blocks = _shell_blocks(RUNBOOK.read_text())
+    from markdown_it import MarkdownIt
+
+    return MarkdownIt("commonmark").parse((document or RUNBOOK).read_text())
+
+
+def _rendered_fences(document=None):
+    return [t for t in _rendered(document) if t.type == "fence"]
+
+
+def _rendered_headings(document=None):
+    tokens = _rendered(document)
+    return [
+        (token.tag, tokens[index + 1].content) for index, token in enumerate(tokens) if token.type == "heading_open"
+    ]
+
+
+#: The runbook's headings as RENDERED, in order. Pinned because an operator
+#: step can be added as prose with an inline command -- no fence, no HTML --
+#: and the demonstrated bypass was a whole new step, not an inline span.
+#:
+#: A regex over `^#` counted 29 of these, because it also counted the shell
+#: comments inside the fenced blocks. The parser sees 19.
+_HEADINGS = [
+    ("h1", "Reclaiming deleted content"),
+    ("h2", "1. Upgrading to this release is destructive"),
+    ("h2", "2. Reclaiming the space"),
+    ("h3", "Before you start"),
+    ("h3", "Why the heredoc is quoted"),
+    ("h3", "Why two checkpoints"),
+    ("h3", "Reading the result"),
+    ("h3", "After the session has closed"),
+    ("h2", "3. What this does, and what it does not"),
+    ("h2", "4. Where the bytes may still be"),
+    ("h2", "5. Backup and snapshot disposition"),
+    ("h2", "6. Where content crosses the network"),
+    ("h2", "7. Retention"),
+    ("h2", "8. Grants"),
+    ("h2", "9. Export targets"),
+    ("h2", "10. One live server per database"),
+    ("h2", "11. Export attempts that did not resolve"),
+    ("h2", "12. A deployment requirement: NAT64"),
+    ("h2", "Deviations from the accepted design"),
+]
+
+
+def test_the_runbook_renders_exactly_the_declared_sections():
+    """Headings as a reader sees them, wherever they are nested."""
+    assert _rendered_headings() == _HEADINGS
+
+
+def test_every_rendered_code_block_is_a_gated_one():
+    """Every fenced block a renderer produces, at any indentation, in any
+    container, must be one of the three the suite compares line by line."""
     gated = [_extract("runbook:session"), _extract("runbook:postclose"), _canary_block()]
-    ungated = [b for b in blocks if b not in gated]
-    assert not ungated, "the runbook publishes a code block that no test executes or compares:\n" + "\n---\n".join(
+    ungated = [t.content for t in _rendered_fences() if t.content not in gated]
+    assert not ungated, "the runbook renders a code block that no test executes or compares:\n" + "\n---\n".join(
         ungated
     )
 
 
-#: Every maximal run of three or more backticks or tildes, ANYWHERE, with no
-#: line anchor at all.
-#:
-#: The previous version claimed to count markers rather than parse CommonMark,
-#: and then anchored itself to a guessed line prefix -- `^ {0,3}(?:> ?)*` --
-#: which is modelling the grammar with fewer rules and no parser. CommonMark
-#: strips container prefixes recursively, so legal spacing between nested
-#: block-quote markers hid a fence from it. Counting runs is the thing I said
-#: I was doing.
-_FENCE_RUN = re.compile(r"`{3,}|~{3,}")
+def test_the_runbook_renders_no_indented_code_block():
+    """Indented code renders as something to paste and has no fence to count."""
+    indented = [t.content for t in _rendered() if t.type == "code_block"]
+    assert not indented, "indented code blocks:\n" + "\n---\n".join(indented)
 
 
-def test_the_runbook_contains_no_undeclared_fence():
-    """Six markers: three blocks, each opened and closed.
-
-    A fence indented by up to three spaces, or nested in a list item or block
-    quote, renders as code and reads as something to paste while being
-    invisible to a column-one pattern. Rather than teaching the enumeration
-    CommonMark -- which has now been wrong three times -- any additional fence
-    marker anywhere in the document fails this count, and whoever adds one has
-    to say what it is.
-    """
-    markers = _FENCE_RUN.findall(RUNBOOK.read_text())
-    assert len(markers) == 6, (
-        f"expected 6 fence markers (3 blocks, opened and closed), found {len(markers)}. "
-        "If you added a block, add it to the gated set in "
-        "test_every_shell_block_in_the_runbook_is_a_gated_one."
-    )
-
-
-#: The two markers are the only HTML the runbook contains. Anything else --
-#: `<pre>`, `<code>`, a `<script>` -- renders as content a reader may copy while
-#: adding no fence marker at all, so the count above cannot see it.
-_ALLOWED_HTML = re.compile(r"^<!-- runbook:(?:session|postclose) -->$")
-
-
-#: The runbook's headings, in order. Pinned because an operator step can be
-#: added as ordinary prose carrying an inline code span -- no fence, no HTML,
-#: nothing the block gates can see. This does not police prose inside a
-#: section, and cannot; it does mean a NEW step has to be declared here, which
-#: is the form the bypass actually took.
-_HEADINGS = [
-    "# Reclaiming deleted content",
-    "## 1. Upgrading to this release is destructive",
-    "## 2. Reclaiming the space",
-    "### Before you start",
-    "### Why the heredoc is quoted",
-    "### Why two checkpoints",
-    "### Reading the result",
-    "### After the session has closed",
-    "# As it was written.",
-    "# As a JSON string value: the quotes and the backslash are escaped.",
-    "# As some writers encode non-ASCII: the é becomes a \\uXXXX escape. Writers",
-    "# may also escape ASCII characters, so this form is worth searching for even",
-    "# when your canary is plain -- it costs nothing if it is absent.",
-    "# The same characters under a DIFFERENT encoding -- here latin-1, where é is",
-    "# the single byte 0xe9 rather than UTF-8's 0xc3 0xa9. This is the form to use",
-    "# when the value may have been written by something that did not agree with",
-    "# your database about encoding. If everything in the path was UTF-8, this is",
-    "# byte-for-byte the plain form.",
-    "## 3. What this does, and what it does not",
-    "## 4. Where the bytes may still be",
-    "## 5. Backup and snapshot disposition",
-    "## 6. Where content crosses the network",
-    "## 7. Retention",
-    "## 8. Grants",
-    "## 9. Export targets",
-    "## 10. One live server per database",
-    "## 11. Export attempts that did not resolve",
-    "## 12. A deployment requirement: NAT64",
-    "## Deviations from the accepted design",
-]
-
-
-def test_the_runbook_has_exactly_the_declared_sections():
-    """A new step cannot be appended without saying so."""
-    assert re.findall(r"(?m)^#{1,6} .*$", RUNBOOK.read_text()) == _HEADINGS
-
-
-def test_the_runbook_uses_no_setext_headings():
-    """The other heading syntax, which the pinned list cannot see.
-
-    A line of text underlined with `===` or `---` is a heading, so a new step
-    can be added in that form without changing the list of `#` headings. The
-    runbook uses ATX headings throughout; this keeps it that way, rather than
-    teaching the pin a second syntax.
-
-    A rule (`---` after a blank line) is not a setext heading and stays legal --
-    the runbook uses several.
-    """
-    lines = RUNBOOK.read_text().splitlines()
-    offenders = [
-        f"{number}: {lines[number - 2]!r} underlined by {line!r}"
-        for number, line in enumerate(lines[1:], start=2)
-        if re.fullmatch(r"=+|-+", line.strip()) and lines[number - 2].strip()
-    ]
-    assert not offenders, "setext headings are invisible to the section pin:\n" + "\n".join(offenders)
-
-
-def test_the_runbook_contains_no_html_but_its_two_markers():
-    """Raw HTML renders. A `<pre>` block reads exactly like a fenced one and is
-    invisible to a gate that counts fences."""
-    offenders = [
-        f"{number}: {line!r}"
-        for number, line in enumerate(RUNBOOK.read_text().splitlines(), start=1)
-        if line.lstrip().startswith("<") and not _ALLOWED_HTML.match(line.strip())
-    ]
-    assert not offenders, "raw HTML in the runbook:\n" + "\n".join(offenders)
-
-
-def test_the_runbook_uses_no_indented_code_blocks():
-    """Because the fence enumeration cannot see them.
-
-    A four-space indented block renders as code and reads as something to
-    paste, while being invisible to every gate here. The runbook uses fences
-    throughout; this keeps it that way rather than teaching the enumeration a
-    second syntax it would then also have to get right.
-    """
-    inside_fence = False
-    offenders = []
-    for number, line in enumerate(RUNBOOK.read_text().splitlines(), start=1):
-        if _FENCE_RUN.search(line):
-            inside_fence = not inside_fence
-        elif not inside_fence and line.startswith("    ") and line.strip():
-            offenders.append(f"{number}: {line!r}")
-    assert not offenders, "indented code blocks are invisible to the fence gate:\n" + "\n".join(offenders)
+def test_the_runbook_renders_no_html_but_its_two_markers():
+    """Raw HTML renders. A `<pre>` block reads exactly like a fenced one."""
+    html = [t.content.strip() for t in _rendered() if t.type in ("html_block", "html_inline")]
+    unexpected = [h for h in html if not re.fullmatch(r"<!-- runbook:(?:session|postclose) -->", h)]
+    assert not unexpected, "raw HTML in the runbook:\n" + "\n".join(unexpected)
