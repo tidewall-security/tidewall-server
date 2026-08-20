@@ -1578,10 +1578,18 @@ def test_the_rehearsal_record_rows_are_exactly_the_declared_evidence():
 
     # Bound to their labels, not counted. Two hashes somewhere in the document
     # says nothing about which artifact each describes.
+    # Each digest by VALUE, not by shape. Requiring "some 64-character hex
+    # string after this label" leaves the two interchangeable: swapping the
+    # frozen backup's digest with the reclaimed database's passed, which would
+    # have the record attest that the artifact before cleanup is the one after.
+    expected_digests = {
+        "frozen backup": "a6629d032d2071f2fb36bf7617930432aaa6ab5cd73ca6a0cc2eca5357b26230",
+        "reclaimed database": "e631231124de2d244d0b3e47b117b8ba472ebf97b6aff6d5ee0ea31db840f358",
+    }
     lines = REHEARSAL.read_text().splitlines()
-    for label in ("frozen backup", "reclaimed database"):
+    for label, digest in expected_digests.items():
         index = next(i for i, text in enumerate(lines) if text.startswith(f"- {label}:"))
-        assert re.fullmatch(r"\s*`[0-9a-f]{64}`", lines[index + 1]), (label, lines[index + 1])
+        assert lines[index + 1].strip() == f"`{digest}`", (label, lines[index + 1])
 
 
 #: The two sections that ARE the honesty boundary, compared whole.
