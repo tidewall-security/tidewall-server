@@ -1095,3 +1095,22 @@ def test_the_post_close_block_is_exactly_the_permitted_program():
         if line.strip() and not line.strip().startswith("#")
     ]
     assert lines == _PERMITTED_POSTCLOSE
+
+
+def test_every_shell_block_in_the_runbook_is_a_gated_one():
+    """No fenced shell an operator could paste that no test knows about.
+
+    The two published blocks are compared line by line and the worked canary
+    example is evaluated -- but a fourth block could be added with all tests
+    green, and a reader has no way to tell a gated block from an ungated one.
+    """
+    blocks = re.findall(r"```bash\n(.*?)```", RUNBOOK.read_text(), re.S)
+    gated = [
+        _extract("runbook:session"),
+        _extract("runbook:postclose"),
+        # The worked canary example, bound by
+        # test_the_worked_canary_examples_are_four_distinct_values.
+        next(b for b in blocks if b.lstrip().startswith("# As it was written")),
+    ]
+    ungated = [b for b in blocks if b not in gated]
+    assert not ungated, "the runbook publishes shell that no test executes or compares:\n" + "\n---\n".join(ungated)
