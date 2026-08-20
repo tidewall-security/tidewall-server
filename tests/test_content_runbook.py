@@ -670,8 +670,11 @@ def _guard_line(label: str) -> int:
 #: "non-zero" lets a fixture be refused by the wrong guard -- and then the guard
 #: it was written for could be deleted with the test still green.
 #:
-#: Rows 6 and 11 drop a table outright, so SQLite fails to parse rather than
-#: failing a CHECK. Their absence here is deliberate.
+#: Row 6 drops `alembic_version`, so the revision statement fails to PARSE
+#: rather than failing a CHECK -- it has its own test below. Row 11 drops
+#: `interactions`, which an earlier version of this comment lumped in with it;
+#: the type guard evaluates first and refuses at its own line, so it belongs
+#: here like the rest.
 _REFUSED_BY = {
     "1_journal_mode_delete": "journal mode is wal",
     "2_wrong_revision": "exactly one expected revision",
@@ -684,6 +687,7 @@ _REFUSED_BY = {
     "10_legacy_summary": "interactions is the head shape",
     # A one-column table is still a table, so the type guard passes it and
     # the shape guard is what refuses it.
+    "11_interactions_dropped": "both are tables, not views",
     "12_interactions_one_column": "interactions is the head shape",
     "13_evidence_json_dropped": "interactions is the head shape",
     "14_interactions_counted_names_only": "interactions is the head shape",
@@ -1446,23 +1450,92 @@ def test_every_could_not_scan_path_says_so_exactly(tmp_path):
     right -- and changing the missing-canary message to claim the scan was
     clean left every test green.
 
-    stdout only. stderr on the unreadable case carries the search tool's own
-    wording, which differs between platforms; what matters is that OUR message
-    is present and says the scan failed.
+    Both streams. An earlier version pinned only stdout and left the search
+    tool's stderr through on the unreadable case, on the grounds that its
+    wording differs between platforms -- which made the contract unpinnable,
+    and an unpinnable contract is one a reassuring sentence can be added to.
+    The script now discards the tool's stderr and says everything itself.
     """
     db = tmp_path / "t.db"
     _sqlite_file(db, "nothing interesting")
 
-    assert _run_scan(db).stdout == "no canary supplied\n"
-    assert _run_scan(db, "").stdout == "empty canary supplied\n"
-    assert _run_scan(db, CANARY, "", "other").stdout == "empty canary supplied\n"
+    def refusal(*canaries, database=db):
+        result = _run_scan(database, *canaries)
+        assert result.returncode == 2, result
+        assert result.stderr == "", repr(result.stderr)
+        return result.stdout
+
+    assert refusal() == "no canary supplied\n"
+    assert refusal("") == "empty canary supplied\n"
+    assert refusal(CANARY, "", "other") == "empty canary supplied\n"
 
     missing = tmp_path / "absent.db"
-    assert _run_scan(missing, CANARY).stdout == f"no database at {missing}\n"
+    assert refusal(CANARY, database=missing) == f"no database at {missing}\n"
 
     unreadable = tmp_path / "t.db-shm"
     unreadable.mkdir()
     result = _run_scan(db, CANARY)
     assert result.returncode == 2
     assert result.stdout == f"scan FAILED on {unreadable} (grep exit 2)\n", repr(result.stdout)
-    assert "clean" not in result.stdout.lower()
+    assert result.stderr == "", repr(result.stderr)
+
+
+def test_a_missing_alembic_version_table_fails_to_parse(tmp_path):
+    """The one fixture that is not a CHECK refusal.
+
+    With `alembic_version` gone the revision statement cannot be prepared, so
+    SQLite reports a parse error rather than a failed constraint. Asserted
+    separately rather than folded in with the CHECK refusals, because calling
+    them the same thing is what let fixture 11 sit unmapped.
+    """
+    db = _head_db(tmp_path)
+    _DAMAGE["6_no_alembic_version_table"](db)
+    result = _run_session(db)
+    assert result.returncode != 0
+    assert "no such table: alembic_version" in result.stdout, result.stdout
+
+
+def test_the_changelog_warning_states_what_the_upgrade_destroys():
+    """The claims, not the word.
+
+    A gate that checks the word `destructive` occurs somewhere accepts a
+    warning whose central sentence says the upgrade PRESERVES the interaction
+    rows -- which is the sentence an operator reads when deciding whether to
+    take a backup they will otherwise never be able to recover.
+    """
+    changelog = (REPO / "CHANGELOG.md").read_text()
+    warning = changelog[changelog.index("## [Unreleased]") : changelog.index("### Security")]
+
+    assert "deletes every row in `interactions`" in warning, warning
+    assert "drops four columns" in warning, warning
+    assert "no data rollback in either direction" in warning, warning
+    assert "Take a backup first" in warning, warning
+    # And nothing reassuring to the contrary.
+    for contradiction in ("preserve", "retains", "keeps your", "non-destructive"):
+        assert contradiction not in warning.lower(), f"{contradiction!r} in the destructive warning"
+
+
+def test_the_rehearsal_record_cannot_contradict_the_procedure():
+    """A record that is impossible under the published shell is not evidence.
+
+    The disposition fields being populated says nothing about the results. The
+    recorded first checkpoint could be changed to a busy row while the recorded
+    exit stayed zero -- a state the published block cannot produce, since a busy
+    checkpoint makes it exit non-zero -- and every test stayed green.
+    """
+    record = REHEARSAL.read_text()
+
+    assert "`d5a71f3c8e02`" in record, "the rehearsal must start at the migration's predecessor"
+    assert f"`{HEAD_REVISION}`" in record, "the rehearsal must end at head"
+    assert "all four legacy columns present" in record
+    assert "all four found" in record, "the pre-state must show every representation in the backup"
+
+    # The session's recorded result must be one the published block can produce.
+    assert "exit 0" in record and "SEQUENCE-COMPLETE" in record, record
+    assert record.count(r"0\|0\|0") == 2, "the record must show two successful checkpoint rows"
+    assert "1|" not in record.replace(r"0\|0\|0", ""), (
+        "the record shows a busy checkpoint alongside a successful exit, which the " "published block cannot produce"
+    )
+    for digest in re.findall(r"`([0-9a-f]{64})`", record):
+        assert len(digest) == 64
+    assert len(re.findall(r"`[0-9a-f]{64}`", record)) == 2, "both artifact hashes must be recorded"

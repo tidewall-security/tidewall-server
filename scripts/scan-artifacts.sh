@@ -28,7 +28,12 @@ for f in "$DB" "$DB-wal" "$DB-shm"; do
   for c in "$@"; do
     # -F: a canary is a literal, not a pattern. Without it a canary of '.*'
     # reports a find for a string that is absent.
-    LC_ALL=C grep -qaF -e "$c" -- "$f"; rc=$?
+    # The search tool's own stderr is discarded: its wording differs between
+    # platforms, so leaving it through makes this script's output contract
+    # unpinnable -- and an unpinnable contract is one a reassuring sentence can
+    # be added to. Everything an operator needs is in our own message below:
+    # which artifact, and the tool's exit status.
+    LC_ALL=C grep -qaF -e "$c" -- "$f" 2>/dev/null; rc=$?
     case "$rc" in
       0) echo "FOUND in $f"; found=1 ;;
       1) : ;;
