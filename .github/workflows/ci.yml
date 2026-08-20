@@ -29,6 +29,11 @@ jobs:
       - run: uv sync --group dev
       - run: uv run ruff check app/
       - run: uv run ruff format --check app/
+      # Ruff lints neither shell nor Markdown, and the operator runbook
+      # publishes both -- a script the test suite executes and two blocks
+      # operators paste.
+      - run: uv run shellcheck scripts/scan-artifacts.sh
+      - run: uv run pymarkdown --config .pymarkdown.json scan docs/operations/
 
   typecheck:
     name: Type Check
