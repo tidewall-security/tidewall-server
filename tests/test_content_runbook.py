@@ -15,10 +15,12 @@ race. Do not add a test that appears to cover it.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import pathlib
 import re
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -313,11 +315,17 @@ def _run_session(db, revision=HEAD_REVISION):
     even valid shell, so a syntax or lint check over the raw block fails on the
     template rather than on the program.
     """
+    block = _substituted_session(db, revision)
+    return subprocess.run(["bash", "-c", block], capture_output=True, text=True, cwd=REPO)
+
+
+def _substituted_session(db, revision=HEAD_REVISION) -> str:
+    """The published block with its two assignment templates filled in."""
     block = _extract("runbook:session")
     block, db_subs = re.subn(r"(?m)^DB=.*$", f"DB={shlex.quote(str(db))}", block, count=1)
     block, rev_subs = re.subn(r"(?m)^REV=.*$", f"REV={shlex.quote(revision)}", block, count=1)
     assert db_subs == 1 and rev_subs == 1, "the block's assignment templates moved"
-    return subprocess.run(["bash", "-c", block], capture_output=True, text=True, cwd=REPO)
+    return block
 
 
 def _sql(db, *statements):
@@ -662,3 +670,135 @@ def test_the_first_checkpoint_reports_its_own_result(tmp_path):
         process.stdin.close()
         process.wait(timeout=30)
         writer.close()
+
+
+# --------------------------------------------------------------------------
+# Task 6: the canary transition, and the documentation gates
+# --------------------------------------------------------------------------
+
+
+def _plant_canary(db, representations, page_size):
+    """Leave every representation as deleted residue in BOTH the main file and
+    the WAL, with `interaction_contents` empty again afterwards.
+
+    Three details, each of which makes the fixture wrong if omitted:
+
+    * `secure_delete=OFF` explicitly. With it ON or FAST the delete scrubs the
+      WAL page image and every representation lands only in the main file --
+      and the two SQLite builds in this checkout disagree on the default (0 for
+      the Python module, 2 for /usr/bin/sqlite3).
+    * a checkpoint after the insert. Holding a connection preserves a sidecar;
+      it does not move inserted pages into the main file, so without this the
+      canary is in the WAL and nowhere else.
+    * `page_size` before the schema exists, or it is ignored.
+    """
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA secure_delete=OFF")
+    assert conn.execute("PRAGMA secure_delete").fetchone()[0] == 0
+    conn.execute(f"PRAGMA page_size={page_size}")
+    conn.execute("PRAGMA journal_mode=WAL")
+    # One content row per interaction: interaction_contents.interaction_id is
+    # unique, so four representations need four parents.
+    for index, text in enumerate(representations, start=1):
+        conn.execute(
+            "INSERT INTO interactions (id, request_id, timestamp, event_type, policy_id, "
+            "policy_name, blocked, transformed, latency_ms, evidence_schema_version, "
+            "content_available) VALUES (?, ?, '2026-08-20T00:00:00Z', 'input', 'policy-a', "
+            "'policy-a', 0, 0, 1.0, 1, 1)",
+            (index, f"tw_{index:016x}"),
+        )
+        conn.execute(
+            "INSERT INTO interaction_contents (interaction_id, policy_id, input_json, "
+            "byte_size, captured_at) VALUES (?, 'policy-a', ?, 10, '2026-08-20 00:00:00.000000')",
+            (index, text),
+        )
+    conn.commit()
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # into the main file
+    conn.execute("DELETE FROM interaction_contents")
+    conn.execute("DELETE FROM interactions")
+    conn.commit()  # residue: main-file free pages AND WAL frames
+    return conn  # held open, so the copy carries a live WAL
+
+
+def _copy_database(db, destination):
+    destination.mkdir(parents=True, exist_ok=True)
+    copied = destination / db.name
+    for suffix in ("", "-wal", "-shm"):
+        source = pathlib.Path(f"{db}{suffix}")
+        if source.exists():
+            shutil.copy2(source, pathlib.Path(f"{copied}{suffix}"))
+    return copied
+
+
+@pytest.mark.parametrize("page_size", [512, 4096, 65536])
+def test_the_procedure_removes_every_representation_from_both_artifacts(tmp_path, page_size):
+    """The whole point, end to end.
+
+    The four representations are planted as residue in the main file and the
+    WAL, asserted present in the COPY -- not in the original, which proves only
+    that the source was dirty at the end -- and then the published session and
+    the published scan script are run against that copy.
+    """
+    representations = [
+        "canary-plain-éé",
+        json.dumps("canary-plain-éé"),
+        "canary-\\u0070lain-escaped",
+        "canary-raw-\x01\x02bytes",
+    ]
+
+    db = _head_db(tmp_path)
+    holder = _plant_canary(db, representations, page_size)
+    try:
+        copy = _copy_database(db, tmp_path / "copy")
+        main_bytes = copy.read_bytes()
+        wal = pathlib.Path(f"{copy}-wal")
+        assert wal.exists(), "the copy carries no WAL, so it cannot show WAL cleanup"
+        wal_bytes = wal.read_bytes()
+        for text in representations:
+            encoded = text.encode()
+            assert encoded in main_bytes, f"{text!r} is not in the copied main file"
+            assert encoded in wal_bytes, f"{text!r} is not in the copied WAL"
+    finally:
+        holder.close()
+
+    assert _run_session(copy).returncode == 0
+    assert _run_scan(copy, *representations).returncode == 0
+
+
+def test_the_runbook_publishes_exactly_one_of_each_block():
+    _extract("runbook:session")
+    _extract("runbook:postclose")
+
+
+def test_the_changelog_points_at_the_runbook():
+    changelog = (REPO / "CHANGELOG.md").read_text()
+    assert "docs/operations/content-runbook.md" in changelog
+    assert "destructive" in changelog.lower()
+
+
+def test_every_relative_link_in_the_runbook_resolves():
+    text = RUNBOOK.read_text()
+    for target in re.findall(r"\]\((?!https?:)([^)#]+)", text):
+        assert (RUNBOOK.parent / target).resolve().exists(), target
+
+
+def test_the_published_shell_passes_shellcheck():
+    """Over the SUBSTITUTED session block, not the raw one.
+
+    The published `REV=<the alembic revision this deployment expects>` is not
+    valid shell -- a check over the raw text fails on the template rather than
+    on the program, which would be a gate that reports on the wrong thing.
+    """
+    for name, script in (
+        ("scan-artifacts.sh", SCAN.read_text()),
+        ("session", _substituted_session("/tmp/example.db", HEAD_REVISION)),
+        ("postclose", _extract("runbook:postclose")),
+    ):
+        result = subprocess.run(
+            ["uv", "run", "shellcheck", "--shell=bash", "-"],
+            input=script,
+            capture_output=True,
+            text=True,
+            cwd=REPO,
+        )
+        assert result.returncode == 0, f"{name}:\n{result.stdout}"
