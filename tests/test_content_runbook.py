@@ -181,7 +181,10 @@ def _sql_statements(block: str) -> list[str]:
             continue
         buffer.append(line)
         if line.rstrip().endswith(";"):
-            statements.append("\n".join(buffer))
+            # Stripped: a blank line before a statement is not part of it, and
+            # leaving it attached made `.index("PRAGMA wal_checkpoint...")`
+            # find the SECOND checkpoint rather than the first.
+            statements.append("\n".join(buffer).strip())
             buffer = []
     assert not [line for line in buffer if line.strip()], f"unterminated statement: {buffer!r}"
     return statements
@@ -481,3 +484,181 @@ def test_a_wrong_database_is_refused_before_anything_is_written(tmp_path, damage
     assert (
         hashlib.sha256(db.read_bytes()).hexdigest() == before
     ), "the database was mutated before the refusal; a guard that fails late is not a guard"
+
+
+# --------------------------------------------------------------------------
+# Task 5: the post-close block, and the two checkpoints
+# --------------------------------------------------------------------------
+
+#: Four values that cannot match each other. Real representations of one
+#: string can overlap -- the plain form is a substring of most escapings -- so
+#: "only this one is present" would not prove that a dropped argument was
+#: missed by the others.
+_SENTINELS = {
+    "CANARY_PLAIN": "SENTINEL-ALPHA-11111",
+    "CANARY_JSON": "SENTINEL-BRAVO-22222",
+    "CANARY_UNICODE": "SENTINEL-CHARLIE-33333",
+    "CANARY_RAW": "SENTINEL-DELTA-44444",
+}
+
+
+def _run_postclose(db, **overrides):
+    """Run the published post-close block.
+
+    No substitution at all: the block reads `${VAR:?}`, so the values arrive
+    through the environment and the published text runs unmodified.
+    """
+    env = {**os.environ, "DB": str(db), **_SENTINELS, **overrides}
+    return subprocess.run(
+        ["bash", "-c", _extract("runbook:postclose")],
+        capture_output=True,
+        text=True,
+        cwd=REPO,
+        env=env,
+    )
+
+
+def _clean_reclaimed_db(tmp_path):
+    db = _head_db(tmp_path)
+    assert _run_session(db).returncode == 0
+    return db
+
+
+def test_the_post_close_block_passes_after_a_clean_session(tmp_path):
+    result = _run_postclose(_clean_reclaimed_db(tmp_path))
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_the_post_close_block_refuses_a_wal_that_was_not_truncated(tmp_path):
+    db = _clean_reclaimed_db(tmp_path)
+    pathlib.Path(f"{db}-wal").write_bytes(b"\x00" * 64)
+    result = _run_postclose(db)
+    assert result.returncode == 1
+    assert "WAL not truncated" in result.stdout
+
+
+def test_the_post_close_block_refuses_a_rollback_journal(tmp_path):
+    db = _clean_reclaimed_db(tmp_path)
+    pathlib.Path(f"{db}-journal").write_bytes(b"")
+    result = _run_postclose(db)
+    assert result.returncode == 1
+    assert "rollback journal" in result.stdout
+
+
+@pytest.mark.parametrize("variable", sorted(_SENTINELS))
+def test_the_post_close_block_passes_every_representation_to_the_scan(tmp_path, variable):
+    """One case per argument, each with only that sentinel present.
+
+    A single mixed case would pass even if the published command silently
+    dropped `$CANARY_UNICODE` or `$CANARY_RAW`, because another argument would
+    still find something. Binding the wiring needs one case per argument.
+    """
+    db = _clean_reclaimed_db(tmp_path)
+    pathlib.Path(f"{db}-shm").write_text(_SENTINELS[variable])
+    result = _run_postclose(db)
+    assert result.returncode == 1, f"{variable} was not passed to the scan: {result.stdout}"
+    assert "FOUND" in result.stdout
+
+
+@pytest.mark.parametrize("variable", sorted(_SENTINELS) + ["DB"])
+def test_the_post_close_block_refuses_to_run_without_its_inputs(tmp_path, variable):
+    """`${VAR:?}` rejects unset and empty. A block that ran with an empty
+    canary would hand the scan an argument it must refuse anyway, but the
+    refusal belongs at the top where the operator sees it."""
+    db = _clean_reclaimed_db(tmp_path)
+    result = _run_postclose(db, **{variable: ""})
+    assert result.returncode != 0
+
+
+def test_the_second_checkpoint_is_what_truncates_the_wal(tmp_path):
+    """Held open by an observer, so the CLI's exit is not a last close.
+
+    Without the observer, SQLite's own last-connection handling checkpoints and
+    deletes the WAL, and this assertion passes whether or not the second
+    checkpoint is there at all. That is how an earlier version of this test
+    passed against a build with the checkpoint removed.
+
+    The observer protocol matters too: attached, its statement fully consumed
+    and finalised, holding no transaction. One that pins a read snapshot makes
+    the checkpoints return busy, and the test then fails for its own fixture
+    rather than for the mutation -- which is why the row assertion comes first.
+    """
+    db = _head_db(tmp_path)
+    observer = sqlite3.connect(db)
+    observer.execute("PRAGMA journal_mode").fetchall()
+    try:
+        result = _run_session(db)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (
+            result.stdout.count("0|0|0") == 2
+        ), f"a checkpoint reported busy -- the observer is pinning frames: {result.stdout}"
+        wal = pathlib.Path(f"{db}-wal")
+        assert not wal.exists() or wal.stat().st_size == 0, f"the WAL was not truncated: {wal.stat().st_size} bytes"
+    finally:
+        observer.close()
+
+
+def _feed(process, statements, sentinel):
+    """Feed statements to a live sqlite3 session, framed so the read ends.
+
+    Without the sentinel a read for an expected row blocks when that row is not
+    produced -- which is exactly the state a removed checkpoint creates.
+    """
+    for statement in statements:
+        process.stdin.write(statement + "\n")
+    process.stdin.write(f"SELECT '{sentinel}';\n")
+    process.stdin.flush()
+    rows = []
+    while True:
+        line = process.stdout.readline()
+        if not line:
+            raise AssertionError(f"the session ended before {sentinel}: {rows}")
+        line = line.strip()
+        if line == sentinel:
+            return rows
+        if line:
+            rows.append(line)
+
+
+def test_the_first_checkpoint_reports_its_own_result(tmp_path):
+    """The one place the block is not run as a single published unit.
+
+    `out=$(...)` captures everything until the CLI exits, so no caller can read
+    the first checkpoint's row mid-session. The SQL still comes from the
+    runbook via `_sql_statements`; only the framing is the test's.
+    """
+    db = _head_db(tmp_path)
+    statements = _sql_statements(_extract("runbook:session"))
+    first = statements.index("PRAGMA wal_checkpoint(TRUNCATE);")
+
+    # Pin an old snapshot, then commit frames beyond it.
+    reader = sqlite3.connect(db)
+    reader.execute("BEGIN")
+    reader.execute("SELECT count(*) FROM interactions").fetchall()
+    writer = sqlite3.connect(db)
+    writer.execute("CREATE TABLE probe(x)")
+    writer.commit()
+
+    process = subprocess.Popen(
+        ["sqlite3", str(db)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    try:
+        phase_one = _feed(process, statements[first : first + 1], "PHASE-1-END")
+        assert len(phase_one) == 1, f"expected exactly the first checkpoint's row: {phase_one}"
+        assert phase_one[0].startswith(
+            "1|"
+        ), f"the first checkpoint did not report busy against a pinned reader: {phase_one[0]}"
+
+        reader.close()
+
+        phase_two = _feed(process, statements[first + 1 : first + 3], "PHASE-2-END")
+        assert phase_two == ["0|0|0"], f"the second checkpoint did not complete once the reader was gone: {phase_two}"
+    finally:
+        process.stdin.close()
+        process.wait(timeout=30)
+        writer.close()
