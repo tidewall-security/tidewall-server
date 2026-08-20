@@ -649,6 +649,59 @@ _DAMAGE = {
 }
 
 
+def _guard_line(label: str) -> int:
+    """Which line of the heredoc a named guard is on.
+
+    SQLite reports `Runtime error near line N`, and every guard shares one CHECK
+    expression, so the line is the only thing distinguishing them -- and it is
+    stable because the block is pinned byte for byte. Derived from the block so
+    that reordering moves the expectation with it.
+    """
+    lines = _extract("runbook:session").splitlines()
+    start = next(index for index, line in enumerate(lines) if _HEREDOC_OPEN in line)
+    return next(
+        number
+        for number, line in enumerate(lines[start + 1 :], start=1)
+        if f"INSERT INTO _assert SELECT '{label}'" in line
+    )
+
+
+#: Which guard each wrong-database fixture must be refused BY. Asserting only
+#: "non-zero" lets a fixture be refused by the wrong guard -- and then the guard
+#: it was written for could be deleted with the test still green.
+#:
+#: Rows 6 and 11 drop a table outright, so SQLite fails to parse rather than
+#: failing a CHECK. Their absence here is deliberate.
+_REFUSED_BY = {
+    "1_journal_mode_delete": "journal mode is wal",
+    "2_wrong_revision": "exactly one expected revision",
+    "3_empty_alembic_version": "exactly one expected revision",
+    "4_null_version_num": "exactly one expected revision",
+    "5_more_than_one_revision_row": "exactly one expected revision",
+    "7_legacy_input_messages": "interactions is the head shape",
+    "8_legacy_output_messages": "interactions is the head shape",
+    "9_legacy_detectors_json": "interactions is the head shape",
+    "10_legacy_summary": "interactions is the head shape",
+    # A one-column table is still a table, so the type guard passes it and
+    # the shape guard is what refuses it.
+    "12_interactions_one_column": "interactions is the head shape",
+    "13_evidence_json_dropped": "interactions is the head shape",
+    "14_interactions_counted_names_only": "interactions is the head shape",
+    "15_contents_one_column": "interaction_contents is the head shape",
+    "16_contents_counted_names_only": "interaction_contents is the head shape",
+    "17_interactions_is_a_view": "both are tables, not views",
+    "18_contents_is_a_view": "both are tables, not views",
+    "19_contents_missing_id": "interaction_contents is the head shape",
+    "20_contents_missing_policy_id": "interaction_contents is the head shape",
+    "21_ordinary_column_renamed": "interactions is the head shape",
+    "22_twenty_first_column": "interactions is the head shape",
+    "23_virtual_generated_column": "interactions is the head shape",
+    "24_stored_generated_column": "interaction_contents is the head shape",
+    "25_drop_plus_add_same_total": "interactions is the head shape",
+    "26_live_content_row": "no content rows remain",
+}
+
+
 def test_the_matrix_has_one_fixture_per_named_state():
     """Derived from the table, not asserted over it. An earlier plan claimed
     twenty-four while enumerating a phrase list that resolved to thirteen,
@@ -676,6 +729,12 @@ def test_a_wrong_database_is_refused_before_anything_is_written(tmp_path, damage
     assert (
         hashlib.sha256(db.read_bytes()).hexdigest() == before
     ), "the database was mutated before the refusal; a guard that fails late is not a guard"
+    expected_guard = _REFUSED_BY.get(damage)
+    if expected_guard is not None:
+        assert f"near line {_guard_line(expected_guard)}:" in result.stdout, (
+            f"{damage} should be refused by {expected_guard!r}, but something else "
+            f"refused it: {result.stdout.strip()}"
+        )
 
 
 # --------------------------------------------------------------------------
