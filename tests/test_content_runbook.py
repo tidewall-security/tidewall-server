@@ -1559,3 +1559,85 @@ def test_the_rehearsal_record_rows_are_exactly_the_declared_evidence():
         assert _REHEARSAL_ROWS[field] and "OUTSTANDING" not in _REHEARSAL_ROWS[field]
 
     assert len(re.findall(r"`[0-9a-f]{64}`", REHEARSAL.read_text())) == 2
+
+
+#: The two sections that ARE the honesty boundary, compared whole.
+#:
+#: Everything else in the runbook is explanatory prose, and a reviewer reading
+#: a diff is the check on it. These two are different in kind: they are the
+#: sentences that say what the procedure does NOT do -- what it cannot promise,
+#: and where the bytes may still be. They are what an operator would repeat to
+#: a regulator, and softening one is invisible in a suite that samples phrases.
+#:
+#: ~15k characters of this document are not compared by any test. That is a
+#: deliberate line, drawn here rather than left unstated: a full-text pin over
+#: prose becomes a checksum people update reflexively, which is a gate that
+#: looks like coverage.
+_HONESTY_SECTIONS = {
+    "## 3. What this does, and what it does not": (
+        "## 3. What this does, and what it does not\n"
+        "\n"
+        "**It deletes nothing.** `VACUUM` compacts pages that are already free. If the\n"
+        "content you have in mind is still live, it is faithfully preserved and the\n"
+        "command still succeeds. That is why the preconditions above exist: a run\n"
+        "against an unmigrated database, the wrong copy, or a database that still holds\n"
+        "content **fails** rather than succeeding while reclaiming nothing.\n"
+        "\n"
+        "**A zero exit means the sequence and its checks completed.** It does not mean\n"
+        "any byte was reclaimed. Running it twice exits zero the second time with the\n"
+        "file unchanged.\n"
+        "\n"
+        "**This procedure is for the destructive migration only.** It requires that no\n"
+        "content rows remain, because that is the only state in which the claim it\n"
+        "supports is checkable. After a routine retention purge, with in-policy content\n"
+        'still live, no scan of the resulting files can distinguish "the expired rows\n'
+        'are gone" from "the expired rows were never there".\n'
+        "\n"
+        "Reclaiming space after routine purges is not supported yet. It needs a way for\n"
+        "an operator to state the deletion boundary they mean and for the procedure to\n"
+        "check it. That is open work, recorded as the open question in §9 of\n"
+        "`internal/reviews/2026-08-19-p006-step9-design-v10.md`.\n"
+    ),
+    "## 4. Where the bytes may still be": (
+        "## 4. Where the bytes may still be\n"
+        "\n"
+        "Live and untouched in this same database:\n"
+        "\n"
+        "- content still within its retention period;\n"
+        "- the content-access audit, which deliberately outlives what it describes;\n"
+        "- export attempts, with their interaction, key, policy and target identifiers,\n"
+        "  destination host and addresses, payload size and outcome;\n"
+        "- reconciliation rows, whose `evidence` field is operator-supplied text that\n"
+        "  nothing stops an operator pasting prompt content into;\n"
+        "- `activity_log.old_value` and `new_value`, which are generic JSON sinks;\n"
+        "- control-plane configuration — prompt-list patterns, detector settings, export\n"
+        "  target URLs and headers;\n"
+        "- the vault, which is outside this procedure entirely.\n"
+        "\n"
+        "Outside this database:\n"
+        "\n"
+        "- backups and filesystem or volume snapshots;\n"
+        "- replicas;\n"
+        "- **the transient database `VACUUM` creates**, which is as large as the\n"
+        "  original and contains the whole logical database. It may be written outside\n"
+        "  the database directory, under `SQLITE_TMPDIR`, `TMPDIR`, `/var/tmp`,\n"
+        "  `/usr/tmp`, `/tmp`, or the working directory;\n"
+        "- filesystem journals and copy-on-write layers;\n"
+        "- swap and hibernation images; crash dumps; the page cache;\n"
+        "- SSD free space, until it is overwritten;\n"
+        "- every system a record was exported to.\n"
+        "\n"
+        "The claim this procedure supports is exactly: *after a successful sequence, the\n"
+        "supplied representations of your canary were not found in the database, WAL and\n"
+        "SHM files.* That is not media sanitisation, and it is not a statement about any\n"
+        "of the above.\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("heading", sorted(_HONESTY_SECTIONS))
+def test_the_honesty_boundary_sections_are_exactly_as_declared(heading):
+    text = RUNBOOK.read_text()
+    start = text.index(heading)
+    end = text.index("\n## ", start + 5)
+    assert text[start:end] == _HONESTY_SECTIONS[heading]
