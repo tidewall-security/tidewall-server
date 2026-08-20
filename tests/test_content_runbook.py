@@ -32,6 +32,10 @@ import sys
 
 import pytest
 
+#: How the session block opens its heredoc. Quoted, so the shell performs no
+#: expansion inside it -- see the runbook's "Why the heredoc is quoted".
+_HEREDOC_OPEN = "<<'SQL'"
+
 REPO = pathlib.Path(__file__).resolve().parents[1]
 RUNBOOK = REPO / "docs" / "operations" / "content-runbook.md"
 SCAN = REPO / "scripts" / "scan-artifacts.sh"
@@ -225,9 +229,19 @@ def _sql_statements(block: str) -> list[str]:
       on ``;``, or ``.bail on`` is joined to the statement after it.
     """
     lines = block.splitlines()
-    start = next(i for i, line in enumerate(lines) if "<<SQL" in line)
+    start = next(i for i, line in enumerate(lines) if _HEREDOC_OPEN in line)
     end = next(i for i, line in enumerate(lines) if i > start and line.strip() == "SQL")
-    body = [line for line in lines[start + 1 : end] if not line.strip().startswith("--")]
+    body = lines[start + 1 : end]
+    # REJECTED, not stripped. The delimiter is quoted now, so the body is inert
+    # shell -- but an earlier version had it unquoted AND discarded full-line
+    # SQL comments before comparing, which let a comment carrying a command
+    # substitution execute while being invisible to both whitelists. Nothing in
+    # the heredoc is dropped from the comparison any more.
+    assert not [line for line in body if line.strip().startswith("--")], (
+        "the session block contains an SQL comment. The whitelist compares every "
+        "line, so add it to _PERMITTED deliberately rather than letting the "
+        "parser discard it."
+    )
 
     statements: list[str] = []
     buffer: list[str] = []
@@ -260,7 +274,7 @@ _PERMITTED = [
     "CREATE TEMP TABLE _assert(what TEXT, ok INT NOT NULL CHECK(ok=1));",
     "INSERT INTO _assert SELECT 'journal mode is wal', journal_mode='wal' FROM pragma_journal_mode;",
     "INSERT INTO _assert SELECT 'exactly one expected revision', "
-    "(SELECT count(*) FROM alembic_version WHERE version_num='$REV')=1 "
+    "(SELECT count(*) FROM alembic_version WHERE version_num=:rev)=1 "
     "AND (SELECT count(*) FROM alembic_version)=1;",
     "INSERT INTO _assert SELECT 'both are tables, not views', "
     "(SELECT count(*) FROM sqlite_schema WHERE type='table' "
@@ -304,7 +318,7 @@ _PERMITTED_SHELL = [
     # opening the database. A prefix is not authorisation to ignore a line.
     "DB=/path/to/tidewall.db",
     "REV=1b42ababed28",
-    'out=$(sqlite3 "$DB" <<SQL 2>&1',
+    "out=$(sqlite3 \"$DB\" -cmd \".param set :rev '$REV'\" <<'SQL' 2>&1",
     ") || { printf 'the sequence stopped before completing:\\n%s\\n' \"$out\"; exit 1; }",
     "printf '%s\\n' \"$out\" | grep -qx 'SEQUENCE-COMPLETE' || { echo \"incomplete\"; exit 1; }",
     "[ \"$(printf '%s\\n' \"$out\" | grep -cx '0|0|0')\" -eq 2 ] || {",
@@ -316,7 +330,7 @@ _PERMITTED_SHELL = [
 def _shell_lines(block: str) -> list[str]:
     """The block's shell, with the heredoc body and comments removed."""
     lines = block.splitlines()
-    start = next(i for i, line in enumerate(lines) if "<<SQL" in line)
+    start = next(i for i, line in enumerate(lines) if _HEREDOC_OPEN in line)
     end = next(i for i, line in enumerate(lines) if i > start and line.strip() == "SQL")
     outside = lines[:start] + [lines[start]] + lines[end + 1 :]
     return [line.strip() for line in outside if line.strip() and not line.strip().startswith("#")]
@@ -1053,3 +1067,31 @@ def test_the_worked_canary_examples_are_four_distinct_values():
     assert len(set(values)) == 4, "two of the worked representations are byte-identical: " + repr(
         [v.decode("utf-8", "backslashreplace") for v in values]
     )
+
+
+#: The post-close block's complete program. It had no whole-program gate at
+#: all: its five inputs, two artifact checks and four scanner arguments were
+#: each bound, and a standalone command inserted between them still ran for
+#: every operator with all 76 tests green.
+_PERMITTED_POSTCLOSE = [
+    ': "${DB:?set DB to the database path}"',
+    ': "${CANARY_PLAIN:?}" "${CANARY_JSON:?}" "${CANARY_UNICODE:?}" "${CANARY_RAW:?}"',
+    'test ! -s "$DB-wal"     || { echo "WAL not truncated"; exit 1; }',
+    'test ! -e "$DB-journal" || { echo "a rollback journal exists"; exit 1; }',
+    './scripts/scan-artifacts.sh "$DB" "$CANARY_PLAIN" "$CANARY_JSON" \\',
+    '"$CANARY_UNICODE" "$CANARY_RAW"',
+]
+
+
+def test_the_post_close_block_is_exactly_the_permitted_program():
+    """The same treatment the session block gets.
+
+    Binding each input and each argument separately is not the same as binding
+    the program: nothing stopped an extra line being added between them.
+    """
+    lines = [
+        line.strip()
+        for line in _extract("runbook:postclose").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    assert lines == _PERMITTED_POSTCLOSE

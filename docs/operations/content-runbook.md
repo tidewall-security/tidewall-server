@@ -50,7 +50,7 @@ does not recompute rows that already exist.
 DB=/path/to/tidewall.db
 REV=1b42ababed28
 
-out=$(sqlite3 "$DB" <<SQL 2>&1
+out=$(sqlite3 "$DB" -cmd ".param set :rev '$REV'" <<'SQL' 2>&1
 .bail on
 CREATE TEMP TABLE _assert(what TEXT, ok INT NOT NULL CHECK(ok=1));
 
@@ -58,7 +58,7 @@ INSERT INTO _assert SELECT 'journal mode is wal',
   journal_mode='wal' FROM pragma_journal_mode;
 
 INSERT INTO _assert SELECT 'exactly one expected revision',
-  (SELECT count(*) FROM alembic_version WHERE version_num='$REV')=1
+  (SELECT count(*) FROM alembic_version WHERE version_num=:rev)=1
   AND (SELECT count(*) FROM alembic_version)=1;
 
 INSERT INTO _assert SELECT 'both are tables, not views',
@@ -106,6 +106,18 @@ printf '%s\n' "$out"
 
 Keep that output. It is the record that the procedure ran, and the only one
 you get.
+
+### Why the heredoc is quoted
+
+`<<'SQL'` rather than `<<SQL`. With an unquoted delimiter the shell expands
+everything inside the heredoc before SQLite sees any of it — command
+substitution included — so every line there is shell input first and SQL
+second, *including lines that look like SQL comments*. Quoting it makes the
+body inert.
+
+That is why the revision arrives as a bound parameter through `.param set`
+rather than being interpolated into the text: interpolation is what would have
+required an unquoted delimiter.
 
 ### Why two checkpoints
 
