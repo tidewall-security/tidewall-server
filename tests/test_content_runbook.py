@@ -1429,3 +1429,34 @@ def test_the_scan_searches_bytes_not_characters(tmp_path):
 
     absent = run(b"caf\xe9 absent")
     assert absent.returncode == 0, (absent.returncode, absent.stdout, absent.stderr)
+
+
+def test_every_could_not_scan_path_says_so_exactly(tmp_path):
+    """The exit-2 diagnostics, pinned like the others.
+
+    An operator running this by hand reads the message; they are not guaranteed
+    to check `$?` afterwards. So a "could not scan" path that prints something
+    reassuring contradicts the three-status contract even though its status is
+    right -- and changing the missing-canary message to claim the scan was
+    clean left every test green.
+
+    stdout only. stderr on the unreadable case carries the search tool's own
+    wording, which differs between platforms; what matters is that OUR message
+    is present and says the scan failed.
+    """
+    db = tmp_path / "t.db"
+    _sqlite_file(db, "nothing interesting")
+
+    assert _run_scan(db).stdout == "no canary supplied\n"
+    assert _run_scan(db, "").stdout == "empty canary supplied\n"
+    assert _run_scan(db, CANARY, "", "other").stdout == "empty canary supplied\n"
+
+    missing = tmp_path / "absent.db"
+    assert _run_scan(missing, CANARY).stdout == f"no database at {missing}\n"
+
+    unreadable = tmp_path / "t.db-shm"
+    unreadable.mkdir()
+    result = _run_scan(db, CANARY)
+    assert result.returncode == 2
+    assert result.stdout == f"scan FAILED on {unreadable} (grep exit 2)\n", repr(result.stdout)
+    assert "clean" not in result.stdout.lower()
