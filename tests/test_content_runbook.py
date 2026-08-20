@@ -1256,9 +1256,28 @@ def _rendered(document=None):
     question these gates ask is "what does a reader see?", and that is a
     question for a parser.
     """
+    return _rendered_text((document or RUNBOOK).read_text())
+
+
+def _rendered_text(text):
+    """The same question asked of text that is not a whole file.
+
+    A section of a document is not a file, and the CHANGELOG's Unreleased
+    entry has to be parsed on its own to bound what sections it contains.
+    """
     from markdown_it import MarkdownIt
 
-    return MarkdownIt("commonmark").parse((document or RUNBOOK).read_text())
+    return MarkdownIt("commonmark").parse(text)
+
+
+def _headings_in(text):
+    """The rendered heading inventory of a fragment, in order."""
+    tokens = _rendered_text(text)
+    return [
+        (token.level, token.tag, tokens[index + 1].content)
+        for index, token in enumerate(tokens)
+        if token.type == "heading_open"
+    ]
 
 
 def _rendered_fences(document=None):
@@ -1521,13 +1540,65 @@ _CHANGELOG_WARNING = (
 )[:-1]
 
 
+#: The Unreleased entry's sections, complete and in order.
+#:
+#: Comparing the warning whole bound its own text, but the search took the
+#: FIRST `### Upgrading` and stopped at the next `###`. A LATER subsection
+#: saying no backup was required passed every gate -- the operator reads the
+#: exact pinned sentence, then reads its contradiction two sections down.
+#:
+#: This pins the inventory rather than asking "is this section an upgrade
+#: instruction?", because that question has no stateable boundary: it decays
+#: into a list of synonyms whose edge nobody can defend. The inventory has an
+#: edge. It does not judge what a section MEANS -- it requires the entry's
+#: sections to be exactly these, so adding any section at all, under any name,
+#: is a two-file diff a reviewer sees.
+_CHANGELOG_UNRELEASED_HEADINGS = [
+    (0, "h2", "[Unreleased]"),
+    (0, "h3", "Upgrading — this release is destructive"),
+    (0, "h3", "Security"),
+    (0, "h3", "Changed — breaking"),
+]
+
+
 def test_the_changelog_warning_is_exactly_the_declared_text():
     changelog = (REPO / "CHANGELOG.md").read_text()
+
+    # The whole entry's section inventory first, so a second upgrade section
+    # cannot hide behind a first-occurrence search.
+    entry_start = changelog.index("## [Unreleased]")
+    following = changelog.find("\n## ", entry_start + 5)
+    entry = changelog[entry_start : len(changelog) if following < 0 else following]
+    assert _headings_in(entry) == _CHANGELOG_UNRELEASED_HEADINGS
+
     start = changelog.index("### Upgrading")
     # To the end of the section, not the length of the expected text -- a prefix
     # comparison accepts anything appended after it, inside the same warning.
     end = changelog.index("\n### ", start + 5)
     assert changelog[start:end].rstrip() == _CHANGELOG_WARNING
+
+
+#: The rehearsal's Artifact hashes subsection, complete, and the document's
+#: rendered heading inventory. Both are needed: the subsection text rejects a
+#: relabelled, qualified or duplicated entry inside it, and the inventory
+#: rejects a second `Artifact hashes` subsection elsewhere in the document
+#: that a first-occurrence search would never reach.
+_REHEARSAL_HASHES = (
+    "### Artifact hashes\n"
+    "\n"
+    "- frozen backup:\n"
+    "  `a6629d032d2071f2fb36bf7617930432aaa6ab5cd73ca6a0cc2eca5357b26230`\n"
+    "- reclaimed database:\n"
+    "  `e631231124de2d244d0b3e47b117b8ba472ebf97b6aff6d5ee0ea31db840f358`\n"
+)
+
+_REHEARSAL_HEADINGS = [
+    (0, "h1", "Migration rehearsal — 2026-08-20"),
+    (0, "h2", "What was rehearsed"),
+    (0, "h3", "Artifact hashes"),
+    (0, "h2", "Backup and snapshot disposition"),
+    (0, "h2", "A note on this table"),
+]
 
 
 #: Every row of the rehearsal record's two tables, by label. Searching the
@@ -1578,18 +1649,27 @@ def test_the_rehearsal_record_rows_are_exactly_the_declared_evidence():
 
     # Bound to their labels, not counted. Two hashes somewhere in the document
     # says nothing about which artifact each describes.
-    # Each digest by VALUE, not by shape. Requiring "some 64-character hex
-    # string after this label" leaves the two interchangeable: swapping the
-    # frozen backup's digest with the reclaimed database's passed, which would
-    # have the record attest that the artifact before cleanup is the one after.
-    expected_digests = {
-        "frozen backup": "a6629d032d2071f2fb36bf7617930432aaa6ab5cd73ca6a0cc2eca5357b26230",
-        "reclaimed database": "e631231124de2d244d0b3e47b117b8ba472ebf97b6aff6d5ee0ea31db840f358",
-    }
-    lines = REHEARSAL.read_text().splitlines()
-    for label, digest in expected_digests.items():
-        index = next(i for i, text in enumerate(lines) if text.startswith(f"- {label}:"))
-        assert lines[index + 1].strip() == f"`{digest}`", (label, lines[index + 1])
+    # The COMPLETE subsection, and the document's complete heading inventory.
+    #
+    # Three rounds walked in from the wrong end. Round 14 bound "two
+    # digest-shaped strings somewhere"; round 15 bound "one digest-shaped
+    # string after each label"; round 16 bound each digest by value but still
+    # took the FIRST line STARTING WITH each label, so the record could append
+    # a contradictory qualification to a label, or carry a second
+    # `frozen backup:` naming the other digest, and pass.
+    #
+    # Each repair bound the previous counterexample and left the next. The
+    # pattern is the selection, not the predicate: choosing an occurrence and
+    # comparing a prefix of it can always be evaded by adding another
+    # occurrence or another suffix. Comparing the whole subsection has no
+    # such next case -- there is nothing left to append to or duplicate
+    # WITHIN it -- and the heading inventory closes duplicating the subsection
+    # itself.
+    document = REHEARSAL.read_text()
+    assert _headings_in(document) == _REHEARSAL_HEADINGS
+    start = document.index("### Artifact hashes")
+    end = re.search(r"\n#{1,6} ", document[start + 5 :]).start() + start + 5
+    assert document[start:end] == _REHEARSAL_HASHES
 
 
 #: The two sections that ARE the honesty boundary, compared whole.
