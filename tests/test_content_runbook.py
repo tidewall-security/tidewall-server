@@ -15,6 +15,7 @@ race. Do not add a test that appears to cover it.
 from __future__ import annotations
 
 import pathlib
+import re
 import sqlite3
 import subprocess
 
@@ -136,3 +137,98 @@ def test_a_canary_is_matched_literally_not_as_a_pattern(tmp_path):
     assert _run_scan(db, ".*").returncode == 0
     (tmp_path / "t.db-shm").write_text("literally .* here")
     assert _run_scan(db, ".*").returncode == 1
+
+
+# --------------------------------------------------------------------------
+# Task 3: the published session block is the whole program
+# --------------------------------------------------------------------------
+
+
+def _extract(marker: str) -> str:
+    """The one fenced block under `marker`. Fails unless there is exactly one."""
+    blocks = re.findall(rf"<!-- {re.escape(marker)} -->\s*```bash\n(.*?)```", RUNBOOK.read_text(), re.S)
+    assert len(blocks) == 1, f"expected exactly one {marker} block, found {len(blocks)}"
+    return blocks[0]
+
+
+def _sql_statements(block: str) -> list[str]:
+    """The SQL and dot-commands inside the block's heredoc, in order.
+
+    Three details, each of which a naive implementation gets wrong:
+
+    * take only the heredoc body -- between the line opening it and the line
+      that is exactly ``SQL`` -- or the shell prologue and epilogue come too;
+    * drop full-line ``--`` comments, and only those. A general comment
+      stripper rewrites SQL it has no business touching;
+    * take each line beginning ``.`` as its own entry BEFORE splitting the rest
+      on ``;``, or ``.bail on`` is joined to the statement after it.
+    """
+    lines = block.splitlines()
+    start = next(i for i, line in enumerate(lines) if "<<SQL" in line)
+    end = next(i for i, line in enumerate(lines) if i > start and line.strip() == "SQL")
+    body = [line for line in lines[start + 1 : end] if not line.strip().startswith("--")]
+
+    statements: list[str] = []
+    buffer: list[str] = []
+    for line in body:
+        if line.startswith("."):
+            assert not buffer, f"a dot-command interrupted a statement: {line!r}"
+            statements.append(line.strip())
+            continue
+        buffer.append(line)
+        if line.rstrip().endswith(";"):
+            statements.append("\n".join(buffer))
+            buffer = []
+    assert not [line for line in buffer if line.strip()], f"unterminated statement: {buffer!r}"
+    return statements
+
+
+def _norm(text: str) -> str:
+    return " ".join(text.split())
+
+
+#: Every statement the session block may contain, in order. Compared exactly
+#: after whitespace normalisation -- not by prefix. `startswith` accepts
+#: `INSERT INTO _assert SELECT 'integrity ok', 1;`, which keeps the label and
+#: deletes the predicate, and accepts `VACUUM INTO 'elsewhere.db'`.
+_PERMITTED = [
+    ".bail on",
+    "CREATE TEMP TABLE _assert(what TEXT, ok INT NOT NULL CHECK(ok=1));",
+    "INSERT INTO _assert SELECT 'journal mode is wal', journal_mode='wal' FROM pragma_journal_mode;",
+    "INSERT INTO _assert SELECT 'exactly one expected revision', "
+    "(SELECT count(*) FROM alembic_version WHERE version_num='$REV')=1 "
+    "AND (SELECT count(*) FROM alembic_version)=1;",
+    "INSERT INTO _assert SELECT 'both are tables, not views', "
+    "(SELECT count(*) FROM sqlite_schema WHERE type='table' "
+    "AND name IN ('interactions','interaction_contents'))=2;",
+    "INSERT INTO _assert SELECT 'interactions is the head shape', "
+    "(SELECT count(*) FROM pragma_table_xinfo('interactions'))=20 "
+    "AND (SELECT count(*) FROM pragma_table_xinfo('interactions') "
+    "WHERE name IN ('id','request_id','timestamp','event_type','policy_id', "
+    "'policy_name','api_key_id','blocked','transformed', "
+    "'latency_ms','app_id','user_id','llm_provider','model', "
+    "'source_ip','status','device_id','evidence_json', "
+    "'evidence_schema_version','content_available'))=20;",
+    "INSERT INTO _assert SELECT 'interaction_contents is the head shape', "
+    "(SELECT count(*) FROM pragma_table_xinfo('interaction_contents'))=9 "
+    "AND (SELECT count(*) FROM pragma_table_xinfo('interaction_contents') "
+    "WHERE name IN ('id','interaction_id','input_json','output_json','matches_json', "
+    "'byte_size','captured_at','expires_at','policy_id'))=9;",
+    "INSERT INTO _assert SELECT 'legacy content columns are gone', "
+    "NOT EXISTS(SELECT 1 FROM pragma_table_info('interactions') "
+    "WHERE name IN ('input_messages','output_messages', "
+    "'detectors_json','summary'));",
+    "INSERT INTO _assert SELECT 'no content rows remain', " "(SELECT count(*) FROM interaction_contents)=0;",
+    "PRAGMA wal_checkpoint(TRUNCATE);",
+    "VACUUM;",
+    "PRAGMA wal_checkpoint(TRUNCATE);",
+    "INSERT INTO _assert SELECT 'integrity ok', integrity_check='ok' FROM pragma_integrity_check;",
+    "SELECT 'SEQUENCE-COMPLETE';",
+]
+
+
+def test_the_session_block_is_exactly_the_permitted_program():
+    """Not "the expected statements appear in order" -- that nothing else
+    appears at all, and that each one is what it claims to be."""
+    got = [_norm(s) for s in _sql_statements(_extract("runbook:session"))]
+    assert got == [_norm(s) for s in _PERMITTED]
