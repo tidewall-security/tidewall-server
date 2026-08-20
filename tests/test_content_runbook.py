@@ -1249,6 +1249,26 @@ def test_the_runbook_has_exactly_the_declared_sections():
     assert re.findall(r"(?m)^#{1,6} .*$", RUNBOOK.read_text()) == _HEADINGS
 
 
+def test_the_runbook_uses_no_setext_headings():
+    """The other heading syntax, which the pinned list cannot see.
+
+    A line of text underlined with `===` or `---` is a heading, so a new step
+    can be added in that form without changing the list of `#` headings. The
+    runbook uses ATX headings throughout; this keeps it that way, rather than
+    teaching the pin a second syntax.
+
+    A rule (`---` after a blank line) is not a setext heading and stays legal --
+    the runbook uses several.
+    """
+    lines = RUNBOOK.read_text().splitlines()
+    offenders = [
+        f"{number}: {lines[number - 2]!r} underlined by {line!r}"
+        for number, line in enumerate(lines[1:], start=2)
+        if re.fullmatch(r"=+|-+", line.strip()) and lines[number - 2].strip()
+    ]
+    assert not offenders, "setext headings are invisible to the section pin:\n" + "\n".join(offenders)
+
+
 def test_the_runbook_contains_no_html_but_its_two_markers():
     """Raw HTML renders. A `<pre>` block reads exactly like a fenced one and is
     invisible to a gate that counts fences."""
