@@ -37,6 +37,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import unicodedata
 
 import pytest
 
@@ -1265,3 +1266,40 @@ def test_the_runbook_renders_no_html_but_its_two_markers():
     html = [t.content.strip() for t in _rendered() if t.type in ("html_block", "html_inline")]
     unexpected = [h for h in html if not re.fullmatch(r"<!-- runbook:(?:session|postclose) -->", h)]
     assert not unexpected, "raw HTML in the runbook:\n" + "\n".join(unexpected)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "docs/operations/content-runbook.md",
+        "scripts/scan-artifacts.sh",
+        "docs/operations/rehearsals/2026-08-20-migration-rehearsal.md",
+    ],
+)
+def test_no_invisible_characters_anywhere_in_the_published_artifacts(path):
+    """Invisible characters change what an operator runs and not what they read.
+
+    A non-breaking space appended outside a closing quote in the worked example
+    passed every gate here while corrupting all four canaries: bash concatenated
+    it, Python's strip() erased it, and the resulting scan reported clean for
+    content that was still present. That specific case is now bound by comparing
+    physical lines, but the class is wider than one character in one block --
+    prose that tells an operator what to type is just as reachable, and so is
+    the script.
+
+    Permitted non-ASCII is enumerated rather than allowed by category: `é` is in
+    the worked example deliberately, because an all-ASCII canary cannot
+    demonstrate the difference between the four representations.
+    """
+    permitted = {"§", "é", "—"}
+    text = (REPO / path).read_text()
+    offenders = sorted(
+        {
+            character
+            for character in text
+            if ord(character) > 127
+            and character not in permitted
+            or (unicodedata.category(character) in ("Cf", "Cc", "Zs", "Zl", "Zp") and character not in " \n\t")
+        }
+    )
+    assert not offenders, f"{path} contains {[hex(ord(c)) for c in offenders]}"
