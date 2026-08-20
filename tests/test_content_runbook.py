@@ -1495,47 +1495,67 @@ def test_a_missing_alembic_version_table_fails_to_parse(tmp_path):
     assert "no such table: alembic_version" in result.stdout, result.stdout
 
 
-def test_the_changelog_warning_states_what_the_upgrade_destroys():
-    """The claims, not the word.
+#: The destructive warning, complete. Not required substrings plus a list of
+#: forbidden words: prose contradicts itself in unbounded ways, and a list of
+#: synonyms is a gate whose boundary nobody can state. This is the sentence an
+#: operator reads when deciding whether to take a backup they will otherwise
+#: never be able to recover, so it is compared whole.
+_CHANGELOG_WARNING = (
+    "### Upgrading — this release is destructive\n"
+    "\n"
+    "Upgrading deletes every row in `interactions` and drops four columns that held\n"
+    "prompt content. There is no data rollback in either direction: `alembic\n"
+    "downgrade` restores the schema, not the data. Take a backup first, and read\n"
+    "[the content runbook](docs/operations/content-runbook.md) before upgrading —\n"
+    "it covers the destructive migration, reclaiming the space the deleted content\n"
+    "still occupies on disk, and what that reclamation does and does not achieve.\n"
+)[:-1]
 
-    A gate that checks the word `destructive` occurs somewhere accepts a
-    warning whose central sentence says the upgrade PRESERVES the interaction
-    rows -- which is the sentence an operator reads when deciding whether to
-    take a backup they will otherwise never be able to recover.
-    """
+
+def test_the_changelog_warning_is_exactly_the_declared_text():
     changelog = (REPO / "CHANGELOG.md").read_text()
-    warning = changelog[changelog.index("## [Unreleased]") : changelog.index("### Security")]
-
-    assert "deletes every row in `interactions`" in warning, warning
-    assert "drops four columns" in warning, warning
-    assert "no data rollback in either direction" in warning, warning
-    assert "Take a backup first" in warning, warning
-    # And nothing reassuring to the contrary.
-    for contradiction in ("preserve", "retains", "keeps your", "non-destructive"):
-        assert contradiction not in warning.lower(), f"{contradiction!r} in the destructive warning"
+    start = changelog.index("### Upgrading")
+    assert changelog[start : start + len(_CHANGELOG_WARNING)] == _CHANGELOG_WARNING
 
 
-def test_the_rehearsal_record_cannot_contradict_the_procedure():
-    """A record that is impossible under the published shell is not evidence.
+#: Every row of the rehearsal record's two tables, by label. Searching the
+#: document for phrases left rows unbound individually -- the post-close row
+#: could be changed to say the scan found all four representations while
+#: keeping its successful exit, which is a state the published program cannot
+#: produce, and nothing noticed.
+_REHEARSAL_ROWS = {
+    "step": "result",
+    "Migrated to `d5a71f3c8e02`, the migration's predecessor": "all four legacy columns present",
+    "Planted a canary in the legacy content columns": "four representations",
+    "Froze a copy as the backup": "see the hashes below",
+    "Confirmed all four representations are in the frozen backup": "all four found",
+    "Upgraded to head `1b42ababed28`": "migration succeeded",
+    "Ran the runbook's session block": "exit 0; `0\\|0\\|0`, `0\\|0\\|0`, `SEQUENCE-COMPLETE`",
+    "Ran the runbook's post-close block": "exit 0; no representation found in the database, WAL or SHM",
+    "Reclaimed database": "see the hashes below",
+    "field": "value",
+    "Backup identifiers": "Rehearsal copy; see the frozen-backup hash above",
+    "Owner": "Tidewall maintainers (rehearsal artifact; no production backup taken)",
+    "Retention or deletion disposition": (
+        "Discarded with the rehearsal's temporary directory; no production backup involved"
+    ),
+    "Date": "2026-08-20",
+}
 
-    The disposition fields being populated says nothing about the results. The
-    recorded first checkpoint could be changed to a busy row while the recorded
-    exit stayed zero -- a state the published block cannot produce, since a busy
-    checkpoint makes it exit non-zero -- and every test stayed green.
+
+def test_the_rehearsal_record_rows_are_exactly_the_declared_evidence():
+    """Each row's value, by its label.
+
+    A record whose rows contradict the procedure is not evidence of it. This
+    cannot prove the historical run happened; it does stop the record from
+    describing a run the published program could not have produced.
     """
-    record = REHEARSAL.read_text()
+    rows = dict(re.findall(r"(?m)^\|\s*(.+?)\s*\|\s*(.+?)\s*\|$", REHEARSAL.read_text()))
+    separators = {key for key in rows if set(key) <= set("-: ")}
+    assert {k: v for k, v in rows.items() if k not in separators} == _REHEARSAL_ROWS
 
-    assert "`d5a71f3c8e02`" in record, "the rehearsal must start at the migration's predecessor"
-    assert f"`{HEAD_REVISION}`" in record, "the rehearsal must end at head"
-    assert "all four legacy columns present" in record
-    assert "all four found" in record, "the pre-state must show every representation in the backup"
+    # The disposition fields must still be filled in, not merely present.
+    for field in ("Backup identifiers", "Owner", "Retention or deletion disposition", "Date"):
+        assert _REHEARSAL_ROWS[field] and "OUTSTANDING" not in _REHEARSAL_ROWS[field]
 
-    # The session's recorded result must be one the published block can produce.
-    assert "exit 0" in record and "SEQUENCE-COMPLETE" in record, record
-    assert record.count(r"0\|0\|0") == 2, "the record must show two successful checkpoint rows"
-    assert "1|" not in record.replace(r"0\|0\|0", ""), (
-        "the record shows a busy checkpoint alongside a successful exit, which the " "published block cannot produce"
-    )
-    for digest in re.findall(r"`([0-9a-f]{64})`", record):
-        assert len(digest) == 64
-    assert len(re.findall(r"`[0-9a-f]{64}`", record)) == 2, "both artifact hashes must be recorded"
+    assert len(re.findall(r"`[0-9a-f]{64}`", REHEARSAL.read_text())) == 2
