@@ -10,6 +10,14 @@ against an expected program, and the link, lint, fixture-shape and rehearsal
 tests inspect artifacts rather than running them. The universal claim would be
 false, and this file is about not making those.
 
+Where the block gates stop: they cover BLOCK-level code -- fenced blocks,
+indented blocks, raw HTML. They do not cover inline code spans, and cannot: the
+runbook is full of them, because that is how prose names a command or a
+variable. An inline span is not how this runbook gives an instruction to run
+something -- every procedure here is a fenced block -- but a reviewer of a
+change to this document still has to read its prose. That is a boundary, stated,
+not a gap being ignored.
+
 One deliberate gap, stated rather than implied: `scan-artifacts.sh` ends with a
 `scanned=0` backstop that no test here kills. On a stable filesystem the
 database-existence check always fires first, so the backstop is reachable only
@@ -1186,6 +1194,23 @@ def test_the_runbook_contains_no_undeclared_fence():
         "If you added a block, add it to the gated set in "
         "test_every_shell_block_in_the_runbook_is_a_gated_one."
     )
+
+
+#: The two markers are the only HTML the runbook contains. Anything else --
+#: `<pre>`, `<code>`, a `<script>` -- renders as content a reader may copy while
+#: adding no fence marker at all, so the count above cannot see it.
+_ALLOWED_HTML = re.compile(r"^<!-- runbook:(?:session|postclose) -->$")
+
+
+def test_the_runbook_contains_no_html_but_its_two_markers():
+    """Raw HTML renders. A `<pre>` block reads exactly like a fenced one and is
+    invisible to a gate that counts fences."""
+    offenders = [
+        f"{number}: {line!r}"
+        for number, line in enumerate(RUNBOOK.read_text().splitlines(), start=1)
+        if line.lstrip().startswith("<") and not _ALLOWED_HTML.match(line.strip())
+    ]
+    assert not offenders, "raw HTML in the runbook:\n" + "\n".join(offenders)
 
 
 def test_the_runbook_uses_no_indented_code_blocks():
