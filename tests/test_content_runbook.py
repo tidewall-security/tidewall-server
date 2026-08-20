@@ -14,10 +14,14 @@ race. Do not add a test that appears to cover it.
 
 from __future__ import annotations
 
+import hashlib
+import os
 import pathlib
 import re
+import shlex
 import sqlite3
 import subprocess
+import sys
 
 import pytest
 
@@ -232,3 +236,248 @@ def test_the_session_block_is_exactly_the_permitted_program():
     appears at all, and that each one is what it claims to be."""
     got = [_norm(s) for s in _sql_statements(_extract("runbook:session"))]
     assert got == [_norm(s) for s in _PERMITTED]
+
+
+# --------------------------------------------------------------------------
+# Task 4: the preconditions refuse, and refuse before writing anything
+# --------------------------------------------------------------------------
+
+HEAD_REVISION = "1b42ababed28"
+#: The columns head actually has, read from a migrated database by
+#: `_assert_fixture_shape` rather than trusted from here.
+HEAD_INTERACTIONS_COLUMNS = 20
+HEAD_CONTENTS_COLUMNS = 9
+
+
+def _alembic(db, *args):
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", *args],
+        cwd=REPO,
+        env={**os.environ, "DB_URL": f"sqlite:///{db}"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+
+
+def _assert_fixture_shape(db):
+    """If the schema moves, fail here and say so.
+
+    Otherwise the runbook would go on guarding a shape the database no longer
+    has, and every rejection test would keep passing for the wrong reason.
+    """
+    conn = sqlite3.connect(db)
+    try:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone()[0] == HEAD_REVISION
+        for table, expected in (
+            ("interactions", HEAD_INTERACTIONS_COLUMNS),
+            ("interaction_contents", HEAD_CONTENTS_COLUMNS),
+        ):
+            got = conn.execute(f"SELECT count(*) FROM pragma_table_xinfo('{table}')").fetchone()[0]
+            assert got == expected, (
+                f"{table} now has {got} columns, not {expected}. The runbook's guard "
+                "needs updating before this suite means anything."
+            )
+    finally:
+        conn.close()
+
+
+def _head_db(tmp_path):
+    """A WAL database at head, in two explicit stages.
+
+    `alembic upgrade head` leaves the database in `delete` mode -- verified --
+    and `get_engine` sets WAL from a *connect* listener, so constructing the
+    engine is not enough. These are two operations and the fixture does both.
+    """
+    from app.db.engine import get_engine
+
+    db = tmp_path / "head.db"
+    _alembic(db, "upgrade", "head")
+    engine = get_engine(f"sqlite:///{db}")
+    with engine.connect():
+        pass
+    engine.dispose()
+    _assert_fixture_shape(db)
+    return db
+
+
+def _run_session(db, revision=HEAD_REVISION):
+    """Run the published session block against `db`.
+
+    Only the two assignment templates are replaced, and both must be found:
+    the published `REV=<the alembic revision this deployment expects>` is not
+    even valid shell, so a syntax or lint check over the raw block fails on the
+    template rather than on the program.
+    """
+    block = _extract("runbook:session")
+    block, db_subs = re.subn(r"(?m)^DB=.*$", f"DB={shlex.quote(str(db))}", block, count=1)
+    block, rev_subs = re.subn(r"(?m)^REV=.*$", f"REV={shlex.quote(revision)}", block, count=1)
+    assert db_subs == 1 and rev_subs == 1, "the block's assignment templates moved"
+    return subprocess.run(["bash", "-c", block], capture_output=True, text=True, cwd=REPO)
+
+
+def _sql(db, *statements):
+    conn = sqlite3.connect(db)
+    try:
+        for statement in statements:
+            conn.execute(statement)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+_HEAD_INTERACTIONS = (
+    "id INTEGER PRIMARY KEY, request_id TEXT, timestamp TEXT, event_type TEXT, "
+    "policy_id TEXT, policy_name TEXT, api_key_id TEXT, blocked INT, transformed INT, "
+    "latency_ms REAL, app_id TEXT, user_id TEXT, llm_provider TEXT, model TEXT, "
+    "source_ip TEXT, status TEXT, device_id TEXT, evidence_json TEXT, "
+    "evidence_schema_version INT, content_available INT"
+)
+_HEAD_CONTENTS = (
+    "id INTEGER PRIMARY KEY, interaction_id INT, input_json TEXT, output_json TEXT, "
+    "matches_json TEXT, byte_size INT, captured_at TEXT, expires_at TEXT, policy_id TEXT"
+)
+_VIEW_INTERACTIONS = ", ".join(
+    f"1 AS {name}"
+    for name in _HEAD_INTERACTIONS.replace(" INTEGER PRIMARY KEY", "").split(", ")
+    for name in [name.split()[0]]
+)
+_VIEW_CONTENTS = ", ".join(f"1 AS {name.split()[0]}" for name in _HEAD_CONTENTS.split(", "))
+
+
+def _live_content_row(db):
+    """A parent interaction and one content row, so that `no content rows
+    remain` is the ONLY failing precondition. Without a valid parent the
+    fixture could fail for a reason that has nothing to do with the guard."""
+    _sql(
+        db,
+        "INSERT INTO interactions (id, request_id, timestamp, event_type, policy_id, "
+        "policy_name, blocked, transformed, latency_ms, evidence_schema_version, "
+        "content_available) VALUES (1, 'tw_00000000000000aa', '2026-08-20T00:00:00Z', "
+        "'input', 'policy-a', 'policy-a', 0, 0, 1.0, 1, 1)",
+        "INSERT INTO interaction_contents (interaction_id, policy_id, byte_size, captured_at) "
+        "VALUES (1, 'policy-a', 10, '2026-08-20 00:00:00.000000')",
+    )
+
+
+#: One fixture per row. The count is what the table has, not a headline over it.
+_DAMAGE = {
+    "1_journal_mode_delete": lambda db: _sql(db, "PRAGMA journal_mode=DELETE"),
+    "2_wrong_revision": lambda db: _sql(db, "UPDATE alembic_version SET version_num='deadbeef'"),
+    "3_empty_alembic_version": lambda db: _sql(db, "DELETE FROM alembic_version"),
+    # alembic_version is NOT NULL with a primary key, so these two states are
+    # reached by rebuilding the table without those constraints. What matters
+    # is the state the runbook meets, not how the fixture arrived at it.
+    "4_null_version_num": lambda db: _sql(
+        db,
+        "DROP TABLE alembic_version",
+        "CREATE TABLE alembic_version (version_num VARCHAR(32))",
+        "INSERT INTO alembic_version VALUES(NULL)",
+    ),
+    # The expected revision AND a stray one. Two identical rows would be
+    # rejected by the first conjunct (its matching count becomes 2), so that
+    # shape leaves `(SELECT count(*) FROM alembic_version)=1` unbound -- the
+    # mutation survived until this fixture was changed. This is the state that
+    # conjunct exists for.
+    "5_more_than_one_revision_row": lambda db: _sql(
+        db,
+        "DROP TABLE alembic_version",
+        "CREATE TABLE alembic_version (version_num VARCHAR(32))",
+        f"INSERT INTO alembic_version VALUES('{HEAD_REVISION}')",
+        "INSERT INTO alembic_version VALUES('a-stray-revision')",
+    ),
+    "6_no_alembic_version_table": lambda db: _sql(db, "DROP TABLE alembic_version"),
+    "7_legacy_input_messages": lambda db: _sql(db, "ALTER TABLE interactions ADD COLUMN input_messages TEXT"),
+    "8_legacy_output_messages": lambda db: _sql(db, "ALTER TABLE interactions ADD COLUMN output_messages TEXT"),
+    "9_legacy_detectors_json": lambda db: _sql(db, "ALTER TABLE interactions ADD COLUMN detectors_json TEXT"),
+    "10_legacy_summary": lambda db: _sql(db, "ALTER TABLE interactions ADD COLUMN summary TEXT"),
+    "11_interactions_dropped": lambda db: _sql(db, "DROP TABLE interactions"),
+    "12_interactions_one_column": lambda db: _sql(db, "DROP TABLE interactions", "CREATE TABLE interactions(id INT)"),
+    "13_evidence_json_dropped": lambda db: _sql(db, "ALTER TABLE interactions DROP COLUMN evidence_json"),
+    "14_interactions_counted_names_only": lambda db: _sql(
+        db,
+        "DROP TABLE interactions",
+        "CREATE TABLE interactions(evidence_json TEXT, evidence_schema_version INT, " "content_available INT)",
+    ),
+    "15_contents_one_column": lambda db: _sql(
+        db, "DROP TABLE interaction_contents", "CREATE TABLE interaction_contents(id INT)"
+    ),
+    "16_contents_counted_names_only": lambda db: _sql(
+        db,
+        "DROP TABLE interaction_contents",
+        "CREATE TABLE interaction_contents(interaction_id INT, input_json TEXT, "
+        "output_json TEXT, matches_json TEXT, byte_size INT, captured_at TEXT, expires_at TEXT)",
+    ),
+    "17_interactions_is_a_view": lambda db: _sql(
+        db, "DROP TABLE interactions", f"CREATE VIEW interactions AS SELECT {_VIEW_INTERACTIONS} WHERE 0"
+    ),
+    "18_contents_is_a_view": lambda db: _sql(
+        db,
+        "DROP TABLE interaction_contents",
+        f"CREATE VIEW interaction_contents AS SELECT {_VIEW_CONTENTS} WHERE 0",
+    ),
+    # `id` is a primary key and `policy_id` is indexed, so SQLite refuses to
+    # drop either in place; the table is rebuilt without them.
+    "19_contents_missing_id": lambda db: _sql(
+        db,
+        "DROP TABLE interaction_contents",
+        "CREATE TABLE interaction_contents(interaction_id INT, input_json TEXT, "
+        "output_json TEXT, matches_json TEXT, byte_size INT, captured_at TEXT, "
+        "expires_at TEXT, policy_id TEXT)",
+    ),
+    "20_contents_missing_policy_id": lambda db: _sql(
+        db,
+        "DROP TABLE interaction_contents",
+        "CREATE TABLE interaction_contents(id INTEGER PRIMARY KEY, interaction_id INT, "
+        "input_json TEXT, output_json TEXT, matches_json TEXT, byte_size INT, "
+        "captured_at TEXT, expires_at TEXT)",
+    ),
+    "21_ordinary_column_renamed": lambda db: _sql(
+        db, "ALTER TABLE interactions RENAME COLUMN source_ip TO source_ip_typo"
+    ),
+    "22_twenty_first_column": lambda db: _sql(db, "ALTER TABLE interactions ADD COLUMN extra TEXT"),
+    "23_virtual_generated_column": lambda db: _sql(
+        db,
+        "ALTER TABLE interactions ADD COLUMN gen TEXT GENERATED ALWAYS AS (source_ip) VIRTUAL",
+    ),
+    "24_stored_generated_column": lambda db: _sql(
+        db,
+        "ALTER TABLE interaction_contents ADD COLUMN gen TEXT " "GENERATED ALWAYS AS (policy_id) STORED",
+    ),
+    "25_drop_plus_add_same_total": lambda db: _sql(
+        db,
+        "ALTER TABLE interactions DROP COLUMN source_ip",
+        "ALTER TABLE interactions ADD COLUMN something_else TEXT",
+    ),
+    "26_live_content_row": _live_content_row,
+}
+
+
+def test_the_matrix_has_one_fixture_per_named_state():
+    """Derived from the table, not asserted over it. An earlier plan claimed
+    twenty-four while enumerating a phrase list that resolved to thirteen,
+    fourteen or fifteen depending on how two entries were read."""
+    assert len(_DAMAGE) == 26
+
+
+def test_a_correct_database_is_reclaimed(tmp_path):
+    db = _head_db(tmp_path)
+    result = _run_session(db)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.count("0|0|0") == 2, result.stdout
+    assert "SEQUENCE-COMPLETE" in result.stdout
+
+
+@pytest.mark.parametrize("damage", sorted(_DAMAGE, key=lambda k: int(k.split("_")[0])))
+def test_a_wrong_database_is_refused_before_anything_is_written(tmp_path, damage):
+    db = _head_db(tmp_path)
+    _DAMAGE[damage](db)
+    before = hashlib.sha256(db.read_bytes()).hexdigest()
+
+    result = _run_session(db)
+
+    assert result.returncode != 0, f"the sequence ran: {result.stdout}"
+    assert (
+        hashlib.sha256(db.read_bytes()).hexdigest() == before
+    ), "the database was mutated before the refusal; a guard that fails late is not a guard"
