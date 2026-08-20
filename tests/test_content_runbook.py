@@ -1077,8 +1077,7 @@ def test_every_relative_link_resolves(document):
     the loop never ran, and the rehearsal record's link to it could be broken
     with this test green.
     """
-    targets = re.findall(r"\]\((?!https?:)([^)#]+)", document.read_text())
-    for target in targets:
+    for target in _rendered_link_targets(document.read_text()):
         assert (document.parent / target).resolve().exists(), f"{document.name}: {target}"
 
 
@@ -1090,8 +1089,12 @@ def test_the_rehearsal_record_links_to_the_runbook():
     referencing the runbook at all.
     """
     rehearsal = REPO / "docs" / "operations" / "rehearsals" / "2026-08-20-migration-rehearsal.md"
-    targets = re.findall(r"\]\((?!https?:)([^)#]+)", rehearsal.read_text())
-    resolved = {(rehearsal.parent / target).resolve() for target in targets}
+    # Rendered links only. A regex over source also matches links inside HTML
+    # comments: the visible link was pointed at another document and the
+    # expected one hidden in a comment, and all four link cases passed.
+    text = rehearsal.read_text()
+    _assert_no_raw_html(text, "the rehearsal record")
+    resolved = {(rehearsal.parent / target).resolve() for target in _rendered_link_targets(text)}
     assert (
         RUNBOOK.resolve() in resolved
     ), f"the rehearsal record does not link to the runbook; found {sorted(map(str, resolved))}"
@@ -1267,7 +1270,11 @@ def _rendered_text(text):
     """
     from markdown_it import MarkdownIt
 
-    return MarkdownIt("commonmark").parse(text)
+    # Tables enabled. These documents are read on GitHub, which renders GFM;
+    # the bare commonmark preset does not implement tables at all, so a pipe
+    # table was invisible to every "what does a reader see?" gate -- including
+    # the one comparing the rehearsal's evidence rows.
+    return MarkdownIt("commonmark").enable("table").parse(text)
 
 
 def _headings_in(text):
@@ -1278,6 +1285,103 @@ def _headings_in(text):
         for index, token in enumerate(tokens)
         if token.type == "heading_open"
     ]
+
+
+def _assert_no_raw_html(text, what):
+    """No raw HTML, code block or fence in an operator-facing safety artifact.
+
+    Every remaining exactness defect in round 17 worked the same way: a pin
+    inventoried RENDERED nodes and then selected RAW text, and those are not
+    the same node. Heading-shaped text in a code block is invisible to the
+    inventory and visible to the selector; a raw `<h3>` is the reverse -- a
+    browser shows it, the parser files it as an html_block.
+
+    Rejecting raw HTML, fences and code blocks removes BOTH halves of that
+    gap. Selecting by parsed node alone was not enough: a fenced block holding
+    `### Upgrading ...` is not a heading token, so it changed neither the
+    inventory nor the unique-heading check, while a reader plainly sees the
+    literal text saying no backup is needed. That mutation survived the first
+    repair, and is why this ban exists.
+
+    These are a migration record and a destructive-upgrade warning. Neither
+    contains any of these block kinds today, so the ban costs nothing and
+    closes all four round-17 findings at their shared root rather than one at
+    a time.
+    """
+    kinds = {token.type for token in _rendered_text(text)}
+    for kind in ("html_block", "fence", "code_block"):
+        assert kind not in kinds, f"{what} contains a {kind}"
+    for token in _rendered_text(text):
+        if token.type == "inline":
+            assert not any(
+                child.type == "html_inline" for child in token.children or ()
+            ), f"{what} contains raw inline HTML"
+
+
+def _section_by_heading(text, heading):
+    """The source of the section under a UNIQUE rendered heading.
+
+    Selected by parsed token, not by string search, so the node this returns
+    is by construction the node the heading inventory saw. `token.map` is the
+    heading's line range in the source; the section runs to the next heading
+    at the same or a higher level.
+    """
+    tokens = _rendered_text(text)
+    lines = text.splitlines(keepends=True)
+    opens = [
+        (index, token)
+        for index, token in enumerate(tokens)
+        if token.type == "heading_open" and tokens[index + 1].content == heading
+    ]
+    assert len(opens) == 1, f"expected exactly one {heading!r} heading, found {len(opens)}"
+    index, token = opens[0]
+    start = token.map[0]
+    end = len(lines)
+    for later in tokens[index + 1 :]:
+        if later.type == "heading_open" and later.tag <= token.tag:
+            end = later.map[0]
+            break
+    return "".join(lines[start:end])
+
+
+def _rendered_table_rows(text):
+    """Every row of every RENDERED table, in order, as lists of cell text.
+
+    Pipe syntax is one of several ways to produce a table. Comparing pipe
+    source rows leaves a second, contradicting table in another form
+    contributing no rows to the comparison at all.
+    """
+    tokens = _rendered_text(text)
+    rows, row, cell = [], None, None
+    for index, token in enumerate(tokens):
+        if token.type in ("tr_open",):
+            row = []
+        elif token.type in ("th_open", "td_open"):
+            cell = tokens[index + 1].content if tokens[index + 1].type == "inline" else ""
+        elif token.type in ("th_close", "td_close"):
+            row.append(cell)
+        elif token.type == "tr_close":
+            rows.append(row)
+    return rows
+
+
+def _rendered_link_targets(text):
+    """Relative link targets a READER can follow.
+
+    A regular expression over source also matches links inside HTML comments,
+    which nobody can see. The demonstrated bypass pointed the visible link at
+    a different document and hid the expected one in a comment.
+    """
+    targets = []
+    for token in _rendered_text(text):
+        if token.type != "inline":
+            continue
+        for child in token.children or ():
+            if child.type == "link_open":
+                href = child.attrGet("href") or ""
+                if href and not href.startswith(("http://", "https://")):
+                    targets.append(href.split("#")[0])
+    return [target for target in targets if target]
 
 
 def _rendered_fences(document=None):
@@ -1566,16 +1670,15 @@ def test_the_changelog_warning_is_exactly_the_declared_text():
 
     # The whole entry's section inventory first, so a second upgrade section
     # cannot hide behind a first-occurrence search.
-    entry_start = changelog.index("## [Unreleased]")
-    following = changelog.find("\n## ", entry_start + 5)
-    entry = changelog[entry_start : len(changelog) if following < 0 else following]
+    entry = _section_by_heading(changelog, "[Unreleased]")
     assert _headings_in(entry) == _CHANGELOG_UNRELEASED_HEADINGS
+    _assert_no_raw_html(entry, "the CHANGELOG's Unreleased entry")
 
-    start = changelog.index("### Upgrading")
-    # To the end of the section, not the length of the expected text -- a prefix
-    # comparison accepts anything appended after it, inside the same warning.
-    end = changelog.index("\n### ", start + 5)
-    assert changelog[start:end].rstrip() == _CHANGELOG_WARNING
+    # Selected by parsed heading token, so this is the same node the inventory
+    # above saw. A raw string search is not: heading-shaped text inside a code
+    # block satisfies it while the reader sees a different section.
+    section = _section_by_heading(entry, "Upgrading — this release is destructive")
+    assert section.rstrip() == _CHANGELOG_WARNING
 
 
 #: The rehearsal's Artifact hashes subsection, complete, and the document's
@@ -1613,7 +1716,10 @@ _REHEARSAL_ROWS = {
     "Froze a copy as the backup": "see the hashes below",
     "Confirmed all four representations are in the frozen backup": "all four found",
     "Upgraded to head `1b42ababed28`": "migration succeeded",
-    "Ran the runbook's session block": "exit 0; `0\\|0\\|0`, `0\\|0\\|0`, `SEQUENCE-COMPLETE`",
+    # As RENDERED: the source escapes each pipe as `\|` so it survives the
+    # table syntax, but the operator reads `|`. Pinning the source spelling
+    # pinned the escaping rather than the evidence.
+    "Ran the runbook's session block": "exit 0; `0|0|0`, `0|0|0`, `SEQUENCE-COMPLETE`",
     "Ran the runbook's post-close block": "exit 0; no representation found in the database, WAL or SHM",
     "Reclaimed database": "see the hashes below",
     "field": "value",
@@ -1636,11 +1742,14 @@ def test_the_rehearsal_record_rows_are_exactly_the_declared_evidence():
     # An ordered list of pairs, not a dict: dict() silently keeps the last of
     # any duplicated label, so a second contradicting row with the same label
     # disappears from the comparison entirely.
-    pairs = [
-        (key, value)
-        for key, value in re.findall(r"(?m)^\|\s*(.+?)\s*\|\s*(.+?)\s*\|$", REHEARSAL.read_text())
-        if not set(key) <= set("-: ")
-    ]
+    # RENDERED rows, not pipe-delimited source rows. Pipe syntax is one of
+    # several ways to produce a table, and a second contradicting table in
+    # another form contributed no rows to a source-level comparison at all --
+    # a demonstrated HTML table repeated the Owner field with no accountable
+    # owner while every gate stayed green.
+    record = REHEARSAL.read_text()
+    _assert_no_raw_html(record, "the rehearsal record")
+    pairs = [tuple(row) for row in _rendered_table_rows(record)]
     assert pairs == list(_REHEARSAL_ROWS.items())
 
     # The disposition fields must still be filled in, not merely present.
@@ -1667,9 +1776,12 @@ def test_the_rehearsal_record_rows_are_exactly_the_declared_evidence():
     # itself.
     document = REHEARSAL.read_text()
     assert _headings_in(document) == _REHEARSAL_HEADINGS
-    start = document.index("### Artifact hashes")
-    end = re.search(r"\n#{1,6} ", document[start + 5 :]).start() + start + 5
-    assert document[start:end] == _REHEARSAL_HASHES
+    _assert_no_raw_html(document, "the rehearsal record")
+    # Trailing blank lines only: they separate the section from the next
+    # heading in source and render as nothing, so pinning how many there are
+    # would be brittle without being safer. Everything else is compared exactly.
+    section = _section_by_heading(document, "Artifact hashes")
+    assert section.rstrip("\n") == _REHEARSAL_HASHES.rstrip("\n")
 
 
 #: The two sections that ARE the honesty boundary, compared whole.
