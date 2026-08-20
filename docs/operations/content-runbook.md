@@ -111,8 +111,13 @@ you get.
 
 The first does **not** exist to make data visible to `VACUUM` — a reader in WAL
 mode already sees a coherent snapshot of the main file plus committed frames.
-It clears any WAL residue that was already there, gives the procedure a clean
-boundary, and fails early if something else is holding the database.
+It clears any WAL residue that was already there, and when it succeeds it
+gives the procedure a clean boundary.
+
+It does **not** stop the sequence when it fails. A busy checkpoint reports a
+row beginning `1|` and the same session carries straight on into `VACUUM`; only
+the shell's row count, after the session has ended, turns that into a refusal.
+See "Reading the result" below.
 
 `VACUUM` then rebuilds the database into fresh pages, which is what drops the
 free pages still holding deleted content. In WAL mode that rebuild is an
@@ -147,33 +152,54 @@ quiescence and run it again.
 
 These inspect artifacts that only exist once SQLite has let go of them.
 
-**Run this from a checkout of this repository**, because it invokes
-`scripts/scan-artifacts.sh` by a relative path. The published container image
-ships neither `scripts/` nor `docs/`, and does not install the `sqlite3` CLI —
-so this whole procedure is run from a host with a checkout, against the
-database file, not from inside the container.
+**Run this from the repository root**, not merely from somewhere inside a
+checkout: it invokes `scripts/scan-artifacts.sh` by a path relative to that
+root. The published container image ships neither `scripts/` nor `docs/` and
+does not install the `sqlite3` CLI, so the whole procedure runs on a host with
+a checkout, against the database file, rather than inside the container.
 
-Prerequisites: `sqlite3`, `grep`, and read access to the database and its
-sidecars.
+Prerequisites:
+
+- `sqlite3` and `grep`;
+- **write** access to the database *and its directory*. The session
+  checkpoints, runs `VACUUM` and truncates the WAL, and SQLite creates
+  temporary and sidecar files alongside the database. Read access is enough
+  only for the final scan;
+- a path to the database that is reachable and writable from that
+  repository-root shell — if it lives in a container volume, that means the
+  host-side mount point.
 
 Set `CANARY_*` to a string you know was in a deleted record, in each of its
 representations. Worked example, for a prompt containing
-`acct 4111-1111-1111-1111`:
+`café "acct\\4111"` — chosen because it exercises all four forms, which an
+all-ASCII example cannot:
 
 ```bash
-CANARY_PLAIN='acct 4111-1111-1111-1111'
-# As it appears inside a JSON column: quotes and backslashes escaped. Here
-# there are none, so it differs from the plain form only by its surrounding
-# quotes -- which is why both are searched.
-CANARY_JSON='"acct 4111-1111-1111-1111"'
-# As a \uXXXX escape, which is how some writers encode non-ASCII. Use this
-# form for the characters in your canary that are not ASCII; for an all-ASCII
-# canary it will not appear, and searching for it costs nothing.
-CANARY_UNICODE='acct \u0034111'
-# The raw bytes, if the value reached the database through a path that did not
-# encode it as text at all.
-CANARY_RAW=$'acct 4111-1111-1111-1111'
+# As it was written.
+CANARY_PLAIN='café "acct\4111"'
+
+# As a JSON string value: the quotes and the backslash are escaped.
+CANARY_JSON='café \"acct\\4111\"'
+
+# As some writers encode non-ASCII: the é becomes a \uXXXX escape. Writers
+# may also escape ASCII characters, so this form is worth searching for even
+# when your canary is plain -- it costs nothing if it is absent.
+CANARY_UNICODE='caf\u00e9 \"acct\\4111\"'
+
+# The same characters under a DIFFERENT encoding -- here latin-1, where é is
+# the single byte 0xe9 rather than UTF-8's 0xc3 0xa9. This is the form to use
+# when the value may have been written by something that did not agree with
+# your database about encoding. If everything in the path was UTF-8, this is
+# byte-for-byte the plain form.
+CANARY_RAW=$'caf\xe9 "acct\\4111"'
 ```
+
+If your canary is pure ASCII, all four forms collapse towards the plain one and
+the `\uXXXX` form may not appear at all. That is fine — pass them anyway; the
+scan refuses an empty argument, not a redundant one. It is also the reason this
+example uses a canary with a non-ASCII character and a backslash: an all-ASCII
+one cannot demonstrate the difference between these forms, and an example that
+silently passes the same bytes four times teaches the wrong thing.
 
 Single quotes matter: without them the shell will interpret `$`, backslashes
 and spaces, and you will scan for something other than what you meant.

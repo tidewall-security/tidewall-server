@@ -297,6 +297,13 @@ _PERMITTED = [
 #: mechanism that turns a missing completion marker or a busy checkpoint into a
 #: failure.
 _PERMITTED_SHELL = [
+    # The assignment lines are IN the whitelist. An earlier version dropped any
+    # line starting DB= or REV= before comparing, and separately replaced the
+    # first of each before running -- so `DB=/path/to/tidewall.db; exit 0`
+    # passed all 75 tests while making the published block exit 0 without ever
+    # opening the database. A prefix is not authorisation to ignore a line.
+    "DB=/path/to/tidewall.db",
+    "REV=1b42ababed28",
     'out=$(sqlite3 "$DB" <<SQL 2>&1',
     ") || { printf 'the sequence stopped before completing:\\n%s\\n' \"$out\"; exit 1; }",
     "printf '%s\\n' \"$out\" | grep -qx 'SEQUENCE-COMPLETE' || { echo \"incomplete\"; exit 1; }",
@@ -312,11 +319,7 @@ def _shell_lines(block: str) -> list[str]:
     start = next(i for i, line in enumerate(lines) if "<<SQL" in line)
     end = next(i for i, line in enumerate(lines) if i > start and line.strip() == "SQL")
     outside = lines[:start] + [lines[start]] + lines[end + 1 :]
-    return [
-        line.strip()
-        for line in outside
-        if line.strip() and not line.strip().startswith("#") and not line.startswith(("DB=", "REV="))
-    ]
+    return [line.strip() for line in outside if line.strip() and not line.strip().startswith("#")]
 
 
 def test_the_session_block_shell_is_exactly_the_permitted_program():
@@ -454,9 +457,16 @@ def _run_session(db, revision=HEAD_REVISION):
 def _substituted_session(db, revision=HEAD_REVISION) -> str:
     """The published block with its two assignment templates filled in."""
     block = _extract("runbook:session")
-    block, db_subs = re.subn(r"(?m)^DB=.*$", f"DB={shlex.quote(str(db))}", block, count=1)
-    block, rev_subs = re.subn(r"(?m)^REV=.*$", f"REV={shlex.quote(revision)}", block, count=1)
-    assert db_subs == 1 and rev_subs == 1, "the block's assignment templates moved"
+    # Replace the EXACT published lines, not anything matching a prefix.
+    # Substituting `^DB=.*$` silently swallows whatever else the line carried,
+    # so a command appended to it would never be executed by a test and never
+    # be seen by the whitelist.
+    for published, replacement in (
+        ("DB=/path/to/tidewall.db", f"DB={shlex.quote(str(db))}"),
+        ("REV=1b42ababed28", f"REV={shlex.quote(revision)}"),
+    ):
+        assert f"\n{published}\n" in f"\n{block}", f"the published line {published!r} moved"
+        block = block.replace(published, replacement, 1)
     return block
 
 
@@ -922,13 +932,17 @@ def test_the_changelog_links_to_the_runbook():
     Checking only for the string passed when the link was replaced with plain
     text ending in the same path, which is the drift this gate exists to catch.
     """
-    changelog = (REPO / "CHANGELOG.md").read_text()
-    targets = re.findall(r"\]\(([^)]+)\)", changelog)
-    assert any(
-        target.endswith("docs/operations/content-runbook.md") for target in targets
-    ), f"no Markdown link to the runbook; found {targets}"
-    assert (REPO / "docs/operations/content-runbook.md").exists()
-    assert "destructive" in changelog.lower()
+    changelog = REPO / "CHANGELOG.md"
+    text = changelog.read_text()
+    targets = re.findall(r"\]\(([^)]+)\)", text)
+    # Resolved, not suffix-matched. `missing/docs/operations/content-runbook.md`
+    # ends with the expected path while pointing nowhere, and the separate
+    # existence assertion was checking the real runbook rather than the target.
+    resolved = {(changelog.parent / target).resolve() for target in targets}
+    assert (
+        RUNBOOK.resolve() in resolved
+    ), f"no Markdown link resolving to the runbook; found {sorted(map(str, resolved))}"
+    assert "destructive" in text.lower()
 
 
 @pytest.mark.parametrize(
@@ -948,12 +962,19 @@ def test_every_relative_link_resolves(document):
         assert (document.parent / target).resolve().exists(), f"{document.name}: {target}"
 
 
-def test_at_least_one_relative_link_exists_to_check():
-    """Otherwise the loop above is a no-op that reports success."""
+def test_the_rehearsal_record_links_to_the_runbook():
+    """This link, to this artifact.
+
+    "Some link that resolves" is satisfied by pointing it at the CHANGELOG,
+    which is how the previous form stayed green while the rehearsal stopped
+    referencing the runbook at all.
+    """
     rehearsal = REPO / "docs" / "operations" / "rehearsals" / "2026-08-20-migration-rehearsal.md"
-    assert re.findall(
-        r"\]\((?!https?:)([^)#]+)", rehearsal.read_text()
-    ), "the rehearsal record no longer links to the runbook, so the link gate checks nothing"
+    targets = re.findall(r"\]\((?!https?:)([^)#]+)", rehearsal.read_text())
+    resolved = {(rehearsal.parent / target).resolve() for target in targets}
+    assert (
+        RUNBOOK.resolve() in resolved
+    ), f"the rehearsal record does not link to the runbook; found {sorted(map(str, resolved))}"
 
 
 def test_the_published_shell_passes_shellcheck():
@@ -1006,4 +1027,29 @@ def test_the_rehearsal_record_is_complete():
         f"the rehearsal record is incomplete: {outstanding}. "
         "This is the release gate, not a formatting check -- see the record's "
         "'Outstanding' section for what is missing and why it cannot be invented."
+    )
+
+
+def test_the_worked_canary_examples_are_four_distinct_values():
+    """Evaluated, not read.
+
+    The first version of this example produced the same bytes for the plain and
+    raw forms, so it demonstrated nothing about raw bytes while claiming to --
+    an operator following it would pass the scan the same argument twice and
+    conclude they had checked four representations.
+    """
+    block = re.search(r"```bash\n(# As it was written.*?)```", RUNBOOK.read_text(), re.S)
+    assert block, "the worked canary example is gone"
+
+    script = block.group(1) + (
+        '\nprintf "%s\\0%s\\0%s\\0%s" ' '"$CANARY_PLAIN" "$CANARY_JSON" "$CANARY_UNICODE" "$CANARY_RAW"\n'
+    )
+    result = subprocess.run(["bash", "-c", script], capture_output=True)
+    assert result.returncode == 0, result.stderr
+
+    values = result.stdout.split(b"\0")
+    assert len(values) == 4
+    assert all(values), "an example evaluated to an empty string"
+    assert len(set(values)) == 4, "two of the worked representations are byte-identical: " + repr(
+        [v.decode("utf-8", "backslashreplace") for v in values]
     )
