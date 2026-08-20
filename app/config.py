@@ -12,11 +12,12 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 # ---------------------------------------------------------------------------
 # Settings (environment variables)
 # ---------------------------------------------------------------------------
+from app.services.nat64 import Pref64Posture, parse_pref64
 
 
 class Settings(BaseModel):
@@ -36,6 +37,10 @@ class Settings(BaseModel):
     # Tidewall never generates this, because a generated value would have to be
     # emitted to logs or stdout to reach the operator, where it would persist.
     BOOTSTRAP_KEY: str | None = None
+    # The deployment's declared NAT64 posture. Unset is not a default: content
+    # export refuses rather than assume this network has no translation. See
+    # app/services/nat64.py and the finding it names.
+    PREF64: str | None = None
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -46,6 +51,17 @@ class Settings(BaseModel):
             if env_val is not None:
                 overrides[field_name] = env_val
         return cls(**overrides)
+
+    # Parsed eagerly on construction, not lazily on access. A property would
+    # defer the failure to the first export, which is the opposite of the
+    # point: a malformed declaration must stop startup, where an operator is
+    # watching, not a single request hours later.
+    pref64_posture: Pref64Posture = Pref64Posture(is_unset=True)
+
+    @model_validator(mode="after")
+    def _parse_pref64(self) -> Settings:
+        object.__setattr__(self, "pref64_posture", parse_pref64(self.PREF64))
+        return self
 
 
 # ---------------------------------------------------------------------------
