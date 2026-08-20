@@ -713,8 +713,11 @@ def test_a_correct_database_is_reclaimed(tmp_path):
     db = _head_db(tmp_path)
     result = _run_session(db)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stdout.count("0|0|0") == 2, result.stdout
-    assert "SEQUENCE-COMPLETE" in result.stdout
+    # Pinned, not searched. A search allows extra output beside the expected
+    # rows -- an added statement's result, a warning, a second marker -- and an
+    # operator keeps this output as their record of what happened.
+    assert result.stdout == "0|0|0\n0|0|0\nSEQUENCE-COMPLETE\n", repr(result.stdout)
+    assert result.stderr == "", repr(result.stderr)
 
 
 @pytest.mark.parametrize("damage", sorted(_DAMAGE, key=lambda k: int(k.split("_")[0])))
@@ -776,8 +779,11 @@ def _clean_reclaimed_db(tmp_path):
 
 
 def test_the_post_close_block_passes_after_a_clean_session(tmp_path):
+    """Silent on success, like the scan it calls."""
     result = _run_postclose(_clean_reclaimed_db(tmp_path))
     assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == "", repr(result.stdout)
+    assert result.stderr == "", repr(result.stderr)
 
 
 def test_the_post_close_block_refuses_a_wal_that_was_not_truncated(tmp_path):
