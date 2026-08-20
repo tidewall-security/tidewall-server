@@ -8,24 +8,32 @@ through the real Alembic chain.
 
 | step | result |
 |---|---|
-| Migrated to `d5a71f3c8e02`, the destructive migration's predecessor | `input_messages`, `output_messages`, `detectors_json`, `summary` all present |
-| Planted a canary in four representations in the legacy content columns | plain, JSON-escaped, `\uXXXX`-escaped, raw bytes |
-| Froze a copy as the backup | sha256 `a6629d032d2071f2fb36bf7617930432aaa6ab5cd73ca6a0cc2eca5357b26230` |
+| Migrated to `d5a71f3c8e02`, the migration's predecessor | all four legacy columns present |
+| Planted a canary in the legacy content columns | four representations |
+| Froze a copy as the backup | see the hashes below |
 | Confirmed all four representations are in the frozen backup | all four found |
 | Upgraded to head `1b42ababed28` | migration succeeded |
 | Ran the runbook's session block | exit 0; `0\|0\|0`, `0\|0\|0`, `SEQUENCE-COMPLETE` |
 | Ran the runbook's post-close block | exit 0; no representation found in the database, WAL or SHM |
-| Reclaimed database | sha256 `e631231124de2d244d0b3e47b117b8ba472ebf97b6aff6d5ee0ea31db840f358` |
+| Reclaimed database | see the hashes below |
 
-Representations checked by the scan: **plain, json, unicode, raw** — all four.
+The four representations were the plain string, its JSON-escaped form, its
+`\uXXXX`-escaped form, and its raw bytes. All four were checked by the scan.
+
+### Artifact hashes
+
+- frozen backup:
+  `a6629d032d2071f2fb36bf7617930432aaa6ab5cd73ca6a0cc2eca5357b26230`
+- reclaimed database:
+  `e631231124de2d244d0b3e47b117b8ba472ebf97b6aff6d5ee0ea31db840f358`
 
 ## Backup and snapshot disposition
 
 | field | value |
 |---|---|
-| Backup identifiers | Rehearsal copy, sha256 `a6629d032d2071f2fb36bf7617930432aaa6ab5cd73ca6a0cc2eca5357b26230` |
+| Backup identifiers | Rehearsal copy; see the frozen-backup hash above |
 | Owner | *OUTSTANDING — see below* |
-| Retention or deletion disposition | Rehearsal copy held in a temporary directory and discarded when the rehearsal ended. No production backup was created or destroyed. |
+| Retention or deletion disposition | Discarded with the rehearsal's temporary directory; no production backup involved |
 | Date | 2026-08-20 |
 
 ## Outstanding

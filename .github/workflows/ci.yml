@@ -33,7 +33,7 @@ jobs:
       # publishes both -- a script the test suite executes and two blocks
       # operators paste.
       - run: uv run shellcheck scripts/scan-artifacts.sh
-      - run: uv run pymarkdown --config .pymarkdown.json scan docs/operations/content-runbook.md
+      - run: uv run pymarkdown --config .pymarkdown.json scan docs/operations/
 
   typecheck:
     name: Type Check
