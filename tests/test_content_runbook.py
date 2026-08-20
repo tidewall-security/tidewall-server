@@ -1303,3 +1303,70 @@ def test_no_invisible_characters_anywhere_in_the_published_artifacts(path):
         }
     )
     assert not offenders, f"{path} contains {[hex(ord(c)) for c in offenders]}"
+
+
+def test_the_scan_says_exactly_what_it_found_and_nothing_else(tmp_path):
+    """The complete diagnostic, not a substring of it.
+
+    Two things this binds that a status-and-substring oracle does not:
+
+    * the message can be negated -- "NOT FOUND in ..." keeps exit 1 and the
+      substring the old tests looked for, so an operator reads that the canary
+      was absent from a scan that found it;
+    * the match itself must never be printed. Quiet matching is the only thing
+      stopping the search from echoing the line it matched, which would copy
+      deleted prompt text into a terminal, a CI log, or the rehearsal record --
+      from the tool whose whole purpose is confirming that text is gone.
+    """
+    db = tmp_path / "t.db"
+    _sqlite_file(db, "nothing interesting")
+    shm = tmp_path / "t.db-shm"
+    shm.write_text(f"prefix {CANARY} suffix")
+
+    result = _run_scan(db, CANARY)
+    assert result.returncode == 1
+    assert result.stdout == f"FOUND in {shm}\n", repr(result.stdout)
+    assert result.stderr == "", repr(result.stderr)
+    assert CANARY not in result.stdout + result.stderr, "the scan echoed the match"
+    assert "prefix" not in result.stdout + result.stderr, "the scan echoed the matched line"
+
+
+def test_a_clean_scan_says_nothing(tmp_path):
+    db = tmp_path / "t.db"
+    _sqlite_file(db, "nothing interesting")
+    result = _run_scan(db, CANARY)
+    assert result.returncode == 0
+    assert result.stdout == "" and result.stderr == "", (result.stdout, result.stderr)
+
+
+def test_the_scan_searches_bytes_not_characters(tmp_path):
+    """The published worked example's raw form is a Latin-1 byte.
+
+    Without the script's own byte-locale override, an inherited UTF-8 locale
+    makes the search reject that byte as illegal and return "could not scan"
+    for a canary that is present. The suite evaluated the raw value and
+    exercised the scanner, but never passed one through the other.
+    """
+    db = tmp_path / "t.db"
+    _sqlite_file(db, "nothing interesting")
+    raw = b'caf\xe9 "acct\\4111"'
+    (tmp_path / "t.db-shm").write_bytes(b"padding " + raw + b" padding")
+
+    # Passed as BYTES. A str is re-encoded as UTF-8 on the way to argv, so the
+    # argument would be caf\xc3\xa9 and would not match the caf\xe9 in the file:
+    # the test would report "not found" for a canary it never searched for.
+    utf8_env = {**os.environ, "LC_ALL": "en_US.UTF-8", "LANG": "en_US.UTF-8"}
+
+    def run(canary):
+        return subprocess.run(
+            [str(SCAN).encode(), str(db).encode(), canary],
+            capture_output=True,
+            cwd=REPO,
+            env=utf8_env,
+        )
+
+    present = run(raw)
+    assert present.returncode == 1, (present.returncode, present.stdout, present.stderr)
+
+    absent = run(b"caf\xe9 absent")
+    assert absent.returncode == 0, (absent.returncode, absent.stdout, absent.stderr)
