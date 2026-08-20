@@ -214,16 +214,27 @@ def test_a_canary_is_matched_literally_not_as_a_pattern(tmp_path):
 #: string, and tilde fences as well as backticks, so a block written
 #: ``` bash was invisible to a `\`\`\`bash` pattern while rendering, and being
 #: pasted, exactly like the others.
-_SHELL_FENCE = re.compile(r"^(?P<fence>```+|~~~+)[ \t]*(?:bash|sh|shell)[ \t]*$", re.M)
+#: EVERY fenced block, whatever its info string. Guessing which info strings
+#: mean "shell an operator will paste" is a losing game: a bare fence,
+#: `console`, `shell-session` and a capitalised `Bash` were each invisible to a
+#: bash/sh/shell list, and every one renders as something a reader copies. So
+#: the rule is inverted -- every fence must be accounted for, and this document
+#: happens to contain only shell.
+_ANY_FENCE = re.compile(r"^(?P<fence>```+|~~~+)[ \t]*(?P<info>[^\n]*)$", re.M)
 
 
 def _shell_blocks(text: str) -> list[str]:
+    """Every fenced block, in document order."""
     blocks = []
-    for match in _SHELL_FENCE.finditer(text):
-        fence = match.group("fence")[0] * 3
+    position = 0
+    while True:
+        match = _ANY_FENCE.search(text, position)
+        if match is None:
+            return blocks
+        fence = match.group("fence")
         end = text.index(f"\n{fence}", match.end())
         blocks.append(text[match.end() + 1 : end + 1])
-    return blocks
+        position = end + len(fence) + 1
 
 
 def _canary_block() -> str:
@@ -1146,4 +1157,24 @@ def test_every_shell_block_in_the_runbook_is_a_gated_one():
     blocks = _shell_blocks(RUNBOOK.read_text())
     gated = [_extract("runbook:session"), _extract("runbook:postclose"), _canary_block()]
     ungated = [b for b in blocks if b not in gated]
-    assert not ungated, "the runbook publishes shell that no test executes or compares:\n" + "\n---\n".join(ungated)
+    assert not ungated, "the runbook publishes a code block that no test executes or compares:\n" + "\n---\n".join(
+        ungated
+    )
+
+
+def test_the_runbook_uses_no_indented_code_blocks():
+    """Because the fence enumeration cannot see them.
+
+    A four-space indented block renders as code and reads as something to
+    paste, while being invisible to every gate here. The runbook uses fences
+    throughout; this keeps it that way rather than teaching the enumeration a
+    second syntax it would then also have to get right.
+    """
+    inside_fence = False
+    offenders = []
+    for number, line in enumerate(RUNBOOK.read_text().splitlines(), start=1):
+        if _ANY_FENCE.match(line):
+            inside_fence = not inside_fence
+        elif not inside_fence and line.startswith("    ") and line.strip():
+            offenders.append(f"{number}: {line!r}")
+    assert not offenders, "indented code blocks are invisible to the fence gate:\n" + "\n".join(offenders)
