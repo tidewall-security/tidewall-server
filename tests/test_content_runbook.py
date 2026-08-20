@@ -1515,7 +1515,10 @@ _CHANGELOG_WARNING = (
 def test_the_changelog_warning_is_exactly_the_declared_text():
     changelog = (REPO / "CHANGELOG.md").read_text()
     start = changelog.index("### Upgrading")
-    assert changelog[start : start + len(_CHANGELOG_WARNING)] == _CHANGELOG_WARNING
+    # To the end of the section, not the length of the expected text -- a prefix
+    # comparison accepts anything appended after it, inside the same warning.
+    end = changelog.index("\n### ", start + 5)
+    assert changelog[start:end].rstrip() == _CHANGELOG_WARNING
 
 
 #: Every row of the rehearsal record's two tables, by label. Searching the
@@ -1550,15 +1553,26 @@ def test_the_rehearsal_record_rows_are_exactly_the_declared_evidence():
     cannot prove the historical run happened; it does stop the record from
     describing a run the published program could not have produced.
     """
-    rows = dict(re.findall(r"(?m)^\|\s*(.+?)\s*\|\s*(.+?)\s*\|$", REHEARSAL.read_text()))
-    separators = {key for key in rows if set(key) <= set("-: ")}
-    assert {k: v for k, v in rows.items() if k not in separators} == _REHEARSAL_ROWS
+    # An ordered list of pairs, not a dict: dict() silently keeps the last of
+    # any duplicated label, so a second contradicting row with the same label
+    # disappears from the comparison entirely.
+    pairs = [
+        (key, value)
+        for key, value in re.findall(r"(?m)^\|\s*(.+?)\s*\|\s*(.+?)\s*\|$", REHEARSAL.read_text())
+        if not set(key) <= set("-: ")
+    ]
+    assert pairs == list(_REHEARSAL_ROWS.items())
 
     # The disposition fields must still be filled in, not merely present.
     for field in ("Backup identifiers", "Owner", "Retention or deletion disposition", "Date"):
         assert _REHEARSAL_ROWS[field] and "OUTSTANDING" not in _REHEARSAL_ROWS[field]
 
-    assert len(re.findall(r"`[0-9a-f]{64}`", REHEARSAL.read_text())) == 2
+    # Bound to their labels, not counted. Two hashes somewhere in the document
+    # says nothing about which artifact each describes.
+    lines = REHEARSAL.read_text().splitlines()
+    for label in ("frozen backup", "reclaimed database"):
+        index = next(i for i, text in enumerate(lines) if text.startswith(f"- {label}:"))
+        assert re.fullmatch(r"\s*`[0-9a-f]{64}`", lines[index + 1]), (label, lines[index + 1])
 
 
 #: The two sections that ARE the honesty boundary, compared whole.
@@ -1641,3 +1655,70 @@ def test_the_honesty_boundary_sections_are_exactly_as_declared(heading):
     start = text.index(heading)
     end = text.index("\n## ", start + 5)
     assert text[start:end] == _HONESTY_SECTIONS[heading]
+
+
+#: The scanner's complete source. Its behaviour is covered by two dozen cases,
+#: which is not the same as binding the program: an operation appended after
+#: the scan ran against every fixture database with all tests green, and an
+#: operator would have run it too.
+#:
+#: The three runbook blocks are pinned because they live in a Markdown file
+#: where a change is easy to miss. This is pinned for the same reason in
+#: reverse -- it is a file a reviewer reads as code, and the thing that makes it
+#: dangerous is that operators paste its invocation without reading it at all.
+_PERMITTED_SCRIPT = (
+    "#!/usr/bin/env bash\n"
+    "# scan-artifacts.sh DB CANARY [CANARY...]\n"
+    "#\n"
+    "# Search a SQLite database and its sidecars for byte sequences that should no\n"
+    "# longer be recoverable from them.\n"
+    "#\n"
+    "#   0 - scanned every present artifact, nothing found\n"
+    "#   1 - found\n"
+    "#   2 - could not scan; NOT a clean result\n"
+    "#\n"
+    '# Exit 2 is deliberately distinct from 0. "The scan did not happen" must never\n'
+    '# be read as "nothing was found", which is the whole reason this is a script\n'
+    "# with three statuses rather than a loop with a boolean.\n"
+    'DB="$1"; shift\n'
+    "\n"
+    "# Validated BEFORE the file loop. With these checks inside it, a run with no\n"
+    "# artifacts present skipped every iteration and reported clean.\n"
+    '[ "$#" -gt 0 ] || { echo "no canary supplied"; exit 2; }\n'
+    'for c in "$@"; do\n'
+    '  [ -n "$c" ] || { echo "empty canary supplied"; exit 2; }\n'
+    "done\n"
+    '[ -e "$DB" ] || { echo "no database at $DB"; exit 2; }\n'
+    "\n"
+    "found=0\n"
+    "scanned=0\n"
+    'for f in "$DB" "$DB-wal" "$DB-shm"; do\n'
+    '  [ -e "$f" ] || continue\n'
+    '  for c in "$@"; do\n'
+    "    # -F: a canary is a literal, not a pattern. Without it a canary of '.*'\n"
+    "    # reports a find for a string that is absent.\n"
+    "    # The search tool's own stderr is discarded: its wording differs between\n"
+    "    # platforms, so leaving it through makes this script's output contract\n"
+    "    # unpinnable -- and an unpinnable contract is one a reassuring sentence can\n"
+    "    # be added to. Everything an operator needs is in our own message below:\n"
+    "    # which artifact, and the tool's exit status.\n"
+    '    LC_ALL=C grep -qaF -e "$c" -- "$f" 2>/dev/null; rc=$?\n'
+    '    case "$rc" in\n'
+    '      0) echo "FOUND in $f"; found=1 ;;\n'
+    "      1) : ;;\n"
+    '      *) echo "scan FAILED on $f (grep exit $rc)"; exit 2 ;;\n'
+    "    esac\n"
+    "  done\n"
+    "  scanned=$((scanned+1))\n"
+    "done\n"
+    "\n"
+    "# Unreachable on a stable filesystem -- the database check above fires first --\n"
+    "# and kept for the case where an artifact disappears between that check and\n"
+    "# this loop. No test binds it, and the test module says so.\n"
+    '[ "$scanned" -gt 0 ] || { echo "scanned nothing"; exit 2; }\n'
+    'exit "$found"\n'
+)
+
+
+def test_the_scan_script_is_exactly_the_permitted_program():
+    assert SCAN.read_text() == "".join(_PERMITTED_SCRIPT)
