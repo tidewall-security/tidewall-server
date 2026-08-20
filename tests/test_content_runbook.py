@@ -350,7 +350,17 @@ def _shell_lines(block: str) -> list[str]:
     start = next(i for i, line in enumerate(lines) if _HEREDOC_OPEN in line)
     end = next(i for i, line in enumerate(lines) if i > start and line.strip() == "SQL")
     outside = lines[:start] + [lines[start]] + lines[end + 1 :]
-    return [line.strip() for line in outside if line.strip() and not line.strip().startswith("#")]
+    kept = [line for line in outside if line.strip()]
+    # Rejected, not skipped -- the SQL parser already refuses comments inside
+    # the heredoc and the shell should match it. A comment-only line is
+    # reader-visible: one added here made a false claim about the procedure
+    # while every comparison stayed equal, because the comparison dropped it.
+    assert not [line for line in kept if line.strip().startswith("#")], (
+        "the session block's shell contains a comment. It is reader-visible, so "
+        "add it to _PERMITTED_SHELL deliberately rather than letting the "
+        "comparison discard it."
+    )
+    return [line.strip() for line in kept]
 
 
 def test_the_session_block_shell_is_exactly_the_permitted_program():
@@ -1079,11 +1089,18 @@ def test_the_worked_canary_examples_are_four_distinct_values():
     assert result.returncode == 0, result.stderr
 
     values = result.stdout.split(b"\0")
-    assert len(values) == 4
-    assert all(values), "an example evaluated to an empty string"
-    assert len(set(values)) == 4, "two of the worked representations are byte-identical: " + repr(
-        [v.decode("utf-8", "backslashreplace") for v in values]
-    )
+    #: The exact bytes each form must evaluate to, measured from the published
+    #: block rather than guessed. Cardinality and distinctness are not enough:
+    #: appending a non-breaking space to every assignment left four non-empty,
+    #: distinct and WRONG values, and an operator scanning for those finds
+    #: nothing while the real canary is still in the file.
+    expected = [
+        b'caf\xc3\xa9 "acct\\4111"',
+        b'caf\xc3\xa9 \\"acct\\\\4111\\"',
+        b'caf\\u00e9 \\"acct\\\\4111\\"',
+        b'caf\xe9 "acct\\4111"',
+    ]
+    assert values == expected, [v.decode("utf-8", "backslashreplace") for v in values]
 
 
 #: The post-close block's complete program. It had no whole-program gate at
@@ -1106,11 +1123,9 @@ def test_the_post_close_block_is_exactly_the_permitted_program():
     Binding each input and each argument separately is not the same as binding
     the program: nothing stopped an extra line being added between them.
     """
-    lines = [
-        line.strip()
-        for line in _extract("runbook:postclose").splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    ]
+    # Comment lines included: they are reader-visible, and a comparison that
+    # drops them accepts a false claim about the procedure.
+    lines = [line.strip() for line in _extract("runbook:postclose").splitlines() if line.strip()]
     assert lines == _PERMITTED_POSTCLOSE
 
 
@@ -1142,7 +1157,13 @@ def test_the_worked_canary_block_is_exactly_the_permitted_program():
     # operator what that representation is for, and rewriting one to say a form
     # is optional changed what an operator would do while every gate stayed
     # green.
-    lines = [line.rstrip() for line in _canary_block().splitlines() if line.strip()]
+    # NOT stripped. A non-breaking space appended outside the closing quote of
+    # each assignment is erased by Python's strip() -- U+00A0 is whitespace to
+    # str.strip() -- while bash concatenates it to the value. The four canaries
+    # then differ from the operator's actual data by an invisible character,
+    # the scan finds nothing, and a clean result means the opposite of what it
+    # says. Physical lines, compared as they are.
+    lines = [line for line in _canary_block().splitlines() if line.strip()]
     assert lines == _PERMITTED_CANARY
 
 
@@ -1167,8 +1188,14 @@ def _rendered_fences(document=None):
 
 def _rendered_headings(document=None):
     tokens = _rendered(document)
+    # `token.level` is the container nesting depth. Without it, moving a
+    # declared section into a block quote or a list item leaves the (tag, text)
+    # pair identical while a renderer presents it as quoted or nested material
+    # rather than as a step of the procedure.
     return [
-        (token.tag, tokens[index + 1].content) for index, token in enumerate(tokens) if token.type == "heading_open"
+        (token.level, token.tag, tokens[index + 1].content)
+        for index, token in enumerate(tokens)
+        if token.type == "heading_open"
     ]
 
 
@@ -1179,25 +1206,25 @@ def _rendered_headings(document=None):
 #: A regex over `^#` counted 29 of these, because it also counted the shell
 #: comments inside the fenced blocks. The parser sees 19.
 _HEADINGS = [
-    ("h1", "Reclaiming deleted content"),
-    ("h2", "1. Upgrading to this release is destructive"),
-    ("h2", "2. Reclaiming the space"),
-    ("h3", "Before you start"),
-    ("h3", "Why the heredoc is quoted"),
-    ("h3", "Why two checkpoints"),
-    ("h3", "Reading the result"),
-    ("h3", "After the session has closed"),
-    ("h2", "3. What this does, and what it does not"),
-    ("h2", "4. Where the bytes may still be"),
-    ("h2", "5. Backup and snapshot disposition"),
-    ("h2", "6. Where content crosses the network"),
-    ("h2", "7. Retention"),
-    ("h2", "8. Grants"),
-    ("h2", "9. Export targets"),
-    ("h2", "10. One live server per database"),
-    ("h2", "11. Export attempts that did not resolve"),
-    ("h2", "12. A deployment requirement: NAT64"),
-    ("h2", "Deviations from the accepted design"),
+    (0, "h1", "Reclaiming deleted content"),
+    (0, "h2", "1. Upgrading to this release is destructive"),
+    (0, "h2", "2. Reclaiming the space"),
+    (0, "h3", "Before you start"),
+    (0, "h3", "Why the heredoc is quoted"),
+    (0, "h3", "Why two checkpoints"),
+    (0, "h3", "Reading the result"),
+    (0, "h3", "After the session has closed"),
+    (0, "h2", "3. What this does, and what it does not"),
+    (0, "h2", "4. Where the bytes may still be"),
+    (0, "h2", "5. Backup and snapshot disposition"),
+    (0, "h2", "6. Where content crosses the network"),
+    (0, "h2", "7. Retention"),
+    (0, "h2", "8. Grants"),
+    (0, "h2", "9. Export targets"),
+    (0, "h2", "10. One live server per database"),
+    (0, "h2", "11. Export attempts that did not resolve"),
+    (0, "h2", "12. A deployment requirement: NAT64"),
+    (0, "h2", "Deviations from the accepted design"),
 ]
 
 
