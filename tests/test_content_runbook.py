@@ -1721,11 +1721,45 @@ _NO_BOILERPLATE_NONE = (
 )
 
 
+#: The CHANGELOG's PREF64 item, complete. Pinned because changing "required"
+#: to "optional" left every selected test green -- the no-boilerplate rule
+#: says nothing about whether the entry still states the requirement.
+_CHANGELOG_PREF64_ITEM = """- **`PREF64` is now required for content export.** On a network running NAT64
+  with a Network-Specific Prefix, a destination could resolve to an address the
+  sender accepted as public while the network translated it to an internal
+  IPv4 address. The sender now decodes RFC 6052 translation against a posture
+  the deployment declares, and refuses every content export until `PREF64` is
+  set. See [the content runbook](docs/operations/content-runbook.md) section 12
+  for what to set it to, and for what the control does not cover: it is only as
+  good as the declaration, which can be false, incomplete, or stale after a
+  network change.
+
+"""
+
+
+def test_the_changelog_states_pref64_is_required():
+    assert _CHANGELOG_PREF64_ITEM in (REPO / "CHANGELOG.md").read_text()
+
+
 @pytest.mark.parametrize("document", _NO_BOILERPLATE_NONE, ids=lambda p: p.name)
 def test_no_operator_document_offers_pref64_none_as_boilerplate(document):
+    """No pasteable assignment, in any ordinary spelling.
+
+    Two byte strings are not the stated rule: `PREF64='none'` passed all three
+    cases while handing the operator exactly what the rule exists to prevent.
+    """
     text = document.read_text()
-    assert "PREF64=none" not in text, f"{document.name} presents PREF64=none as a value to paste"
-    assert "PREF64 = none" not in text, document.name
+    for spelling in (
+        "PREF64=none",
+        "PREF64 = none",
+        "PREF64='none'",
+        'PREF64="none"',
+        "PREF64=`none`",
+        "PREF64: none",
+    ):
+        assert spelling not in text, f"{document.name} offers {spelling} as a value to paste"
+    # And the same with the value quoted in Markdown.
+    assert "PREF64=`none`" not in text, document.name
 
 
 def test_the_changelog_warning_is_exactly_the_declared_text():

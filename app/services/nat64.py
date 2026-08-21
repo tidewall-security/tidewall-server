@@ -1,6 +1,7 @@
 """RFC 6052 NAT64 translation, against the deployment's declared posture.
 
-`validate_destination` refuses destinations that are not public. On a network
+`validate_destination` applies an enumerated address policy to every
+resolved address. On a network
 running NAT64 with a Network-Specific Prefix, that refusal does not hold on its
 own: an NSP is the deploying organisation's own prefix, chosen from space this
 runtime classifies as global, so an address inside it passes an address-scope

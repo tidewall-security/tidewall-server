@@ -189,3 +189,36 @@ def test_a_malformed_pref64_stops_startup(monkeypatch, raw):
     monkeypatch.setenv("PREF64", raw)
     with pytest.raises((ValidationError, ValueError)):
         Settings.from_env()
+
+
+def test_a_malformed_pref64_stops_real_lifespan_before_any_service(monkeypatch, tmp_path):
+    """Through `app.main.lifespan`, not `Settings.from_env` alone.
+
+    The unit tests above prove the parser rejects the value. They do not prove
+    the ORDER: that startup fails before the process lock, the database, or any
+    service is constructed. `Settings.from_env()` is the first statement in
+    lifespan, so a malformed value must stop it there -- and that ordering is
+    what this binds, by spying on the next stateful boundary and asserting it
+    is never reached.
+    """
+    import asyncio
+
+    from fastapi import FastAPI
+    from pydantic import ValidationError
+
+    import app.main as main
+
+    reached = []
+    monkeypatch.setattr(main, "acquire_process_lock", lambda *a, **k: reached.append("lock"), raising=False)
+    monkeypatch.setenv("PREF64", "not-a-prefix/32")
+    monkeypatch.setenv("DB_URL", f"sqlite:///{tmp_path / 'x.db'}")
+
+    async def _enter():
+        async with main.lifespan(FastAPI()):
+            pass
+
+    with pytest.raises((ValidationError, ValueError)):
+        asyncio.run(_enter())
+
+    assert reached == [], "startup reached a stateful boundary before rejecting PREF64"
+    assert not (tmp_path / "x.db").exists(), "a rejected configuration left a database behind"

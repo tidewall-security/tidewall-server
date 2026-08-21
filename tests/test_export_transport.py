@@ -1116,6 +1116,21 @@ _BAD_U_OCTET = [
 ]
 
 
+#: A declared deviation from the accepted plan, Task 3 step 13.
+#:
+#: The plan requires each length's extraction-row mutation to fail that
+#: length's PRIVATE, PUBLIC and exact-value cases. Measured, it does not: a
+#: one-bit shift of a row's start leaves the boundary classification unchanged
+#: for most lengths, because a slightly-wrong decode of a private address is
+#: usually still private (and of a public one, still public). Only the /96 row
+#: fails all three.
+#:
+#: The exact decoder oracles in tests/test_nat64_decode.py DO bind every row
+#: individually, so no row is unbound -- but that is a different statement from
+#: the one the plan makes, and recording it as satisfied would be the defect
+#: this programme exists to remove. Stated here instead.
+
+
 @pytest.mark.parametrize("prefix,addr", _PRIVATE_EMBEDDED)
 def test_a_translated_private_address_is_refused(monkeypatch, prefix, addr):
     import app.services.export_transport as t
@@ -1203,10 +1218,20 @@ def test_an_address_outside_every_configured_prefix_is_untouched(monkeypatch):
     assert addresses == ["2600:1f00::1"]
 
 
-@pytest.mark.parametrize(
-    "addr",
-    [a for _, a in _PRIVATE_EMBEDDED] + [a for _, a in _PUBLIC_EMBEDDED] + [a for _, a in _BAD_U_OCTET],
+#: Every NAT64 fixture in this module, including the two written by hand
+#: outside the three tables. The first version of this guard enumerated only
+#: the tables -- and the two-answer fixture and the overlap address, which are
+#: exactly where the documentation-space defect bit, were not covered by the
+#: guard meant to prevent it.
+_ALL_NAT64_FIXTURES = (
+    [a for _, a in _PRIVATE_EMBEDDED]
+    + [a for _, a in _PUBLIC_EMBEDDED]
+    + [a for _, a in _BAD_U_OCTET]
+    + ["2600:1f00:a01:203::", _OVERLAP_ADDR]
 )
+
+
+@pytest.mark.parametrize("addr", _ALL_NAT64_FIXTURES)
 def test_every_nat64_fixture_is_globally_classified(addr):
     """Otherwise the refusal cases pass for the wrong reason.
 
@@ -1291,3 +1316,63 @@ def test_the_residual_comment_no_longer_claims_the_control_is_absent():
     # And it must still say what the control DOES depend on.
     assert "stale after a network" in source
     assert "once per application lifespan" in source
+
+
+#: The unset refusal message, complete.
+#:
+#: Four substring assertions are not an exact pin, and the difference is the
+#: whole property: adding "such as 64:ff9b::/96" (no `PREF64=` assignment)
+#: passed them, which is the bare suggested-prefix shape the plan requires the
+#: tests to kill. So did changing "requires" to "needs".
+_UNSET_MESSAGE = (
+    "content export requires this deployment's NAT64 posture: set PREF64 to the "
+    "translation prefixes reachable from this server, or to the value meaning "
+    "no NAT64 translation is reachable, once you have confirmed which is true "
+    "for this network"
+)
+
+
+def test_the_unset_refusal_message_is_exactly_the_declared_text():
+    from app.services.nat64 import parse_pref64
+
+    with pytest.raises(DestinationRefused) as caught:
+        validate_destination("https://example.com/hook", parse_pref64(None))
+    assert str(caught.value) == _UNSET_MESSAGE
+
+
+#: `_is_public`'s contract comment, complete. The plan requires appending any
+#: sentence to it to fail; only the validator docstring was pinned, so an
+#: appended sentence passed every selected test.
+_IS_PUBLIC_CONTRACT = """#: NAT64, stated rather than implied.
+#:
+#: 64:ff9b::/96 (RFC 6052 well-known prefix) and 64:ff9b:1::/48 (RFC 8215
+#: local use) are both refused: the first because this runtime marks it
+#: reserved, the second because it is local by definition. Note that IANA
+#: marks the well-known prefix globally reachable and RFC 6052 requires it to
+#: carry only global IPv4, so refusing it is a conservative policy rather than
+#: a classification -- a NAT64-only deployment cannot export through it and
+#: needs an IPv4 or dual-stack route to its receiver.
+#:
+#: A Network-Specific Prefix is ordinary global IPv6, and the IPv4 address
+#: behind it may be internal. No generic address-scope predicate WITHOUT
+#: deployment prefix knowledge can detect that -- so `_refuse_translated_non_public`
+#: is given the knowledge, from `PREF64`, and decodes RFC 6052 translation for
+#: every matching prefix.
+#:
+#: The residual is now the declaration, not the absence of a control. This is
+#: defeated by a `PREF64` that is false, incomplete, stale after a network
+#: change, or mistyped into a different valid prefix, and by a translator that
+#: does not follow RFC 6052. The posture is read once per application lifespan
+#: and is not refreshed while it runs.
+#:
+#: `docs/operations/content-runbook.md` section 12 carries this for operators.
+"""
+
+
+def test_the_is_public_contract_comment_is_exactly_the_declared_text():
+    source = (pathlib.Path(__file__).resolve().parents[1] / "app" / "services" / "export_transport.py").read_text()
+    assert _IS_PUBLIC_CONTRACT in source
+    # Exactly once, and nothing appended to it: the block ends where declared.
+    assert source.count(_IS_PUBLIC_CONTRACT) == 1
+    after = source.split(_IS_PUBLIC_CONTRACT, 1)[1]
+    assert not after.startswith("#:"), "a sentence was appended to the contract comment"
