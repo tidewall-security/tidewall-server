@@ -1425,9 +1425,51 @@ _HEADINGS = [
     (0, "h2", "9. Export targets"),
     (0, "h2", "10. One live server per database"),
     (0, "h2", "11. Export attempts that did not resolve"),
-    (0, "h2", "12. A deployment requirement: NAT64"),
+    (0, "h2", "12. A required setting: PREF64"),
     (0, "h2", "Deviations from the accepted design"),
 ]
+
+
+#: Section 12's body, complete. The heading alone was pinned before, so the
+#: pre-fix text -- which said the sender had no Pref64 configuration and that
+#: this was "not a closure" -- could be restored verbatim with every gate
+#: green. These are the three facts an operator has to have: that the setting
+#: is REQUIRED, that the declaration is what the control depends on, and that
+#: it is not refreshed without a restart.
+_SECTION_12 = """## 12. A required setting: PREF64
+
+On a network running NAT64 with a Network-Specific Prefix, an export target's
+hostname can resolve to an address this server accepts as public while the
+network translates it to an internal IPv4 destination.
+
+The sender now checks this, against a posture you declare. **`PREF64` is
+required: content export refuses every request until it is set.**
+
+Set it to this deployment's translation prefixes, comma-separated, using RFC
+6052 lengths `/32`, `/40`, `/48`, `/56`, `/64` or `/96`. If no NAT64
+translation is reachable from this server, set it to the value meaning that,
+**after confirming it** — the server cannot check the claim, and a wrong
+declaration reinstates the defect.
+
+**The control is only as good as the declaration.** It is defeated by a
+declaration that is false, incomplete, stale after a network change, mistyped
+into a different valid prefix, or by a translator that does not follow RFC
+6052.
+
+**The posture is read once per application lifespan and is not refreshed while
+it runs.** A Pref64 or routing change requires a restart before it takes
+effect.
+
+Denying egress to the Pref64, or applying the embedded IPv4's policy at the
+gateway (RFC 6052 §5.3), remains worthwhile defence in depth.
+
+---
+
+"""
+
+
+def test_the_nat64_section_is_exactly_the_declared_body():
+    assert _section_by_heading(RUNBOOK.read_text(), "12. A required setting: PREF64") == _SECTION_12
 
 
 def test_the_runbook_renders_exactly_the_declared_sections():
@@ -1663,6 +1705,27 @@ _CHANGELOG_UNRELEASED_HEADINGS = [
     (0, "h3", "Security"),
     (0, "h3", "Changed — breaking"),
 ]
+
+
+#: No operator document may present `PREF64=none` as a value to paste.
+#:
+#: The unset interlock is the reason an unverifiable `none` is defensible at
+#: all. If installation material tells every operator to paste it to clear the
+#: error, the interlock is theatre and this whole control is decoration. The
+#: rule is bound across every operator-facing document this work touches, not
+#: only the error message.
+_NO_BOILERPLATE_NONE = (
+    REPO / "CHANGELOG.md",
+    RUNBOOK,
+    REPO / "docs" / "operations" / "rehearsals" / "2026-08-20-migration-rehearsal.md",
+)
+
+
+@pytest.mark.parametrize("document", _NO_BOILERPLATE_NONE, ids=lambda p: p.name)
+def test_no_operator_document_offers_pref64_none_as_boilerplate(document):
+    text = document.read_text()
+    assert "PREF64=none" not in text, f"{document.name} presents PREF64=none as a value to paste"
+    assert "PREF64 = none" not in text, document.name
 
 
 def test_the_changelog_warning_is_exactly_the_declared_text():

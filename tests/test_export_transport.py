@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import pathlib
 from unittest.mock import patch
 
 import pytest
@@ -1216,3 +1217,77 @@ def test_every_nat64_fixture_is_globally_classified(addr):
     import app.services.export_transport as t
 
     assert t._is_public(addr), f"{addr} is refused by the generic predicate, not by Pref64"
+
+
+# ---------------------------------------------------------------------------
+# The contract text, pinned exactly
+#
+# The old docstring promised to "refuse anything that is not a public HTTPS
+# endpoint". That is false whenever the declared posture is wrong, incomplete
+# or stale -- and address scope plus Pref64 decoding cannot establish actual
+# public reachability either way.
+#
+# Two enumerated surfaces are pinned. A new absolute promise in a THIRD
+# docstring is caught by review, not by this test: "any new absolute promise"
+# is an unbounded semantic property, and a forbidden-string list cannot
+# recognise "guarantees global reachability". That limit is declared here
+# rather than implied by a broader claim.
+# ---------------------------------------------------------------------------
+
+_VALIDATE_DESTINATION_CONTRACT = """Refuse a destination that fails the enumerated address policy.
+
+Every resolved address must pass the address policy below, and RFC 6052
+translation is checked against the deployment's DECLARED posture. This does
+NOT establish that the endpoint is public: address scope plus Pref64
+decoding cannot say where the host's effective routes send an ordinary
+global address, nor whether an internal service is deliberately numbered
+from global space.
+
+*posture* is required, not defaulted. A default is how this silently
+reverts.
+
+Returns the host, the port, and the ordered set of validated addresses. The
+connection is made to one of *those*, so a name that answers differently on a
+second lookup cannot rebind past this check.
+
+The URL shape is checked before resolving, so a hostile URL cannot even make
+this server perform a DNS lookup of the attacker's choosing.
+"""
+
+
+def test_the_validator_contract_is_exactly_the_declared_text():
+    from app.services.export_transport import validate_destination as fn
+
+    assert fn.__doc__ == _VALIDATE_DESTINATION_CONTRACT
+
+
+def test_the_validator_contract_makes_no_absolute_public_endpoint_promise():
+    """The specific sentence that was false, and its close variants."""
+    from app.services.export_transport import validate_destination as fn
+
+    text = (fn.__doc__ or "").lower()
+    for forbidden in (
+        "refuse anything that is not a public https endpoint",
+        "anything that is not a public",
+    ):
+        assert forbidden not in text, forbidden
+
+
+def test_the_residual_comment_no_longer_claims_the_control_is_absent():
+    """The governing finding requires this comment repaired with the fix.
+
+    It used to say the module had no Pref64 configuration and that the blocker
+    was still open. Both became false when the control landed, and a comment
+    describing a world that no longer exists is the defect class this whole
+    programme is about.
+    """
+    source = (pathlib.Path(__file__).resolve().parents[1] / "app" / "services" / "export_transport.py").read_text()
+    for stale in (
+        "configuration this module does not have",
+        "and it is still open",
+        "saying so does not close it",
+    ):
+        assert stale not in source, stale
+    # And it must still say what the control DOES depend on.
+    assert "stale after a network" in source
+    assert "once per application lifespan" in source

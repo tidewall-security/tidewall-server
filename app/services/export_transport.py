@@ -91,15 +91,19 @@ _REFUSED_NETWORKS = (
 #: a classification -- a NAT64-only deployment cannot export through it and
 #: needs an IPv4 or dual-stack route to its receiver.
 #:
-#: The residual: a Network-Specific Prefix is ordinary global IPv6, and the
-#: IPv4 address behind it may be internal. A predicate that sees only the
-#: address cannot close that -- one that knew the deployment's translation
-#: prefixes could, which is configuration this module does not have and is not
-#: the place to invent. It is a property of the network the server runs on.
-#: `docs/operations/content-runbook.md` section 12 states it as a deployment
-#: requirement, and states explicitly that saying so does not close it:
-#: `internal/findings/P1-nat64-nsp-sender-bypass.md` is the release blocker,
-#: and it is still open.
+#: A Network-Specific Prefix is ordinary global IPv6, and the IPv4 address
+#: behind it may be internal. No generic address-scope predicate WITHOUT
+#: deployment prefix knowledge can detect that -- so `_refuse_translated_non_public`
+#: is given the knowledge, from `PREF64`, and decodes RFC 6052 translation for
+#: every matching prefix.
+#:
+#: The residual is now the declaration, not the absence of a control. This is
+#: defeated by a `PREF64` that is false, incomplete, stale after a network
+#: change, or mistyped into a different valid prefix, and by a translator that
+#: does not follow RFC 6052. The posture is read once per application lifespan
+#: and is not refreshed while it runs.
+#:
+#: `docs/operations/content-runbook.md` section 12 carries this for operators.
 
 #: Headers this server sets itself on a content export. They are refused in a
 #: target's configuration rather than allowed to lose a merge, because HTTP
