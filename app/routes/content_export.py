@@ -293,7 +293,11 @@ async def _authorize_and_export(request: Request) -> Response:
         if not isinstance(url, str) or not url:
             return _error(409, "This destination may not receive this content", reason="unsupported_transport")
         try:
-            host, port, addresses = validate_destination(url)
+            # The posture the operator declared at startup, from the settings
+            # object already on app.state. Read here rather than defaulted, so
+            # an unset declaration reaches the boundary and is refused there.
+            posture = request.app.state.settings.pref64_posture
+            host, port, addresses = validate_destination(url, posture)
             headers = validate_headers(config.get("headers"))
         except DestinationRefused as exc:
             return _error(

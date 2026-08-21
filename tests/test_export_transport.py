@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import pathlib
 from unittest.mock import patch
 
 import pytest
@@ -20,6 +21,15 @@ from app.services.export_transport import (
     validate_destination,
     validate_headers,
 )
+from app.services.nat64 import parse_pref64
+
+#: An explicit "no NAT64 translation is reachable" declaration.
+#:
+#: Every pre-existing case uses this rather than an unset posture. Unset is
+#: deliberately fail-closed, so passing it here would make each refusal
+#: assertion pass because of the new interlock -- before the URL shape,
+#: resolver, or address-policy behaviour the case actually names ever runs.
+_NONE = parse_pref64("none")
 
 
 @pytest.mark.parametrize(
@@ -50,7 +60,7 @@ def test_a_refused_url_shape_never_resolves(url, why, monkeypatch):
 
     monkeypatch.setattr(t, "_resolve", _must_not_resolve)
     with pytest.raises(DestinationRefused):
-        validate_destination(url)
+        validate_destination(url, _NONE)
 
 
 #: Every entry in the IANA IPv4 and IPv6 Special-Purpose Address Registries
@@ -154,7 +164,7 @@ def test_a_non_public_address_literal_is_refused(literal, monkeypatch):
     # stub keeps the test off the network without changing what is checked.
     monkeypatch.setattr(t, "_resolve", lambda host, port: [host.strip("[]")])
     with pytest.raises(DestinationRefused):
-        validate_destination(f"https://{literal}/hook")
+        validate_destination(f"https://{literal}/hook", _NONE)
 
 
 @pytest.mark.parametrize(
@@ -176,7 +186,7 @@ def test_an_address_that_wears_a_disguise_is_refused(literal, why, monkeypatch):
 
     monkeypatch.setattr(t, "_resolve", lambda host, port: [host.strip("[]")])
     with pytest.raises(DestinationRefused):
-        validate_destination(f"https://{literal}/hook")
+        validate_destination(f"https://{literal}/hook", _NONE)
 
 
 @pytest.mark.parametrize(
@@ -224,18 +234,18 @@ def test_the_places_this_policy_and_the_registry_disagree(literal, accepted, why
 
     monkeypatch.setattr(t, "_resolve", lambda host, port: [host.strip("[]")])
     if accepted:
-        host, port, addrs = validate_destination(f"https://{literal}/hook")
+        host, port, addrs = validate_destination(f"https://{literal}/hook", _NONE)
         assert addrs == [literal.strip("[]")]
     else:
         with pytest.raises(DestinationRefused):
-            validate_destination(f"https://{literal}/hook")
+            validate_destination(f"https://{literal}/hook", _NONE)
 
 
 def test_a_public_destination_is_accepted(monkeypatch):
     import app.services.export_transport as t
 
     monkeypatch.setattr(t, "_resolve", lambda host, port: ["93.184.216.34"])
-    host, port, addrs = validate_destination("https://example.com/hook")
+    host, port, addrs = validate_destination("https://example.com/hook", _NONE)
     assert (host, port, addrs) == ("example.com", 443, ["93.184.216.34"])
 
 
@@ -246,7 +256,7 @@ def test_every_resolved_address_is_checked_not_just_the_first(monkeypatch):
 
     monkeypatch.setattr(t, "_resolve", lambda host, port: ["93.184.216.34", "10.0.0.1"])
     with pytest.raises(DestinationRefused):
-        validate_destination("https://example.com/hook")
+        validate_destination("https://example.com/hook", _NONE)
 
 
 def test_a_name_that_resolves_to_nothing_is_refused(monkeypatch):
@@ -254,7 +264,7 @@ def test_a_name_that_resolves_to_nothing_is_refused(monkeypatch):
 
     monkeypatch.setattr(t, "_resolve", lambda host, port: [])
     with pytest.raises(DestinationRefused):
-        validate_destination("https://example.com/hook")
+        validate_destination("https://example.com/hook", _NONE)
 
 
 def test_a_resolution_failure_is_refused_not_raised(monkeypatch):
@@ -265,7 +275,7 @@ def test_a_resolution_failure_is_refused_not_raised(monkeypatch):
 
     monkeypatch.setattr(t, "_resolve", _boom)
     with pytest.raises(DestinationRefused):
-        validate_destination("https://example.com/hook")
+        validate_destination("https://example.com/hook", _NONE)
 
 
 @pytest.mark.parametrize(
@@ -432,7 +442,7 @@ def test_a_hostname_spelling_that_means_the_same_destination_is_refused(host, mo
 
     monkeypatch.setattr(t, "_resolve", lambda h, p: ["93.184.216.34"])
     with pytest.raises(DestinationRefused):
-        validate_destination(f"https://{host}/hook")
+        validate_destination(f"https://{host}/hook", _NONE)
 
 
 @pytest.mark.parametrize(
@@ -1054,3 +1064,348 @@ def test_reporting_an_unconfirmed_close_cannot_replace_the_cancellation(logger_r
                 )
 
     asyncio.run(_go())
+
+
+# ---------------------------------------------------------------------------
+# NAT64: the declared posture at the destination boundary
+#
+# An NSP is ordinary global IPv6, so `_is_public` accepts it while the local
+# gateway translates it to an embedded IPv4 that may be internal. These bind
+# the posture INSIDE the every-answer loop, not as a post-pass.
+# ---------------------------------------------------------------------------
+
+
+def _posture(*prefixes):
+    return parse_pref64(",".join(prefixes))
+
+
+# Twelve per-length boundary cases. Both halves matter: without the refusals a
+# boundary omitting /40-/64 checking passes every decoder test, because the
+# overlap case binds only /32 and /96. Without the acceptances a boundary that
+# refuses EVERY Pref64-matching address passes all the refusals, and `none`
+# accepting ordinary IPv6 proves nothing about a translated public IPv4.
+_PRIVATE_EMBEDDED = [
+    ("2600:1f00::/32", "2600:1f00:a01:203::"),  # -> 10.1.2.3
+    ("2600:1f00:1200::/40", "2600:1f00:12ac:1063:7::"),  # -> 172.16.99.7
+    ("2600:1f00:122::/48", "2600:1f00:122:7f00:0:100::"),  # -> 127.0.0.1
+    ("2600:1f00:122:300::/56", "2600:1f00:122:3a9:fe:101::"),  # -> 169.254.1.1
+    ("2600:1f00:122:344::/64", "2600:1f00:122:344:c0:a801:700:0"),  # -> 192.168.1.7
+    ("2600:1f00:122:344::/96", "2600:1f00:122:344::a63:584d"),  # -> 10.99.88.77
+]
+
+_PUBLIC_EMBEDDED = [
+    ("2600:1f00::/32", "2600:1f00:808:808::"),  # -> 8.8.8.8
+    ("2600:1f00:1200::/40", "2600:1f00:1201:101:1::"),  # -> 1.1.1.1
+    ("2600:1f00:122::/48", "2600:1f00:122:5db8:d8:2200::"),  # -> 93.184.216.34
+    ("2600:1f00:122:300::/56", "2600:1f00:122:309:9:909::"),  # -> 9.9.9.9
+    ("2600:1f00:122:344::/64", "2600:1f00:122:344:d0:43de:de00:0"),  # -> 208.67.222.222
+    ("2600:1f00:122:344::/96", "2600:1f00:122:344::c709:ec9"),  # -> 199.9.14.201
+]
+
+# A matched address whose reserved octet is non-zero is REFUSED AT THE
+# BOUNDARY, not skipped. The decoder returning None is only half the property:
+# a caller doing `if embedded is None: continue` treats a malformed translation
+# address as a non-match, and the generic predicate then accepts it because it
+# is globally classified.
+_BAD_U_OCTET = [
+    ("2600:1f00::/32", "2600:1f00:a01:203:100::"),
+    ("2600:1f00:1200::/40", "2600:1f00:12ac:1063:107::"),
+    ("2600:1f00:122::/48", "2600:1f00:122:7f00:100:100::"),
+    ("2600:1f00:122:300::/56", "2600:1f00:122:3a9:1fe:101::"),
+    ("2600:1f00:122:344::/64", "2600:1f00:122:344:1c0:a801:700:0"),
+]
+
+
+#: A declared deviation from the accepted plan, Task 3 step 13.
+#:
+#: The plan requires each length's extraction-row mutation to fail that
+#: length's PRIVATE, PUBLIC and exact-value cases. Measured, it does not: a
+#: one-bit shift of a row's start leaves the boundary classification unchanged
+#: for most lengths, because a slightly-wrong decode of a private address is
+#: usually still private (and of a public one, still public). Only the /96 row
+#: fails all three.
+#:
+#: The exact decoder oracles in tests/test_nat64_decode.py DO bind every row
+#: individually, so no row is unbound -- but that is a different statement from
+#: the one the plan makes, and recording it as satisfied would be the defect
+#: this programme exists to remove. Stated here instead.
+
+
+@pytest.mark.parametrize("prefix,addr", _PRIVATE_EMBEDDED)
+def test_a_translated_private_address_is_refused(monkeypatch, prefix, addr):
+    import app.services.export_transport as t
+
+    monkeypatch.setattr(t, "_resolve", lambda host, port: [addr])
+    with pytest.raises(DestinationRefused):
+        validate_destination("https://example.com/hook", _posture(prefix))
+
+
+@pytest.mark.parametrize("prefix,addr", _PUBLIC_EMBEDDED)
+def test_a_translated_public_address_is_accepted(monkeypatch, prefix, addr):
+    import app.services.export_transport as t
+
+    monkeypatch.setattr(t, "_resolve", lambda host, port: [addr])
+    host, port, addresses = validate_destination("https://example.com/hook", _posture(prefix))
+    assert addresses == [addr]
+
+
+@pytest.mark.parametrize("prefix,addr", _BAD_U_OCTET)
+def test_a_matched_address_with_a_non_zero_reserved_octet_is_refused(monkeypatch, prefix, addr):
+    import app.services.export_transport as t
+
+    monkeypatch.setattr(t, "_resolve", lambda host, port: [addr])
+    with pytest.raises(DestinationRefused):
+        validate_destination("https://example.com/hook", _posture(prefix))
+
+
+#: The two-answer fixture, as constants -- so the global-classification guard
+#: and the test that uses them cannot drift apart. They did: the guard listed a
+#: SECOND COPY of the address literal, so it checked the copy while the test
+#: used its own. A guard that checks a duplicate of the thing is not a guard.
+_TWO_ANSWER_PUBLIC = "93.184.216.34"
+_TWO_ANSWER_NSP = "2600:1f00:a01:203::"
+_TWO_ANSWER_PREFIX = "2600:1f00::/32"
+
+
+def test_pref64_is_checked_on_every_answer_not_just_the_first(monkeypatch):
+    """The first answer is public and outside every Pref64; a later one is not.
+
+    The existing every-address test cannot catch a first-address-only check:
+    its later answer is raw 10.0.0.1, which the unchanged generic loop already
+    refuses. This one needs the Pref64 check to run on the later address.
+    """
+    import app.services.export_transport as t
+
+    monkeypatch.setattr(t, "_resolve", lambda host, port: [_TWO_ANSWER_PUBLIC, _TWO_ANSWER_NSP])
+    with pytest.raises(DestinationRefused):
+        validate_destination("https://example.com/hook", _posture(_TWO_ANSWER_PREFIX))
+
+
+# Overlapping prefixes: decode under EVERY match and refuse if ANY
+# interpretation is non-public. Longest-match would model the routing table,
+# and the premise of this whole finding is that the declared posture and the
+# actual routing may disagree.
+_OVERLAP_ADDR = "2600:1f00:a00:1::808:808"  # 10.0.0.1 under /32, 8.8.8.8 under /96
+_OVERLAP = ("2600:1f00::/32", "2600:1f00:a00:1::/96")
+
+
+@pytest.mark.parametrize("order", [_OVERLAP, tuple(reversed(_OVERLAP))])
+def test_overlapping_prefixes_refuse_under_any_interpretation(monkeypatch, order):
+    """Longest-match ACCEPTS this address; any-match refuses it.
+
+    A fixture that is public under /32 and private under /96 cannot tell them
+    apart -- both rules refuse it, in either order.
+    """
+    import app.services.export_transport as t
+
+    monkeypatch.setattr(t, "_resolve", lambda host, port: [_OVERLAP_ADDR])
+    with pytest.raises(DestinationRefused):
+        validate_destination("https://example.com/hook", _posture(*order))
+
+
+def test_an_unset_posture_refuses_before_anything_else(monkeypatch):
+    import app.services.export_transport as t
+
+    monkeypatch.setattr(t, "_resolve", lambda host, port: ["93.184.216.34"])
+    with pytest.raises(DestinationRefused, match="PREF64"):
+        validate_destination("https://example.com/hook", parse_pref64(None))
+
+
+def test_none_accepts_an_ordinary_public_address(monkeypatch):
+    import app.services.export_transport as t
+
+    monkeypatch.setattr(t, "_resolve", lambda host, port: ["2600:1f00:a00:1::808:808"])
+    host, port, addresses = validate_destination("https://example.com/hook", _NONE)
+    assert addresses == ["2600:1f00:a00:1::808:808"]
+
+
+def test_an_address_outside_every_configured_prefix_is_untouched(monkeypatch):
+    import app.services.export_transport as t
+
+    monkeypatch.setattr(t, "_resolve", lambda host, port: ["2600:1f00::1"])
+    host, port, addresses = validate_destination("https://example.com/hook", _posture("2001:db8::/32"))
+    assert addresses == ["2600:1f00::1"]
+
+
+#: Every NAT64 fixture in this module, including the two written by hand
+#: outside the three tables. The first version of this guard enumerated only
+#: the tables -- and the two-answer fixture and the overlap address, which are
+#: exactly where the documentation-space defect bit, were not covered by the
+#: guard meant to prevent it.
+_ALL_NAT64_FIXTURES = (
+    [a for _, a in _PRIVATE_EMBEDDED]
+    + [a for _, a in _PUBLIC_EMBEDDED]
+    + [a for _, a in _BAD_U_OCTET]
+    + [_TWO_ANSWER_NSP, _OVERLAP_ADDR]
+)
+
+
+def test_the_two_answer_first_address_is_public_and_outside_the_pref64():
+    """The OTHER half of that fixture's premise.
+
+    The later answer being translated is only load-bearing if the FIRST answer
+    is public and outside the configured prefix -- otherwise the generic policy
+    refuses it and execution never reaches the later one. Changing
+    `_TWO_ANSWER_PUBLIC` to a private address left the named every-answer test
+    and all nineteen inventory parameters green, which is the exact failure the
+    inventory exists to prevent.
+    """
+    import ipaddress
+
+    import app.services.export_transport as t
+
+    assert t._is_public(_TWO_ANSWER_PUBLIC), "the first answer must be public"
+    first = ipaddress.ip_address(_TWO_ANSWER_PUBLIC)
+    for prefix in _posture(_TWO_ANSWER_PREFIX).prefixes:
+        assert first not in prefix, "the first answer must be OUTSIDE the configured Pref64"
+
+
+@pytest.mark.parametrize("addr", _ALL_NAT64_FIXTURES)
+def test_every_nat64_fixture_is_globally_classified(addr):
+    """Otherwise the refusal cases pass for the wrong reason.
+
+    My first fixtures used 2001:db8::/32 -- IPv6 documentation space -- so the
+    generic address predicate refused them before any Pref64 decoding ran.
+    Twelve boundary cases were green while binding nothing about NAT64.
+    """
+    import app.services.export_transport as t
+
+    assert t._is_public(addr), f"{addr} is refused by the generic predicate, not by Pref64"
+
+
+# ---------------------------------------------------------------------------
+# The contract text, pinned exactly
+#
+# The old docstring promised to "refuse anything that is not a public HTTPS
+# endpoint". That is false whenever the declared posture is wrong, incomplete
+# or stale -- and address scope plus Pref64 decoding cannot establish actual
+# public reachability either way.
+#
+# Two enumerated surfaces are pinned. A new absolute promise in a THIRD
+# docstring is caught by review, not by this test: "any new absolute promise"
+# is an unbounded semantic property, and a forbidden-string list cannot
+# recognise "guarantees global reachability". That limit is declared here
+# rather than implied by a broader claim.
+# ---------------------------------------------------------------------------
+
+_VALIDATE_DESTINATION_CONTRACT = """Refuse a destination that fails the enumerated address policy.
+
+Every resolved address must pass the address policy below, and RFC 6052
+translation is checked against the deployment's DECLARED posture. This does
+NOT establish that the endpoint is public: address scope plus Pref64
+decoding cannot say where the host's effective routes send an ordinary
+global address, nor whether an internal service is deliberately numbered
+from global space.
+
+*posture* is required, not defaulted. A default is how this silently
+reverts.
+
+Returns the host, the port, and the ordered set of validated addresses. The
+connection is made to one of *those*, so a name that answers differently on a
+second lookup cannot rebind past this check.
+
+The URL shape is checked before resolving, so a hostile URL cannot even make
+this server perform a DNS lookup of the attacker's choosing.
+"""
+
+
+def test_the_validator_contract_is_exactly_the_declared_text():
+    from app.services.export_transport import validate_destination as fn
+
+    assert fn.__doc__ == _VALIDATE_DESTINATION_CONTRACT
+
+
+def test_the_validator_contract_makes_no_absolute_public_endpoint_promise():
+    """The specific sentence that was false, and its close variants."""
+    from app.services.export_transport import validate_destination as fn
+
+    text = (fn.__doc__ or "").lower()
+    for forbidden in (
+        "refuse anything that is not a public https endpoint",
+        "anything that is not a public",
+    ):
+        assert forbidden not in text, forbidden
+
+
+def test_the_residual_comment_no_longer_claims_the_control_is_absent():
+    """The governing finding requires this comment repaired with the fix.
+
+    It used to say the module had no Pref64 configuration and that the blocker
+    was still open. Both became false when the control landed, and a comment
+    describing a world that no longer exists is the defect class this whole
+    programme is about.
+    """
+    source = (pathlib.Path(__file__).resolve().parents[1] / "app" / "services" / "export_transport.py").read_text()
+    for stale in (
+        "configuration this module does not have",
+        "and it is still open",
+        "saying so does not close it",
+    ):
+        assert stale not in source, stale
+    # And it must still say what the control DOES depend on.
+    assert "stale after a network" in source
+    assert "once per application lifespan" in source
+
+
+#: The unset refusal message, complete.
+#:
+#: Four substring assertions are not an exact pin, and the difference is the
+#: whole property: adding "such as 64:ff9b::/96" (no `PREF64=` assignment)
+#: passed them, which is the bare suggested-prefix shape the plan requires the
+#: tests to kill. So did changing "requires" to "needs".
+_UNSET_MESSAGE = (
+    "content export requires this deployment's NAT64 posture: set PREF64 to the "
+    "translation prefixes reachable from this server, or to the value meaning "
+    "no NAT64 translation is reachable, once you have confirmed which is true "
+    "for this network"
+)
+
+
+def test_the_unset_refusal_message_is_exactly_the_declared_text():
+    from app.services.nat64 import parse_pref64
+
+    with pytest.raises(DestinationRefused) as caught:
+        validate_destination("https://example.com/hook", parse_pref64(None))
+    assert str(caught.value) == _UNSET_MESSAGE
+
+
+#: `_is_public`'s contract comment, complete. The plan requires appending any
+#: sentence to it to fail; only the validator docstring was pinned, so an
+#: appended sentence passed every selected test.
+_IS_PUBLIC_CONTRACT = """#: NAT64, stated rather than implied.
+#:
+#: 64:ff9b::/96 (RFC 6052 well-known prefix) and 64:ff9b:1::/48 (RFC 8215
+#: local use) are both refused: the first because this runtime marks it
+#: reserved, the second because it is local by definition. Note that IANA
+#: marks the well-known prefix globally reachable and RFC 6052 requires it to
+#: carry only global IPv4, so refusing it is a conservative policy rather than
+#: a classification -- a NAT64-only deployment cannot export through it and
+#: needs an IPv4 or dual-stack route to its receiver.
+#:
+#: A Network-Specific Prefix is ordinary global IPv6, and the IPv4 address
+#: behind it may be internal. No generic address-scope predicate WITHOUT
+#: deployment prefix knowledge can detect that -- so `_refuse_translated_non_public`
+#: is given the knowledge, from `PREF64`, and decodes RFC 6052 translation for
+#: every matching prefix.
+#:
+#: The residual is now the declaration, not the absence of a control. This is
+#: defeated by a `PREF64` that is false, incomplete, stale after a network
+#: change, or mistyped into a different valid prefix, and by a translator that
+#: does not follow RFC 6052. The posture is read once per application lifespan
+#: and is not refreshed while it runs.
+#:
+#: `docs/operations/content-runbook.md` section 12 carries this for operators.
+"""
+
+
+def test_the_is_public_contract_comment_is_exactly_the_declared_text():
+    source = (pathlib.Path(__file__).resolve().parents[1] / "app" / "services" / "export_transport.py").read_text()
+    assert _IS_PUBLIC_CONTRACT in source
+    # Exactly once, and nothing appended to it: the block ends where declared.
+    assert source.count(_IS_PUBLIC_CONTRACT) == 1
+    # The block must end exactly where declared. Checking only for a `#:`
+    # continuation let an ordinary `#` comment be appended and pass.
+    after = source.split(_IS_PUBLIC_CONTRACT, 1)[1]
+    assert after.startswith("\n#: Headers this server sets itself"), (
+        "something was appended to the _is_public contract comment: " + after[:80]
+    )

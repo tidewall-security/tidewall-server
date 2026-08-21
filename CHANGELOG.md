@@ -18,6 +18,16 @@ still occupies on disk, and what that reclamation does and does not achieve.
 
 ### Security
 
+- **`PREF64` is now required for content export.** On a network running NAT64
+  with a Network-Specific Prefix, a destination could resolve to an address the
+  sender accepted as public while the network translated it to an internal
+  IPv4 address. The sender now decodes RFC 6052 translation against a posture
+  the deployment declares, and refuses every content export until `PREF64` is
+  set. See [the content runbook](docs/operations/content-runbook.md) section 12
+  for what to set it to, and for what the control does not cover: it is only as
+  good as the declaration, which can be false, incomplete, or stale after a
+  network change.
+
 - **Device takeover via fingerprint (P0-11).** `POST /v1/devices/check`
   looked a device up by the caller-supplied `fingerprint` and authorised the
   refresh on the strength of holding *a* registration token. Any holder of

@@ -380,16 +380,32 @@ attempt observed.
 Reconciliation is **admin-only, not grant- or policy-scoped**, and its evidence
 field retains whatever an operator types into it.
 
-## 12. A deployment requirement: NAT64
+## 12. A required setting: PREF64
 
 On a network running NAT64 with a Network-Specific Prefix, an export target's
 hostname can resolve to an address this server accepts as public while the
 network translates it to an internal IPv4 destination.
 
-Deny egress to the Pref64, or apply to the IPv4-embedded address the same
-policy you would apply to the embedded IPv4 (RFC 6052 §5.3).
+The sender now checks this, against a posture you declare. **`PREF64` is
+required: content export refuses every request until it is set.**
 
-This is an operational control for a defect in the sender, not a closure of it.
+Set it to this deployment's translation prefixes, comma-separated, using RFC
+6052 lengths `/32`, `/40`, `/48`, `/56`, `/64` or `/96`. If no NAT64
+translation is reachable from this server, set it to the value meaning that,
+**after confirming it** — the server cannot check the claim, and a wrong
+declaration reinstates the defect.
+
+**The control is only as good as the declaration.** It is defeated by a
+declaration that is false, incomplete, stale after a network change, mistyped
+into a different valid prefix, or by a translator that does not follow RFC
+6052.
+
+**The posture is read once per application lifespan and is not refreshed while
+it runs.** A Pref64 or routing change requires a restart before it takes
+effect.
+
+Denying egress to the Pref64, or applying the embedded IPv4's policy at the
+gateway (RFC 6052 §5.3), remains worthwhile defence in depth.
 
 ---
 

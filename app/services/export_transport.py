@@ -25,6 +25,7 @@ import httpcore
 import httpx
 
 from app.services.cancellation import join_and_drain
+from app.services.nat64 import Pref64Posture, embedded_ipv4
 from app.services.safe_logging import report
 
 logger = logging.getLogger(__name__)
@@ -90,15 +91,19 @@ _REFUSED_NETWORKS = (
 #: a classification -- a NAT64-only deployment cannot export through it and
 #: needs an IPv4 or dual-stack route to its receiver.
 #:
-#: The residual: a Network-Specific Prefix is ordinary global IPv6, and the
-#: IPv4 address behind it may be internal. A predicate that sees only the
-#: address cannot close that -- one that knew the deployment's translation
-#: prefixes could, which is configuration this module does not have and is not
-#: the place to invent. It is a property of the network the server runs on.
-#: `docs/operations/content-runbook.md` section 12 states it as a deployment
-#: requirement, and states explicitly that saying so does not close it:
-#: `internal/findings/P1-nat64-nsp-sender-bypass.md` is the release blocker,
-#: and it is still open.
+#: A Network-Specific Prefix is ordinary global IPv6, and the IPv4 address
+#: behind it may be internal. No generic address-scope predicate WITHOUT
+#: deployment prefix knowledge can detect that -- so `_refuse_translated_non_public`
+#: is given the knowledge, from `PREF64`, and decodes RFC 6052 translation for
+#: every matching prefix.
+#:
+#: The residual is now the declaration, not the absence of a control. This is
+#: defeated by a `PREF64` that is false, incomplete, stale after a network
+#: change, or mistyped into a different valid prefix, and by a translator that
+#: does not follow RFC 6052. The posture is read once per application lifespan
+#: and is not refreshed while it runs.
+#:
+#: `docs/operations/content-runbook.md` section 12 carries this for operators.
 
 #: Headers this server sets itself on a content export. They are refused in a
 #: target's configuration rather than allowed to lose a merge, because HTTP
@@ -172,8 +177,18 @@ def _is_public(addr: str) -> bool:
     )
 
 
-def validate_destination(url: str) -> tuple[str, int, list[str]]:
-    """Refuse anything that is not a public HTTPS endpoint.
+def validate_destination(url: str, posture: Pref64Posture) -> tuple[str, int, list[str]]:
+    """Refuse a destination that fails the enumerated address policy.
+
+    Every resolved address must pass the address policy below, and RFC 6052
+    translation is checked against the deployment's DECLARED posture. This does
+    NOT establish that the endpoint is public: address scope plus Pref64
+    decoding cannot say where the host's effective routes send an ordinary
+    global address, nor whether an internal service is deliberately numbered
+    from global space.
+
+    *posture* is required, not defaulted. A default is how this silently
+    reverts.
 
     Returns the host, the port, and the ordered set of validated addresses. The
     connection is made to one of *those*, so a name that answers differently on a
@@ -182,6 +197,18 @@ def validate_destination(url: str) -> tuple[str, int, list[str]]:
     The URL shape is checked before resolving, so a hostile URL cannot even make
     this server perform a DNS lookup of the attacker's choosing.
     """
+    # Unset is not a default, and this is checked FIRST -- before the URL is
+    # even parsed. Nobody has declared this deployment's NAT64 posture, so the
+    # claim this function makes cannot be evaluated at all, whatever the URL
+    # says. Refusing here also means no resolution, reservation or send occurs.
+    if posture.is_unset:
+        raise DestinationRefused(
+            "content export requires this deployment's NAT64 posture: set PREF64 to "
+            "the translation prefixes reachable from this server, or to the value "
+            "meaning no NAT64 translation is reachable, once you have confirmed "
+            "which is true for this network"
+        )
+
     parts = urlsplit(url)
     if parts.scheme != "https":
         raise DestinationRefused("content export requires an https destination")
@@ -228,11 +255,48 @@ def validate_destination(url: str) -> tuple[str, int, list[str]]:
         raise DestinationRefused("the destination resolved to no addresses")
 
     # EVERY address, not just the first: a name answering with one public and one
-    # private address would otherwise pass.
+    # private address would otherwise pass. NAT64 checking happens INSIDE this
+    # loop, never as a post-pass over one selected address -- a post-pass over
+    # addresses[0] passes every per-length, overlap and route case, because they
+    # can all use a single resolved address.
     for addr in addresses:
         if not _is_public(addr):
             raise DestinationRefused("the destination resolves to a non-public address")
+        _refuse_translated_non_public(addr, posture)
     return host, port, addresses
+
+
+def _refuse_translated_non_public(addr: str, posture: Pref64Posture) -> None:
+    """Refuse an address whose embedded IPv4 is not public, under ANY match.
+
+    Every matching prefix is decoded, not the longest -- longest-match models
+    the routing table, and the premise of this control is that the declared
+    posture and the actual routing may disagree. Refusing on any non-public
+    interpretation is order-independent and fails safe.
+    """
+    try:
+        parsed = ipaddress.ip_address(addr)
+    except ValueError:
+        return
+    if not isinstance(parsed, ipaddress.IPv6Address):
+        return
+
+    for prefix in posture.prefixes:
+        if parsed not in prefix:
+            continue
+        embedded = embedded_ipv4(parsed, prefix)
+        if embedded is None:
+            # Matched a translation prefix but is not a well-formed RFC 6052
+            # address. REFUSED, not skipped: `continue` here would treat a
+            # malformed translated address as an ordinary global one, which is
+            # exactly the shape that reaches an internal host.
+            raise DestinationRefused(
+                "the destination matches a configured NAT64 prefix but is not a " "well-formed translated address"
+            )
+        if not _is_public(str(embedded)):
+            raise DestinationRefused(
+                "the destination translates to a non-public address under a " "configured NAT64 prefix"
+            )
 
 
 def validate_headers(headers: dict[str, str] | None) -> dict[str, str]:

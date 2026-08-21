@@ -34,6 +34,7 @@ from starlette.requests import Request
 from app.auth.grants import CONTENT_EXPORT
 from app.auth.key_utils import generate_key, hash_key, key_prefix
 from app.auth.middleware import AuthMiddleware
+from app.config import Settings
 from app.db.models import (
     APIKey,
     Base,
@@ -50,7 +51,7 @@ def _build(monkeypatch):
     """A real router over a real database, with the transport stubbed."""
     import app.routes.content_export as route
 
-    monkeypatch.setattr(route, "validate_destination", lambda url: ("127.0.0.1", 443, ["203.0.113.9"]))
+    monkeypatch.setattr(route, "validate_destination", lambda url, posture: ("127.0.0.1", 443, ["203.0.113.9"]))
 
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
@@ -60,6 +61,10 @@ def _build(monkeypatch):
     app.add_middleware(AuthMiddleware)
     app.state.session_factory = Session
     app.state.boot_id = "boot-test"
+    # The route reads the declared NAT64 posture from app.state before it
+    # calls validate_destination, so a bare app needs one or it raises
+    # AttributeError before the test's own double is ever reached.
+    app.state.settings = Settings(PREF64="none")
     app.state.export_settlements = set()
     app.include_router(route.router)
 

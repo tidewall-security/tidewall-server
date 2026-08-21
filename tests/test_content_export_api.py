@@ -18,6 +18,7 @@ from starlette.requests import Request
 from app.auth.grants import CONTENT_EXPORT, CONTENT_READ, MATCHES_READ
 from app.auth.key_utils import generate_key, hash_key, key_prefix
 from app.auth.middleware import AuthMiddleware
+from app.config import Settings
 from app.db.models import (
     APIKey,
     Base,
@@ -65,7 +66,7 @@ def env(monkeypatch):
     # ordering and lifecycle, not the SSRF controls, which have their own suite.
     import app.routes.content_export as route
 
-    monkeypatch.setattr(route, "validate_destination", lambda url: ("127.0.0.1", port, ["127.0.0.1"]))
+    monkeypatch.setattr(route, "validate_destination", lambda url, posture: ("127.0.0.1", port, ["127.0.0.1"]))
 
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
@@ -76,6 +77,10 @@ def env(monkeypatch):
     app.add_middleware(SecurityHeadersMiddleware)
     app.state.session_factory = Session
     app.state.boot_id = "boot-test"
+    # The route reads the declared NAT64 posture from app.state before it
+    # calls validate_destination, so a bare app needs one or it raises
+    # AttributeError before the test's own double is ever reached.
+    app.state.settings = Settings(PREF64="none")
     app.state.export_settlements = set()
     app.include_router(route.router)
 
@@ -146,12 +151,12 @@ def _interaction(Session, *, policy_id="policy-a", content=True, expires_at=None
     return interaction_id
 
 
-def _target(Session, port, *, allow=True, policy="policy-a", views=("full",), enabled=True, type_="webhook"):
+def _target(Session, port, *, allow=True, policy="policy-a", views=("full",), enabled=True, type_="webhook", url=None):
     session = Session()
     target = ExportTarget(
         name="siem",
         type=type_,
-        config={"url": f"http://127.0.0.1:{port}/hook"},
+        config={"url": url or f"http://127.0.0.1:{port}/hook"},
         format="ocsf",
         events=[],
         enabled=enabled,
@@ -873,7 +878,7 @@ def test_a_destination_refused_at_send_time_is_409_before_any_reservation(env, m
     interaction_id = _interaction(Session)
     target_id = _target(Session, port)
 
-    def _refuse(url):
+    def _refuse(url, posture):
         raise DestinationRefused("the destination resolves to a non-public address")
 
     monkeypatch.setattr(route, "validate_destination", _refuse)
@@ -1035,3 +1040,99 @@ def test_a_credential_without_an_api_key_id_cannot_export(env, api_key_id):
     resp = asyncio.run(_go())
     assert resp.status_code == 403, bytes(resp.body)
     assert not _Receiver.received, "content was exported without a credential id to bind it to"
+
+
+# ---------------------------------------------------------------------------
+# NAT64: the declared posture must reach the real boundary, through the route
+#
+# Unit tests of `validate_destination` prove the validator. They do not prove
+# the route hands it the posture the operator declared, and a wiring mistake
+# there is a live bypass on a green tree.
+# ---------------------------------------------------------------------------
+
+_NSP_PRIVATE = "2600:1f00:a01:203::"  # 10.1.2.3 under 2600:1f00::/32
+_NSP = "2600:1f00::/32"
+_FILLER = ("2001:db8:1::/48", "2001:db8:2::/48", "2001:db8:3::/48", "2001:db8:4::/48")
+
+
+@pytest.mark.parametrize("position", [0, 1, 2, 3])
+def test_a_real_export_refuses_a_translated_address_at_every_list_position(env, monkeypatch, position):
+    """The matching prefix in each position of a list of four.
+
+    "A later entry" binds one non-first element. A parser or wiring path that
+    retains only the first and last passes a last-position fixture while an
+    omitted middle prefix stays a live bypass.
+    """
+    import app.routes.content_export as route
+    import app.services.export_transport as transport
+    from app.config import Settings
+
+    client, Session, port = env
+    sent: list = []
+    # Patched on the ROUTE, which imported send_payload directly at module load.
+    # Patching the transport module leaves route.send_payload untouched, so the
+    # assertion watched a callable the route never invokes.
+    monkeypatch.setattr(route, "send_payload", lambda *a, **k: sent.append(a) or None)
+    prefixes = list(_FILLER[:3])
+    prefixes.insert(position, _NSP)
+    client.app.state.settings = Settings(PREF64=",".join(prefixes))
+    monkeypatch.setattr(transport, "_resolve", lambda host, p: [_NSP_PRIVATE])
+    monkeypatch.setattr(route, "validate_destination", transport.validate_destination)
+
+    headers = _key(Session, grants=[CONTENT_EXPORT])
+    interaction_id = _interaction(Session)
+    target_id = _target(Session, port, allow=True, url="https://receiver.example/hook")
+    resp = client.post(
+        f"/v1/logs/{interaction_id}/content-export",
+        json={"view": "full", "target_id": target_id},
+        headers=headers,
+    )
+    assert resp.status_code == 409, resp.text
+    assert "translates to a non-public address" in resp.text
+    # Before reservation or sending, not merely "refused eventually".
+    assert _attempts(Session) == [], "an attempt was reserved before the destination was refused"
+    assert sent == [], "the receiver was contacted before the destination was refused"
+
+
+def test_a_real_export_refuses_when_the_posture_is_unset(env, monkeypatch):
+    """Distinct from the configured case.
+
+    Without this, `validate_destination(url, NONE if posture.is_unset else
+    posture)` survives: the direct tests still show the validator refuses an
+    unset posture, and real exports quietly get the permissive one.
+    """
+    import app.routes.content_export as route
+    import app.services.export_transport as transport
+    from app.config import Settings
+
+    client, Session, port = env
+    sent: list = []
+    # Patched on the ROUTE, which imported send_payload directly at module load.
+    # Patching the transport module leaves route.send_payload untouched, so the
+    # assertion watched a callable the route never invokes.
+    monkeypatch.setattr(route, "send_payload", lambda *a, **k: sent.append(a) or None)
+    client.app.state.settings = Settings(PREF64=None)
+    monkeypatch.setattr(transport, "_resolve", lambda host, p: ["93.184.216.34"])
+    monkeypatch.setattr(route, "validate_destination", transport.validate_destination)
+
+    headers = _key(Session, grants=[CONTENT_EXPORT])
+    interaction_id = _interaction(Session)
+    target_id = _target(Session, port, allow=True, url="https://receiver.example/hook")
+    resp = client.post(
+        f"/v1/logs/{interaction_id}/content-export",
+        json={"view": "full", "target_id": target_id},
+        headers=headers,
+    )
+    assert resp.status_code == 409, resp.text
+
+    # The message poses the deployment question and suggests NO value.
+    # "does not contain 'none'" is strictly weaker: "set PREF64=64:ff9b::/96 to
+    # continue" passes that while handing the operator something to paste.
+    assert _attempts(Session) == [], "an attempt was reserved despite an unset posture"
+    assert sent == [], "the receiver was contacted despite an unset posture"
+
+    body = resp.text
+    assert "PREF64" in body
+    assert "confirmed which is true for this network" in body
+    assert "PREF64=" not in body
+    assert "none" not in body
