@@ -116,3 +116,35 @@ def parse_pref64(raw: str | None) -> Pref64Posture:
         prefixes.append(network)
 
     return Pref64Posture(prefixes=tuple(prefixes))
+
+
+def embedded_ipv4(addr: ipaddress.IPv6Address, prefix: ipaddress.IPv6Network) -> ipaddress.IPv4Address | None:
+    """The IPv4 address embedded in *addr* under *prefix*, or None.
+
+    None means "do not treat this as a translated address": either it is not
+    inside the prefix, or its reserved octet is non-zero, which makes it not a
+    well-formed RFC 6052 address. Guessing what a gateway would do with a
+    malformed one is not this module's job.
+
+    A None result is NOT a licence to accept the address. The caller refuses
+    it: an address that matches a translation prefix but is malformed is
+    exactly the shape an attacker would reach for, and the generic
+    address-scope predicate accepts it because it is globally classified.
+    """
+    if addr not in prefix:
+        return None
+
+    value = int(addr)
+
+    # Bits 64-71 are reserved and MUST be zero (RFC 6052 section 2.2). Checked
+    # before extraction, so a malformed address never reaches the layout table.
+    # For /96 the octet is inside the prefix itself and is validated at parse
+    # time instead; checking it here as well is harmless and keeps the rule in
+    # one place for every length.
+    if _u_octet(value):
+        return None
+
+    out = 0
+    for start, count in _LAYOUT[prefix.prefixlen]:
+        out = (out << count) | ((value >> (128 - start - count)) & ((1 << count) - 1))
+    return ipaddress.IPv4Address(out)
