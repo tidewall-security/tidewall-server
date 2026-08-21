@@ -1158,6 +1158,15 @@ def test_a_matched_address_with_a_non_zero_reserved_octet_is_refused(monkeypatch
         validate_destination("https://example.com/hook", _posture(prefix))
 
 
+#: The two-answer fixture, as constants -- so the global-classification guard
+#: and the test that uses them cannot drift apart. They did: the guard listed a
+#: SECOND COPY of the address literal, so it checked the copy while the test
+#: used its own. A guard that checks a duplicate of the thing is not a guard.
+_TWO_ANSWER_PUBLIC = "93.184.216.34"
+_TWO_ANSWER_NSP = "2600:1f00:a01:203::"
+_TWO_ANSWER_PREFIX = "2600:1f00::/32"
+
+
 def test_pref64_is_checked_on_every_answer_not_just_the_first(monkeypatch):
     """The first answer is public and outside every Pref64; a later one is not.
 
@@ -1167,9 +1176,9 @@ def test_pref64_is_checked_on_every_answer_not_just_the_first(monkeypatch):
     """
     import app.services.export_transport as t
 
-    monkeypatch.setattr(t, "_resolve", lambda host, port: ["93.184.216.34", "2600:1f00:a01:203::"])
+    monkeypatch.setattr(t, "_resolve", lambda host, port: [_TWO_ANSWER_PUBLIC, _TWO_ANSWER_NSP])
     with pytest.raises(DestinationRefused):
-        validate_destination("https://example.com/hook", _posture("2600:1f00::/32"))
+        validate_destination("https://example.com/hook", _posture(_TWO_ANSWER_PREFIX))
 
 
 # Overlapping prefixes: decode under EVERY match and refuse if ANY
@@ -1227,7 +1236,7 @@ _ALL_NAT64_FIXTURES = (
     [a for _, a in _PRIVATE_EMBEDDED]
     + [a for _, a in _PUBLIC_EMBEDDED]
     + [a for _, a in _BAD_U_OCTET]
-    + ["2600:1f00:a01:203::", _OVERLAP_ADDR]
+    + [_TWO_ANSWER_NSP, _OVERLAP_ADDR]
 )
 
 
@@ -1374,5 +1383,9 @@ def test_the_is_public_contract_comment_is_exactly_the_declared_text():
     assert _IS_PUBLIC_CONTRACT in source
     # Exactly once, and nothing appended to it: the block ends where declared.
     assert source.count(_IS_PUBLIC_CONTRACT) == 1
+    # The block must end exactly where declared. Checking only for a `#:`
+    # continuation let an ordinary `#` comment be appended and pass.
     after = source.split(_IS_PUBLIC_CONTRACT, 1)[1]
-    assert not after.startswith("#:"), "a sentence was appended to the contract comment"
+    assert after.startswith("\n#: Headers this server sets itself"), (
+        "something was appended to the _is_public contract comment: " + after[:80]
+    )

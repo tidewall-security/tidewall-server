@@ -208,8 +208,27 @@ def test_a_malformed_pref64_stops_real_lifespan_before_any_service(monkeypatch, 
 
     import app.main as main
 
+    # Spy on something startup ACTUALLY calls. The first version patched
+    # `acquire_process_lock`, which `app.main` does not define -- with
+    # raising=False the patch silently created it, nothing ever called it, and
+    # the assertion that it was not reached was true for the wrong reason.
+    # `ProcessLock` is the real first stateful boundary after Settings.from_env.
+    # Patched at its SOURCE module: lifespan imports ProcessLock inside the
+    # function, so it is not an attribute of app.main. The hasattr assertion
+    # below is what caught that -- it is the check on the spy itself, and it
+    # has now caught two wrong targets.
+    import app.services.process_lock as lock_module
+
+    assert hasattr(lock_module, "ProcessLock"), "the spied symbol must exist, or this proves nothing"
     reached = []
-    monkeypatch.setattr(main, "acquire_process_lock", lambda *a, **k: reached.append("lock"), raising=False)
+    real_lock = lock_module.ProcessLock
+
+    class _SpyLock(real_lock):  # type: ignore[misc, valid-type]
+        def __init__(self, *a, **k):
+            reached.append("ProcessLock")
+            super().__init__(*a, **k)
+
+    monkeypatch.setattr(lock_module, "ProcessLock", _SpyLock)
     monkeypatch.setenv("PREF64", "not-a-prefix/32")
     monkeypatch.setenv("DB_URL", f"sqlite:///{tmp_path / 'x.db'}")
 
@@ -220,5 +239,5 @@ def test_a_malformed_pref64_stops_real_lifespan_before_any_service(monkeypatch, 
     with pytest.raises((ValidationError, ValueError)):
         asyncio.run(_enter())
 
-    assert reached == [], "startup reached a stateful boundary before rejecting PREF64"
+    assert reached == [], "startup constructed ProcessLock before rejecting PREF64"
     assert not (tmp_path / "x.db").exists(), "a rejected configuration left a database behind"

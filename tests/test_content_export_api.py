@@ -1068,6 +1068,8 @@ def test_a_real_export_refuses_a_translated_address_at_every_list_position(env, 
     from app.config import Settings
 
     client, Session, port = env
+    sent: list = []
+    monkeypatch.setattr(transport, "send_payload", lambda *a, **k: sent.append(a) or None, raising=False)
     prefixes = list(_FILLER[:3])
     prefixes.insert(position, _NSP)
     client.app.state.settings = Settings(PREF64=",".join(prefixes))
@@ -1084,6 +1086,9 @@ def test_a_real_export_refuses_a_translated_address_at_every_list_position(env, 
     )
     assert resp.status_code == 409, resp.text
     assert "translates to a non-public address" in resp.text
+    # Before reservation or sending, not merely "refused eventually".
+    assert _attempts(Session) == [], "an attempt was reserved before the destination was refused"
+    assert sent == [], "the receiver was contacted before the destination was refused"
 
 
 def test_a_real_export_refuses_when_the_posture_is_unset(env, monkeypatch):
@@ -1098,6 +1103,8 @@ def test_a_real_export_refuses_when_the_posture_is_unset(env, monkeypatch):
     from app.config import Settings
 
     client, Session, port = env
+    sent: list = []
+    monkeypatch.setattr(transport, "send_payload", lambda *a, **k: sent.append(a) or None, raising=False)
     client.app.state.settings = Settings(PREF64=None)
     monkeypatch.setattr(transport, "_resolve", lambda host, p: ["93.184.216.34"])
     monkeypatch.setattr(route, "validate_destination", transport.validate_destination)
@@ -1115,6 +1122,9 @@ def test_a_real_export_refuses_when_the_posture_is_unset(env, monkeypatch):
     # The message poses the deployment question and suggests NO value.
     # "does not contain 'none'" is strictly weaker: "set PREF64=64:ff9b::/96 to
     # continue" passes that while handing the operator something to paste.
+    assert _attempts(Session) == [], "an attempt was reserved despite an unset posture"
+    assert sent == [], "the receiver was contacted despite an unset posture"
+
     body = resp.text
     assert "PREF64" in body
     assert "confirmed which is true for this network" in body
