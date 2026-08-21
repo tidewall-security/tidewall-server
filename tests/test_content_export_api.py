@@ -1069,7 +1069,10 @@ def test_a_real_export_refuses_a_translated_address_at_every_list_position(env, 
 
     client, Session, port = env
     sent: list = []
-    monkeypatch.setattr(transport, "send_payload", lambda *a, **k: sent.append(a) or None, raising=False)
+    # Patched on the ROUTE, which imported send_payload directly at module load.
+    # Patching the transport module leaves route.send_payload untouched, so the
+    # assertion watched a callable the route never invokes.
+    monkeypatch.setattr(route, "send_payload", lambda *a, **k: sent.append(a) or None)
     prefixes = list(_FILLER[:3])
     prefixes.insert(position, _NSP)
     client.app.state.settings = Settings(PREF64=",".join(prefixes))
@@ -1104,7 +1107,10 @@ def test_a_real_export_refuses_when_the_posture_is_unset(env, monkeypatch):
 
     client, Session, port = env
     sent: list = []
-    monkeypatch.setattr(transport, "send_payload", lambda *a, **k: sent.append(a) or None, raising=False)
+    # Patched on the ROUTE, which imported send_payload directly at module load.
+    # Patching the transport module leaves route.send_payload untouched, so the
+    # assertion watched a callable the route never invokes.
+    monkeypatch.setattr(route, "send_payload", lambda *a, **k: sent.append(a) or None)
     client.app.state.settings = Settings(PREF64=None)
     monkeypatch.setattr(transport, "_resolve", lambda host, p: ["93.184.216.34"])
     monkeypatch.setattr(route, "validate_destination", transport.validate_destination)

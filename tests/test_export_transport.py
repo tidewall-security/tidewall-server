@@ -1240,6 +1240,26 @@ _ALL_NAT64_FIXTURES = (
 )
 
 
+def test_the_two_answer_first_address_is_public_and_outside_the_pref64():
+    """The OTHER half of that fixture's premise.
+
+    The later answer being translated is only load-bearing if the FIRST answer
+    is public and outside the configured prefix -- otherwise the generic policy
+    refuses it and execution never reaches the later one. Changing
+    `_TWO_ANSWER_PUBLIC` to a private address left the named every-answer test
+    and all nineteen inventory parameters green, which is the exact failure the
+    inventory exists to prevent.
+    """
+    import ipaddress
+
+    import app.services.export_transport as t
+
+    assert t._is_public(_TWO_ANSWER_PUBLIC), "the first answer must be public"
+    first = ipaddress.ip_address(_TWO_ANSWER_PUBLIC)
+    for prefix in _posture(_TWO_ANSWER_PREFIX).prefixes:
+        assert first not in prefix, "the first answer must be OUTSIDE the configured Pref64"
+
+
 @pytest.mark.parametrize("addr", _ALL_NAT64_FIXTURES)
 def test_every_nat64_fixture_is_globally_classified(addr):
     """Otherwise the refusal cases pass for the wrong reason.
