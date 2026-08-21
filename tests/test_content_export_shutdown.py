@@ -199,7 +199,9 @@ def _run(tmp_path, scenario, *, rendezvous=_await_worker, delay_dispatch=False):
         import app.routes.content_export as route
         import app.services.content_export as service
 
-        with patch.object(route, "validate_destination", lambda url: ("receiver.invalid", 443, ["203.0.113.5"])):
+        with patch.object(
+            route, "validate_destination", lambda url, posture: ("receiver.invalid", 443, ["203.0.113.5"])
+        ):
             with patch.object(route, "send_payload", _fake_send):
                 with patch.object(route.attempts, "settle", harness.blocking_settle(service.settle)):
                     transport = ASGITransport(app=app)
