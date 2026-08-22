@@ -73,6 +73,52 @@ jobs:
       - run: uv sync --group dev
       - run: uv run pytest tests/ --cov=app --cov-report=term-missing -q --ignore=tests/e2e
 
+  release-gate:
+    name: Release Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-${{ runner.os }}-
+      - run: uv sync --group dev --group e2e
+      - run: uv run playwright install --with-deps chromium
+      # Both suites ALWAYS run. The first is deliberately red while the
+      # expected-failure manifest is non-empty, and a failing step stops later
+      # steps -- so using it as control flow would remove the browser canary
+      # from the gate for exactly as long as the gate is red.
+      #
+      # --ignore=tests/release/browser is load-bearing: `pytest tests/release`
+      # recursively collects the browser subtree and then deselects it under
+      # the default -m 'not e2e', which would contradict the deselected == 0
+      # rule below and make the gate permanently un-greenable. The two
+      # commands PARTITION their domains.
+      - id: release_suite
+        continue-on-error: true
+        run: >-
+          uv run pytest tests/release --ignore=tests/release/browser
+          -q -p no:randomly --junitxml=release.xml
+          --release-counts=release-counts.json
+      - id: browser_canary
+        continue-on-error: true
+        run: >-
+          uv run pytest tests/release/browser -q -m e2e -o addopts=''
+          --junitxml=browser.xml --release-counts=browser-counts.json
+      # The ONLY step that decides the job. JUnit XML cannot carry a
+      # deselection count, so the counts files are passed alongside it.
+      - run: >-
+          uv run python tests/release/gate_report.py
+          release.xml release-counts.json
+          browser.xml browser-counts.json
+
   frontend-tests:
     name: Frontend Tests
     runs-on: ubuntu-latest
