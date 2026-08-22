@@ -185,7 +185,8 @@ def main(argv: list[str]) -> int:
         if len(argv) > index:
             path = pathlib.Path(argv[index])
             if path.exists():
-                observed.extend(json.loads(path.read_text()))
+                payload = json.loads(path.read_text())
+                observed.extend(payload["signatures"] if isinstance(payload, dict) else payload)
 
     code, reasons = decide([release, browser], load_manifest(), observed)
     for reason in reasons:

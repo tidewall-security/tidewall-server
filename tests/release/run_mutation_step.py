@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -59,7 +60,18 @@ DEFAULT_MUTATION = Mutation(
 
 
 def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, int]:
-    """Run the release suite; return its signature multiset and error count."""
+    """Run the release suite; return its signature multiset and UNACCOUNTED failures.
+
+    Every JUnit outcome is classified. An `<error>` is a harness error. A
+    `<failure>` is ACCOUNTED FOR only if that same test emitted a signature or
+    is a recognised component mismatch; anything else -- an unrelated assertion
+    failure, a fixture problem, a typo in a test -- is counted as unaccounted.
+
+    Counting only `<error>` meant an unrelated assertion failure could exist in
+    BOTH runs while the runner still reported the expected delta and succeeded.
+    The release suite is deliberately red, so an exit code cannot make this
+    distinction and something must.
+    """
     subprocess.run(
         [
             "uv",
@@ -78,29 +90,55 @@ def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, i
         text=True,
     )
 
+    from tests.release.signatures import accounted_nodeids
+
     observed: Counter = Counter()
+    accounted = accounted_nodeids(signatures)
     if signatures.exists():
-        for row in json.loads(signatures.read_text()):
+        payload = json.loads(signatures.read_text())
+        rows = payload["signatures"] if isinstance(payload, dict) else payload
+        for row in rows:
             observed[tuple(row[f] for f in FIELDS)] += 1
 
-    errors = 0
-    if junit.exists():
-        root = ET.parse(junit).getroot()
-        errors = sum(1 for case in root.iter("testcase") if case.find("error") is not None)
-
-    # Component mismatches are reported as ordinary failures rather than
-    # signatures, because they are not occurrences. They are extracted here so
-    # the mutant's effect is measurable.
+    unaccounted = 0
     if junit.exists():
         root = ET.parse(junit).getroot()
         for case in root.iter("testcase"):
+            nodeid = f"{(case.get('classname') or '').replace('.', '/')}.py::{case.get('name')}"
+            simple = f"{case.get('classname')}::{case.get('name')}"
+            if case.find("error") is not None:
+                unaccounted += 1
+                continue
             failure = case.find("failure")
-            if failure is not None and "ComponentMismatch" in (failure.get("message") or ""):
-                message = failure.get("message") or ""
-                for part in ("emoji/reported", "pii/entities_redacted"):
-                    if f"declares '{part}'" in message:
-                        observed[("component-mismatch", part)] += 1
-    return observed, errors
+            if failure is None:
+                continue
+
+            message = failure.get("message") or ""
+            mismatch = _component_mismatch(message)
+            if mismatch:
+                observed[("component-mismatch", mismatch)] += 1
+                continue
+
+            if any(a.startswith(nodeid) or a.startswith(simple) for a in accounted):
+                continue
+            if any(nodeid.split("::")[-1] in a for a in accounted):
+                continue
+
+            unaccounted += 1
+
+    return observed, unaccounted
+
+
+def _component_mismatch(message: str) -> str | None:
+    """The declared component a mismatch names, whatever it is.
+
+    Two component names were hard-coded here, so a mismatch on any other
+    component was silently ignored.
+    """
+    if "ComponentMismatch" not in message:
+        return None
+    match = re.search(r"declares '([^']+)'", message)
+    return match.group(1) if match else None
 
 
 def main(argv: list[str]) -> int:
@@ -118,7 +156,11 @@ def main(argv: list[str]) -> int:
 
         unmutated, unmutated_errors = run_suite(tmpdir / "base.json", tmpdir / "base.xml")
         if unmutated_errors:
-            print(f"MUTATION STEP: {unmutated_errors} harness error(s) in the unmutated run")
+            print(
+                f"MUTATION STEP: {unmutated_errors} unaccounted failure(s) in the "
+                "unmutated run; every failure must either emit a signature or be a "
+                "recognised component mismatch"
+            )
             return 1
 
         if args.write_baseline:
