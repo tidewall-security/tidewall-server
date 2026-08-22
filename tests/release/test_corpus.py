@@ -88,12 +88,15 @@ def test_in_flight_capture_takes_every_sidecar_that_exists(tmp_path: Path):
     conn.close()
 
 
-def _wal_only_canary(tmp_path: Path, canary: bytes, name: str):
-    """Leave *canary* present ONLY in WAL frames, never in the live page image.
+def _canary_committed(tmp_path: Path, canary: bytes, name: str):
+    """A database whose LIVE image still holds *canary*, WAL not checkpointed.
 
-    Written and committed, then deleted and committed with secure_delete on,
-    so the live image no longer holds the bytes and the pre-delete page image
-    survives only as a frame.
+    The delete is deliberately NOT done here. An earlier version inserted and
+    deleted before the reader was opened, so the reader's snapshot was the
+    post-delete one and had no need of the frame carrying the canary -- the
+    truncation was blocked only because SQLite waits for any open reader, not
+    because that reader pinned the relevant frame. The test passed for a
+    reason its own docstring did not describe.
     """
     root = tmp_path / name
     root.mkdir()
@@ -102,8 +105,6 @@ def _wal_only_canary(tmp_path: Path, canary: bytes, name: str):
     conn.execute("PRAGMA secure_delete=ON")
     conn.execute("PRAGMA wal_autocheckpoint=0")
     conn.execute("INSERT INTO t(v) VALUES (?)", (canary.decode(),))
-    conn.commit()
-    conn.execute("DELETE FROM t")
     conn.commit()
     return db, conn
 
@@ -114,23 +115,28 @@ def test_a_held_reader_stops_the_wal_being_checkpointed_away(tmp_path: Path):
     Earlier this test held a reader, ran a TRUNCATE checkpoint, and asserted
     the canary was still found. It passed with the reader removed: the
     checkpoint simply moved the canary from the WAL into the main file, and
-    the sweep found it there. The reader was load-bearing for nothing the
-    assertion could see.
+    the sweep found it there.
 
-    The distinguishing value is one that exists ONLY in a WAL frame -- written
-    and then deleted -- so a successful TRUNCATE destroys it outright.
+    The distinguishing value is one that exists ONLY in a WAL frame -- and the
+    reader must be opened BEFORE the delete, so the frame it pins is the one
+    carrying the canary rather than the post-delete image.
     """
     canary = b"CANARY-READER-PIN-7a21"
 
-    # Arm 1: reader held. The checkpoint cannot reclaim the frames.
-    db_held, conn_held = _wal_only_canary(tmp_path, canary, "held")
+    # Arm 1: the reader's snapshot is taken while the canary is still live,
+    # so the frame carrying it is one the reader may still need.
+    db_held, conn_held = _canary_committed(tmp_path, canary, "held")
     with capture_with_reader(db_held) as reader:
+        conn_held.execute("DELETE FROM t")
+        conn_held.commit()
         conn_held.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
         held = reader.capture(tmp_path / "held-cap")
     conn_held.close()
 
-    # Arm 2: identical exercise, no reader.
-    db_free, conn_free = _wal_only_canary(tmp_path, canary, "free")
+    # Arm 2: identical exercise, no reader open across the delete.
+    db_free, conn_free = _canary_committed(tmp_path, canary, "free")
+    conn_free.execute("DELETE FROM t")
+    conn_free.commit()
     conn_free.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
     unheld = capture_in_flight(db_free, tmp_path / "free-cap")
     conn_free.close()
@@ -139,6 +145,10 @@ def test_a_held_reader_stops_the_wal_being_checkpointed_away(tmp_path: Path):
     unheld_counts = unheld.occurrences(canary)
 
     assert sum(held_counts.values()) > 0, f"the pinned capture lost the canary: {held_counts}"
+    assert any(k.endswith(":wal") for k, v in held_counts.items() if v), (
+        f"the canary survived, but not in a WAL frame: {held_counts}; the reader "
+        "is not pinning what this test claims it pins"
+    )
     assert sum(unheld_counts.values()) == 0, (
         "premise changed: the canary survived a TRUNCATE checkpoint without a "
         f"reader, so this no longer isolates what the reader does: {unheld_counts}"

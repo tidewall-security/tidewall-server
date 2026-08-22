@@ -30,6 +30,12 @@ def pytest_addoption(parser):
         default=None,
         help="write {selected, deselected, skipped, xfailed} to this path",
     )
+    parser.addoption(
+        "--release-signatures",
+        action="store",
+        default=None,
+        help="write observed six-field failure signatures to this path",
+    )
 
 
 def pytest_configure(config):
@@ -65,3 +71,9 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     target = config.getoption("--release-counts")
     if target:
         pathlib.Path(target).write_text(json.dumps(counts, indent=2, sort_keys=True))
+
+    signatures = config.getoption("--release-signatures")
+    if signatures:
+        from tests.release.signatures import RECORDER
+
+        RECORDER.dump(pathlib.Path(signatures))
