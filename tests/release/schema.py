@@ -24,10 +24,11 @@ sixth class arriving becomes a build failure rather than a silent hole.
 
 from __future__ import annotations
 
+import collections
 import sqlite3
 from dataclasses import dataclass
 
-#: Every foreign key at head, as (table, column, parent, on_delete).
+#: Every foreign key at head, as (table, column, parent, on_update, on_delete).
 #:
 #: All ten are pinned, not only the six that write. "Exactly the six" was
 #: ambiguous about whether RESTRICT and NO ACTION were inside or outside the
@@ -35,20 +36,24 @@ from dataclasses import dataclass
 #: cannot copy a value anywhere.
 REFERENTIAL_ACTIONS: frozenset[tuple[str, str, str, str]] = frozenset(
     {
-        ("access_rules", "rule_set_id", "rule_sets", "CASCADE"),
-        ("access_tokens", "device_id", "devices", "CASCADE"),
-        ("interaction_contents", "interaction_id", "interactions", "CASCADE"),
-        ("rule_sets", "policy_id", "policies", "CASCADE"),
-        ("api_keys", "policy_id", "policies", "SET NULL"),
-        ("devices", "reg_token_id", "registration_tokens", "SET NULL"),
-        ("devices", "policy_id", "policies", "RESTRICT"),
-        ("registration_tokens", "policy_id", "policies", "RESTRICT"),
-        ("content_export_notes", "attempt_id", "content_export_attempts", "NO ACTION"),
-        ("content_export_reconciliations", "attempt_id", "content_export_attempts", "NO ACTION"),
+        ("access_rules", "rule_set_id", "rule_sets", "NO ACTION", "CASCADE"),
+        ("access_tokens", "device_id", "devices", "NO ACTION", "CASCADE"),
+        ("interaction_contents", "interaction_id", "interactions", "NO ACTION", "CASCADE"),
+        ("rule_sets", "policy_id", "policies", "NO ACTION", "CASCADE"),
+        ("api_keys", "policy_id", "policies", "NO ACTION", "SET NULL"),
+        ("devices", "reg_token_id", "registration_tokens", "NO ACTION", "SET NULL"),
+        ("devices", "policy_id", "policies", "NO ACTION", "RESTRICT"),
+        ("registration_tokens", "policy_id", "policies", "NO ACTION", "RESTRICT"),
+        ("content_export_notes", "attempt_id", "content_export_attempts", "NO ACTION", "NO ACTION"),
+        ("content_export_reconciliations", "attempt_id", "content_export_attempts", "NO ACTION", "NO ACTION"),
     }
 )
 
-#: The actions that actually write to a child when a parent row is deleted.
+#: The actions that write to a child. ON UPDATE matters as much as ON DELETE:
+#: an `ON UPDATE CASCADE` copies the parent's new value into the child, which
+#: is a different-target write the statement never names. v1 read only
+#: `on_delete` (fk[6]) and would have missed every one of them. All ten are
+#: `NO ACTION` on update today, which is exactly why the omission was invisible.
 WRITING_ACTIONS = frozenset({"CASCADE", "SET NULL"})
 
 
@@ -62,46 +67,56 @@ def _tables(conn: sqlite3.Connection) -> list[str]:
     return [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")]
 
 
-def referential_actions(conn: sqlite3.Connection) -> set[tuple[str, str, str, str]]:
-    """Every foreign key, as (table, column, parent, on_delete)."""
-    out: set[tuple[str, str, str, str]] = set()
+def referential_actions(conn: sqlite3.Connection) -> set[tuple[str, str, str, str, str]]:
+    """Every foreign key, as (table, column, parent, on_update, on_delete).
+
+    foreign_key_list columns: (id, seq, table, from, to, on_update, on_delete,
+    match).
+    """
+    out: set[tuple[str, str, str, str, str]] = set()
     for table in _tables(conn):
         for fk in conn.execute(f"PRAGMA foreign_key_list('{table}')"):
-            out.add((table, fk[3], fk[2], fk[6]))
+            out.add((table, fk[3], fk[2], fk[5], fk[6]))
     return out
 
 
-def cascade_map(conn: sqlite3.Connection) -> dict[str, set[tuple[str, str, str]]]:
-    """Parent table -> the (child, column, action) a DELETE on it writes.
+def cascade_map(conn: sqlite3.Connection) -> dict[str, set[tuple[str, str, str, str]]]:
+    """Parent table -> the (child, column, event, action) writes it causes.
 
-    Only the writing actions. RESTRICT and NO ACTION refuse or do nothing, so
-    they cannot carry a value into another table and have nothing to attribute.
+    Both events. RESTRICT and NO ACTION refuse or defer and never modify a
+    child value, so they carry nothing and have nothing to attribute -- but
+    that is an argument about those two ACTIONS, not about the DELETE event,
+    and reading only `on_delete` would silently drop every ON UPDATE CASCADE.
     """
-    out: dict[str, set[tuple[str, str, str]]] = {}
-    for table, column, parent, action in referential_actions(conn):
-        if action in WRITING_ACTIONS:
-            out.setdefault(parent, set()).add((table, column, action))
+    out: dict[str, set[tuple[str, str, str, str]]] = {}
+    for table, column, parent, on_update, on_delete in referential_actions(conn):
+        for event, action in (("UPDATE", on_update), ("DELETE", on_delete)):
+            if action in WRITING_ACTIONS:
+                out.setdefault(parent, set()).add((table, column, event, action))
     return out
 
 
-def copy_map(conn: sqlite3.Connection) -> dict[tuple[str, str], set[str]]:
+def copy_map(conn: sqlite3.Connection) -> dict[tuple[str, str], collections.Counter[str]]:
     """(table, column) -> every physical location holding that value.
 
     The table B-tree, plus every index whose columns include it. This is what
     makes an expected byte-occurrence count an oracle instead of a surprise:
     `policies.name` is unique, so its value exists twice in a closed database.
     """
-    out: dict[tuple[str, str], set[str]] = {}
+    out: dict[tuple[str, str], collections.Counter[str]] = {}
     for table in _tables(conn):
-        columns = [r[1] for r in conn.execute(f"PRAGMA table_info('{table}')")]
-        for column in columns:
-            out[(table, column)] = {table}
+        for column in (r[1] for r in conn.execute(f"PRAGMA table_info('{table}')")):
+            out[(table, column)] = collections.Counter({table: 1})
         for index in conn.execute(f"PRAGMA index_list('{table}')"):
             name = index[1]
             for entry in conn.execute(f"PRAGMA index_xinfo('{name}')"):
                 column = entry[2]
-                if column and (table, column) in out:
-                    out[(table, column)].add(name)
+                # Counter, not a set: `CREATE INDEX i ON t(c, c)` gives c two
+                # key slots in one index, so the value exists twice there. A
+                # set of B-tree names collapses that to one and cannot be an
+                # occurrence-count oracle.
+                if entry[5] == 1 and column and (table, column) in out:
+                    out[(table, column)][name] += 1
     return out
 
 
@@ -109,9 +124,14 @@ def invariant(conn: sqlite3.Connection) -> list[InvariantViolation]:
     """Every different-target writer this design refuses. Empty is passing."""
     violations: list[InvariantViolation] = []
 
-    for kind in ("trigger", "view"):
-        for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type=?", (kind,)):
-            violations.append(InvariantViolation(kind, name))
+    # Both schemas. A TEMP trigger is connection-local and invisible to
+    # sqlite_master, but it can be attached to a main-schema table and write
+    # another main-schema table -- a different-target writer while the
+    # invariant reported nothing.
+    for source, prefix in (("sqlite_master", ""), ("sqlite_temp_master", "temp-")):
+        for kind in ("trigger", "view"):
+            for (name,) in conn.execute(f"SELECT name FROM {source} WHERE type=?", (kind,)):
+                violations.append(InvariantViolation(f"{prefix}{kind}", name))
 
     observed = referential_actions(conn)
     for extra in sorted(observed - REFERENTIAL_ACTIONS):
@@ -130,12 +150,16 @@ def invariant(conn: sqlite3.Connection) -> list[InvariantViolation]:
         if row[2] in ("virtual", "shadow"):
             violations.append(InvariantViolation(row[2], row[1]))
 
-    for name, sql in conn.execute("SELECT name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"):
-        # A partial index has a WHERE clause; an expression index reports its
-        # slot as cid=-2 with a NULL name, so `copy_map` cannot link it back to
-        # a source column. Both are refused rather than mis-attributed.
-        if " where " in (sql or "").lower():
-            violations.append(InvariantViolation("partial-index", name))
+    # index_list columns: (seq, name, unique, origin, partial). The structural
+    # `partial` flag, not a `" where "` substring: `ON t(c)\nWHERE ...` is legal
+    # and evaded the substring rule entirely, while an index NAMED
+    # "plain where marker" was wrongly flagged by it.
+    for table in _tables(conn):
+        for index in conn.execute(f"PRAGMA index_list('{table}')"):
+            if index[4]:
+                violations.append(InvariantViolation("partial-index", index[1]))
+
+    for name, _sql in conn.execute("SELECT name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"):
         # index_xinfo columns: (seqno, cid, name, desc, coll, key). Only KEY
         # columns describe the index's own content -- every index also carries
         # an implicit rowid entry with cid=-1 and a NULL name, so checking for
@@ -144,11 +168,14 @@ def invariant(conn: sqlite3.Connection) -> list[InvariantViolation]:
         if any(e[5] == 1 and e[1] == -2 for e in conn.execute(f"PRAGMA index_xinfo('{name}')")):
             violations.append(InvariantViolation("expression-index", name))
 
-    for table in _tables(conn):
-        sql = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
-        if sql and sql[0] and "without rowid" in sql[0].lower():
-            # Stored AS the index B-tree, so the table/index distinction
-            # `copy_map` relies on does not hold.
-            violations.append(InvariantViolation("without-rowid", table))
+    # table_list columns: (schema, name, type, ncol, wr, strict). `wr` is the
+    # structural WITHOUT ROWID flag. Substring matching was both too permissive
+    # -- `WITHOUT\nROWID` is legal and evaded it -- and too strict, flagging an
+    # ordinary table with a column named "without rowid". Such a table is
+    # stored AS its index B-tree, so the table/index distinction `copy_map`
+    # relies on does not hold.
+    for row in conn.execute("PRAGMA table_list"):
+        if row[4] and row[2] == "table":
+            violations.append(InvariantViolation("without-rowid", row[1]))
 
     return violations
