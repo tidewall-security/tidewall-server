@@ -114,3 +114,21 @@ def test_invocation_identity_ignores_the_body():
     a = Invocation("POST", "https://x/y", b"one")
     b = Invocation("POST", "https://x/y", b"two")
     assert a.identity == b.identity == "POST https://x/y"
+
+
+def test_the_count_is_per_identity_not_a_total():
+    """Two endpoints, different counts.
+
+    A test that only ever calls one URL cannot tell a per-identity count from
+    a total, and a regression to the total passes it.
+    """
+    with recording_transport(httpx) as recorder:
+        with _client(_ok) as client:
+            client.get("https://intel.example/health")
+            client.get("https://intel.example/health")
+            client.post("https://intel.example/lookup", content=b"x")
+
+    assert len(recorder.invocations) == 3
+    assert recorder.count("GET https://intel.example/health") == 2
+    assert recorder.count("POST https://intel.example/lookup") == 1
+    assert recorder.count("GET https://never.example/") == 0
