@@ -22,6 +22,26 @@ import sqlite3
 from dataclasses import dataclass, field
 
 
+class UnreadableForbiddenColumn(Exception):
+    """A declared forbidden column could not be read.
+
+    This is an error, not a skip. A check that cannot run has not passed.
+    """
+
+
+def _holds(value: object, watched: str) -> bool:
+    """Whether a stored value contains the watched text, WHATEVER ITS TYPE.
+
+    A secret stored as a BLOB is a secret on disk. Comparing only `str` values
+    meant `INSERT INTO audit(v) VALUES (CAST(? AS BLOB))` passed the check.
+    """
+    if isinstance(value, str):
+        return watched in value
+    if isinstance(value, bytes | bytearray | memoryview):
+        return watched.encode() in bytes(value)
+    return watched in str(value)
+
+
 @dataclass
 class Statement:
     """One traced statement, with the value-visibility caveat attached."""
@@ -66,6 +86,7 @@ class TracedConnection:
     watched: tuple[str, ...]
     statements: list[Statement] = field(default_factory=list)
     violations: list[ForbiddenRead] = field(default_factory=list)
+    _read: set[tuple[str, str]] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         self.conn.set_trace_callback(self._record)
@@ -90,19 +111,30 @@ class TracedConnection:
     def _sweep(self, after: str) -> None:
         """Read every forbidden column. This is the statement boundary."""
         for table, column in sorted(self.forbidden):
-            try:
-                rows = self.conn.execute(f'SELECT rowid, "{column}" FROM "{table}"').fetchall()
-            except sqlite3.OperationalError:
-                # The table does not exist yet. A boundary before the schema
-                # is created has nothing to read, which is not a pass for any
-                # later boundary -- each one reads independently.
+            if not self._table_exists(table):
+                # A boundary before the schema is created has nothing to read.
+                # Tolerated here, refused by `verify_every_pair_was_read`.
                 continue
+            if column not in self._columns_of(table):
+                # Fail closed on a BROKEN DECLARATION.
+                #
+                # This cannot be caught by letting the SELECT fail. SQLite
+                # falls back to treating a double-quoted unknown identifier as
+                # a STRING LITERAL, so `SELECT "vv" FROM audit` does not error
+                # -- it returns the constant 'vv' for every row, and the sweep
+                # reads that happily and finds nothing, forever. A misspelled
+                # forbidden column was therefore a check that silently never
+                # ran and passed for the entire run.
+                raise UnreadableForbiddenColumn(
+                    f"forbidden column {table}.{column} does not exist " f"(columns: {sorted(self._columns_of(table))})"
+                )
+            rows = self.conn.execute(f'SELECT rowid, "{column}" FROM "{table}"').fetchall()
+            self._read.add((table, column))
             for rowid, value in rows:
                 if value is None:
                     continue
-                text = value if isinstance(value, str) else str(value)
                 for watched in self.watched:
-                    if watched in text:
+                    if _holds(value, watched):
                         self.violations.append(
                             ForbiddenRead(
                                 table=table,
@@ -111,6 +143,28 @@ class TracedConnection:
                                 after_statement=after,
                             )
                         )
+
+    def _columns_of(self, table: str) -> set[str]:
+        return {r[0] for r in self.conn.execute("SELECT name FROM pragma_table_xinfo(?)", (table,))}
+
+    def _table_exists(self, table: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM pragma_table_list WHERE schema = 'main' AND name = ?",
+            (table,),
+        ).fetchone()
+        return row is not None
+
+    def verify_every_pair_was_read(self) -> None:
+        """Refuse a declared pair that was never successfully read.
+
+        A forbidden column naming a table that is never created is not a pass;
+        it is a declaration with nothing behind it.
+        """
+        never = sorted(set(self.forbidden) - self._read)
+        if never:
+            raise UnreadableForbiddenColumn(
+                "declared forbidden columns were never read: " + ", ".join(f"{t}.{c}" for t, c in never)
+            )
 
     def trace_mentions(self, value: str) -> list[Statement]:
         """Statements whose TEXT contains the value. Attribution, not proof."""

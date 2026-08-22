@@ -6,7 +6,7 @@ import sqlite3
 
 import pytest
 
-from tests.release.trace import TracedConnection
+from tests.release.trace import TracedConnection, UnreadableForbiddenColumn
 
 SECRET = "CANARY-TRACE-8e14"
 
@@ -106,3 +106,80 @@ def test_every_statement_boundary_is_read_not_only_the_last(traced):
     assert traced.violations, "the value was written and removed between boundaries"
     assert "INSERT INTO audit" in traced.violations[0].after_statement
     assert traced.conn.execute("SELECT count(*) FROM audit").fetchone()[0] == 0
+
+
+def test_a_secret_stored_as_a_blob_is_caught():
+    """A secret on disk is a secret whatever its storage class.
+
+    Comparing only `str` column values let a CAST-to-BLOB write pass.
+    """
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE audit (id INTEGER PRIMARY KEY, v BLOB)")
+    t = TracedConnection(conn=conn, forbidden=frozenset({("audit", "v")}), watched=(SECRET,))
+    t.execute("INSERT INTO audit(id, v) VALUES (1, CAST(? AS BLOB))", (SECRET,))
+
+    assert t.violations, "a BLOB-stored secret was not read as a violation"
+    assert isinstance(
+        conn.execute("SELECT v FROM audit").fetchone()[0], bytes
+    ), "premise changed: the value is no longer stored as a BLOB"
+    conn.close()
+
+
+def test_a_secret_embedded_in_a_larger_blob_is_caught():
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE audit (id INTEGER PRIMARY KEY, v BLOB)")
+    t = TracedConnection(conn=conn, forbidden=frozenset({("audit", "v")}), watched=(SECRET,))
+    t.execute("INSERT INTO audit(id, v) VALUES (1, ?)", (b"prefix" + SECRET.encode() + b"suffix",))
+    assert t.violations
+    conn.close()
+
+
+def test_every_declared_forbidden_pair_is_swept_not_just_the_first():
+    """Two pairs, and the violation is in the second."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE a_first (id INTEGER PRIMARY KEY, v TEXT)")
+    conn.execute("CREATE TABLE z_second (id INTEGER PRIMARY KEY, v TEXT)")
+    t = TracedConnection(
+        conn=conn,
+        forbidden=frozenset({("a_first", "v"), ("z_second", "v")}),
+        watched=(SECRET,),
+    )
+    t.execute("INSERT INTO z_second(id, v) VALUES (1, ?)", (SECRET,))
+
+    assert t.violations, "the second declared pair was never swept"
+    assert t.violations[0].table == "z_second"
+    conn.close()
+
+
+def test_a_misspelled_forbidden_column_is_an_error_not_a_skip():
+    """The check that silently never ran.
+
+    Swallowing every OperationalError meant a typo in a declaration produced a
+    check which passed for the whole run without reading anything.
+    """
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE audit (id INTEGER PRIMARY KEY, v TEXT)")
+    t = TracedConnection(conn=conn, forbidden=frozenset({("audit", "vv")}), watched=(SECRET,))
+    with pytest.raises(UnreadableForbiddenColumn, match="audit.vv"):
+        t.execute("INSERT INTO audit(id, v) VALUES (1, 'x')")
+    conn.close()
+
+
+def test_a_forbidden_pair_whose_table_never_exists_fails_at_the_end():
+    """Tolerated during the run, refused at the close.
+
+    A boundary before the schema exists has nothing to read. A whole run with
+    nothing to read is a declaration with nothing behind it.
+    """
+    conn = sqlite3.connect(":memory:")
+    t = TracedConnection(conn=conn, forbidden=frozenset({("never_made", "v")}), watched=(SECRET,))
+    t.execute("CREATE TABLE other (v TEXT)")  # tolerated: no such table yet
+
+    with pytest.raises(UnreadableForbiddenColumn, match="never_made.v"):
+        t.verify_every_pair_was_read()
+    conn.close()
+
+
+def test_verify_passes_when_every_pair_was_actually_read(traced):
+    traced.execute("INSERT INTO src(v) VALUES ('ok')")
+    traced.verify_every_pair_was_read()
