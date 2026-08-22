@@ -18,7 +18,7 @@ from tests.release.ui_property import (
     audit,
 )
 
-CANARY_MODULE = pathlib.Path(__file__).resolve().parent / "test_ui_canary.py"
+CANARY_MODULE = pathlib.Path(__file__).resolve().parent / "browser" / "test_ui_canary.py"
 
 
 def test_there_are_exactly_seven_behaviours():
