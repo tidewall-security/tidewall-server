@@ -9410,3 +9410,198 @@ operation = "guard"
 grant = "api"
 representation = "percent-encoded"
 collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+[[case]]
+leaf = "random-canary"
+placement = "message-content"
+branch = "allow"
+detector = "malicious_prompt"
+event = "input"
+component = "malicious_prompt"
+sub_path = "generic_injection_ml"
+capture = "capture-on"
+operation = "read-full"
+grant = "content:read-full"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "random-canary"
+placement = "message-content"
+branch = "allow"
+detector = "malicious_prompt"
+event = "input"
+component = "malicious_prompt"
+sub_path = "generic_injection_ml"
+capture = "capture-on"
+operation = "read-full"
+grant = "content:read-full"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "random-canary"
+placement = "message-content"
+branch = "allow"
+detector = "malicious_prompt"
+event = "input"
+component = "malicious_prompt"
+sub_path = "generic_injection_ml"
+capture = "capture-on"
+operation = "read-full"
+grant = "content:read-full"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "random-canary"
+placement = "message-content"
+branch = "allow"
+detector = "malicious_prompt"
+event = "input"
+component = "malicious_prompt"
+sub_path = "generic_injection_ml"
+capture = "capture-on"
+operation = "read-full"
+grant = "content:read-full"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "random-canary"
+placement = "message-content"
+branch = "allow"
+detector = "malicious_prompt"
+event = "input"
+component = "malicious_prompt"
+sub_path = "generic_injection_ml"
+capture = "capture-on"
+operation = "read-full"
+grant = "content:read-full"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "random-canary"
+placement = "message-content"
+branch = "allow"
+detector = "malicious_prompt"
+event = "input"
+component = "malicious_prompt"
+sub_path = "generic_injection_ml"
+capture = "capture-on"
+operation = "read-full"
+grant = "content:read-full"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "random-canary"
+placement = "message-content"
+branch = "allow"
+detector = "malicious_prompt"
+event = "input"
+component = "malicious_prompt"
+sub_path = "generic_injection_ml"
+capture = "capture-on"
+operation = "read-full"
+grant = "content:read-full"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "random-canary"
+placement = "message-content"
+branch = "allow"
+detector = "malicious_prompt"
+event = "input"
+component = "malicious_prompt"
+sub_path = "generic_injection_ml"
+capture = "capture-on"
+operation = "read-matches"
+grant = "content:read-matches"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "random-canary"
+placement = "message-content"
+branch = "allow"
+detector = "malicious_prompt"
+event = "input"
+component = "malicious_prompt"
+sub_path = "generic_injection_ml"
+capture = "capture-on"
+operation = "read-matches"
+grant = "content:read-matches"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "random-canary"
+placement = "message-content"
+branch = "allow"
+detector = "malicious_prompt"
+event = "input"
+component = "malicious_prompt"
+sub_path = "generic_injection_ml"
+capture = "capture-on"
+operation = "read-matches"
+grant = "content:read-matches"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "random-canary"
+placement = "message-content"
+branch = "allow"
+detector = "malicious_prompt"
+event = "input"
+component = "malicious_prompt"
+sub_path = "generic_injection_ml"
+capture = "capture-on"
+operation = "read-matches"
+grant = "content:read-matches"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "random-canary"
+placement = "message-content"
+branch = "allow"
+detector = "malicious_prompt"
+event = "input"
+component = "malicious_prompt"
+sub_path = "generic_injection_ml"
+capture = "capture-on"
+operation = "read-matches"
+grant = "content:read-matches"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "random-canary"
+placement = "message-content"
+branch = "allow"
+detector = "malicious_prompt"
+event = "input"
+component = "malicious_prompt"
+sub_path = "generic_injection_ml"
+capture = "capture-on"
+operation = "read-matches"
+grant = "content:read-matches"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "random-canary"
+placement = "message-content"
+branch = "allow"
+detector = "malicious_prompt"
+event = "input"
+component = "malicious_prompt"
+sub_path = "generic_injection_ml"
+capture = "capture-on"
+operation = "read-matches"
+grant = "content:read-matches"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]

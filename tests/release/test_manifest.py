@@ -259,5 +259,16 @@ def test_every_case_binds_its_operation_to_its_placement_and_grant():
 
 
 def test_the_operation_and_grant_domains_are_fully_exercised():
-    assert {c.operation for c in CASES} <= set(OPERATIONS)
-    assert {c.grant for c in CASES} <= set(GRANTS)
+    """Equality, not containment.
+
+    `<=` passed with two of seven operations and two of five grants absent --
+    the protected reads were declared in the constants and used by no case, so
+    Task 3's read rows were unreachable from Task 2 and no later consumer could
+    exercise them without inventing an undeclared case.
+    """
+    assert {c.operation for c in CASES} == set(OPERATIONS), {
+        "declared, no case": sorted(set(OPERATIONS) - {c.operation for c in CASES})
+    }
+    assert {c.grant for c in CASES} == set(GRANTS), {
+        "declared, no case": sorted(set(GRANTS) - {c.grant for c in CASES})
+    }

@@ -310,14 +310,34 @@ def report_match_callers() -> frozenset[str]:
         if not path.exists():  # pragma: no cover - a registry pointing nowhere
             raise AssertionError(f"{detector} names a module that does not exist: {module}")
         tree = ast.parse(path.read_text())
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                func = node.func
-                name = getattr(func, "attr", None) or getattr(func, "id", None)
-                if name == "report_match":
-                    found.add(detector)
-                    break
+
+        # Module-level helpers that reach report_match. Both current exact-match
+        # detectors call a `_report_match` wrapper rather than the hook itself,
+        # so "the module contains a call" attributed it to the registered
+        # detector without establishing that the detector reaches it.
+        helpers = {
+            node.name for node in tree.body if isinstance(node, ast.FunctionDef) and _calls_any(node, {"report_match"})
+        }
+        targets = helpers | {"report_match"}
+
+        # The registered CLASS's own methods must reach one of them.
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and _calls_any(node, targets):
+                found.add(detector)
+                break
     return frozenset(found)
+
+
+def _calls_any(node, names: set[str]) -> bool:
+    """True if *node* contains a call to any of *names*."""
+    import ast
+
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Call):
+            called = getattr(inner.func, "attr", None) or getattr(inner.func, "id", None)
+            if called in names:
+                return True
+    return False
 
 
 def registry_detectors() -> tuple[str, ...]:

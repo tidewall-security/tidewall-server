@@ -503,6 +503,55 @@ ROWS: tuple[Row, ...] = (
         Rule.ALLOWED_BOUNDED,
         "the endpoint is /threat-intel and the shape is nested",
     ),
+    # Threat-intelligence configuration is stored INSIDE rule_sets.detectors,
+    # so it comes back from the rule-set endpoints and the YAML export exactly
+    # as the competitor and custom-entity literals do. The allow rows for those
+    # three surfaces were scoped to rule-set-detector-config only, so a
+    # threat-intelligence canary hit the catch-all on all three.
+    _r(
+        "*",
+        "threat-intelligence-config",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "GET /v1/policies/{policy_id}/rule-sets/{event_type} -> "
+        "$.detectors.malicious_entity.intel.local_blocklists.urls[*]",
+        Rule.ALLOWED_BOUNDED,
+        "the rule set returns its own detector configuration",
+    ),
+    _r(
+        "*",
+        "threat-intelligence-config",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "PATCH /v1/policies/{policy_id}/rule-sets/{event_type} -> "
+        "$.detectors.malicious_entity.intel.local_blocklists.urls[*]",
+        Rule.ALLOWED_BOUNDED,
+        "update returns it too",
+    ),
+    _r(
+        "*",
+        "threat-intelligence-config",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "GET /v1/policies/{policy_id}/export -> body:detectors",
+        Rule.ALLOWED_BOUNDED,
+        "the YAML export carries the whole detector block",
+    ),
     # -- capture-on: where content legitimately lives ------------------------
     _r(
         "*",
