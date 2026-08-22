@@ -72,16 +72,26 @@ class Measured:
 def canonical_live_image(db: Path, into: Path) -> Path:
     """A checkpointed and vacuumed copy: state with no history in it.
 
-    VACUUM INTO writes a fresh database containing only live content -- no WAL
-    frames, no freelist, no freeblocks. Counting against anything else counts
-    history, and the count stops being an oracle for what the code did.
+    VACUUM INTO writes a fresh database containing only live content: it reads
+    through the WAL, so committed frames are folded in, and it rebuilds the
+    file, so the freelist and every freeblock are gone. Counting against
+    anything else counts history, and the count stops being an oracle for what
+    the code did.
     """
     into.parent.mkdir(parents=True, exist_ok=True)
     if into.exists():
         into.unlink()
     conn = sqlite3.connect(db)
     try:
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        # NO explicit checkpoint. VACUUM INTO reads through the WAL, so
+        # committed frames are already folded into the image it writes --
+        # measured: a value living only in a WAL frame, with no checkpoint,
+        # appears in the VACUUM INTO output.
+        #
+        # A `PRAGMA wal_checkpoint(TRUNCATE)` was here first. No mutation could
+        # kill it, because it changed nothing about the resulting bytes. Left
+        # in place with a comment asserting it was load-bearing, it would have
+        # been one more thing that looks like a step and is not.
         conn.execute("VACUUM INTO ?", (str(into),))
     finally:
         conn.close()

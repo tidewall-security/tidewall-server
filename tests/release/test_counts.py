@@ -226,3 +226,48 @@ def test_measure_splits_live_from_historical(tmp_path: Path):
     m = measure(captured, SECRET)
     assert m.live == {"in-flight:db": 1}
     assert m.historical == {"in-flight:wal": 2}
+
+
+def test_a_plain_file_copy_still_carries_a_deleted_value(tmp_path: Path):
+    """Why the canonical image is a VACUUM and not a copy.
+
+    With secure_delete off, a deleted row's bytes stay in a freeblock of the
+    main database file. A byte copy of that file counts them; the rebuilt
+    image does not. An earlier version of this suite only ever deleted with
+    secure_delete ON, so a plain copy passed every test.
+    """
+    db = tmp_path / "leaky.db"
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA secure_delete=OFF")
+    conn.execute("CREATE TABLE t (v TEXT)")
+    conn.execute("INSERT INTO t(v) VALUES (?)", (SECRET.decode(),))
+    conn.commit()
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    conn.execute("DELETE FROM t")
+    conn.commit()
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    conn.close()
+
+    assert db.read_bytes().count(SECRET) > 0, (
+        "premise changed: the main file no longer retains the deleted bytes, "
+        "so this no longer distinguishes a copy from a rebuild"
+    )
+
+    image = canonical_live_image(db, tmp_path / "canonical" / "image.db")
+    assert image.read_bytes().count(SECRET) == 0, "the rebuilt image carried a freeblock the live database still holds"
+
+
+def test_an_unrecognised_live_rule_fails_closed(tmp_path: Path):
+    """A rule the historical condition has no answer for is not a pass.
+
+    If a fourth verdict is ever added to Rule, every historical occurrence
+    under it must fail here until someone decides what it means.
+    """
+    with pytest.raises(CountViolation, match="unhandled rule"):
+        check_historical(
+            _hist(tmp_path),
+            live_rule="PROVISIONAL",
+            live_count=1,
+            same_database_file=True,
+        )
