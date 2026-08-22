@@ -227,20 +227,25 @@ def test_capture_off_writes_nothing_for_the_same_exercise(tmp_path: Path):
     assert live_cells_holding(db, canary) == set()
 
 
-def test_a_capture_that_wrote_no_row_is_refused(tmp_path: Path):
-    """A count over an empty store is not a passing capture-on case."""
-    import sqlalchemy as sa_
+def test_a_capture_that_wrote_no_row_is_refused(tmp_path: Path, monkeypatch):
+    """The guard must FIRE, not merely exist.
 
-    db = tmp_path / "store.db"
-    engine = sa_.create_engine(f"sqlite:///{db}")
-    Base.metadata.create_all(engine)
-    engine.dispose()
+    This test previously raised CaptureNotPerformed itself and asserted the
+    message -- so it tested `raise`, and a guard deleted outright would have
+    passed it. Production capture is neutered here and the real code path is
+    required to refuse.
+    """
+    import tests.release.persistence as persistence
+
+    monkeypatch.setattr(persistence, "capture_content", lambda *a, **k: None)
 
     with pytest.raises(CaptureNotPerformed, match="measuring"):
-        raise CaptureNotPerformed(
-            "capture_content added no row, so any later count is measuring an "
-            "empty store rather than what capture wrote"
-        )
+        capture_into(tmp_path / "store.db", canary="CANARY-NO-ROW-2b88")
+
+
+def test_the_same_exercise_without_the_neutering_does_write_a_row(tmp_path: Path):
+    """The control. Without it, the refusal above could be caused by anything."""
+    assert capture_into(tmp_path / "store.db", canary="CANARY-NO-ROW-CONTROL-4c19") == 1
 
 
 def test_the_value_is_in_the_working_file_too(tmp_path: Path):
