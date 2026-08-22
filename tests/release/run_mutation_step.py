@@ -82,8 +82,10 @@ def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, i
     """Run the release suite; return its signature multiset and UNACCOUNTED failures.
 
     Every JUnit outcome is classified. An `<error>` is a harness error. A
-    `<failure>` is ACCOUNTED FOR only if that same test emitted a signature or
-    is a recognised component mismatch; anything else -- an unrelated assertion
+    `<skipped>` is unaccounted -- a skip is not a pass, and a mutation that
+    DISABLES a test rather than breaking it must not slip through. A `<failure>`
+    is ACCOUNTED FOR only if that same test emitted a signature or is a
+    recognised component mismatch; anything else -- an unrelated assertion
     failure, a fixture problem, a typo in a test -- is counted as unaccounted.
 
     Counting only `<error>` meant an unrelated assertion failure could exist in
@@ -127,6 +129,15 @@ def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, i
             nodeid = f"{(case.get('classname') or '').replace('.', '/')}.py::{case.get('name')}"
             if case.find("error") is not None:
                 errors += 1
+                continue
+
+            # A SKIP IS NOT A PASS, and it is neither an error nor a failure --
+            # so a mutation that turns a test into a skip escaped every check
+            # here and was silently accepted. The release gate already refuses
+            # any skip (`skipped == 0` per suite); the mutation step must see
+            # them too, or a mutant can disable a test rather than break it.
+            if case.find("skipped") is not None:
+                unaccounted.add(nodeid)
                 continue
             failure = case.find("failure")
             if failure is None:

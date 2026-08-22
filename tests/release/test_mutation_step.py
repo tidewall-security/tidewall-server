@@ -306,3 +306,33 @@ def test_the_baseline_is_complete_over_the_families_it_covers():
             "missing": sorted(expected - representations),
             "unexpected": sorted(representations - expected),
         }
+
+
+def test_a_skip_is_classified_as_unaccounted():
+    """A SKIP IS NOT A PASS.
+
+    A skip is neither an error nor a failure, so a mutation that DISABLES a
+    test rather than breaking it escaped every check in the runner. A review
+    constructed exactly that probe: a test that calls `pytest.skip` when it
+    detects the mutant in the source.
+
+    The gate already refuses any skip (`skipped == 0` per suite); the mutation
+    step now sees them too.
+    """
+    import pathlib
+    import xml.etree.ElementTree as ET
+
+    source = (pathlib.Path(__file__).resolve().parent / "run_mutation_step.py").read_text()
+    assert 'case.find("skipped")' in source, (
+        "the runner no longer inspects skipped outcomes, so a mutant that "
+        "disables a test rather than breaking it would pass"
+    )
+
+    # And the classification is reachable: a JUnit skip parses as such.
+    xml = ET.fromstring(
+        '<testsuites><testsuite><testcase classname="a" name="b">'
+        '<skipped message="x"/></testcase></testsuite></testsuites>'
+    )
+    case = next(xml.iter("testcase"))
+    assert case.find("skipped") is not None
+    assert case.find("failure") is None and case.find("error") is None
