@@ -134,9 +134,12 @@ def test_more_copies_than_predicted_is_reported(conn):
     after = Snapshot.take(conn)
 
     attributions = attribute(conn, delta(before, after))
-    physical = {"policies": 3}
-    left = unexplained(physical, attributions)
-    assert left.get("policies") == 3 - sum(1 for a in attributions if a.location == "policies")
+    predicted_here = sum(1 for a in attributions if a.location == "policies")
+    # Deliberately far above the prediction. An earlier version used 3, which
+    # happened to leave an excess of exactly 1 -- indistinguishable from a
+    # presence flag, so a count-losing regression passed.
+    physical = {"policies": predicted_here + 7}
+    assert unexplained(physical, attributions) == {"policies": 7}
 
 
 def test_a_path_with_no_copy_map_entry_is_an_error_not_a_zero(conn):
@@ -158,3 +161,63 @@ def test_cells_holding_reads_the_live_image_only(conn):
 
     conn.execute("DELETE FROM policies")
     assert cells_holding(conn, SECRET) == set(), "a logical read reported a value that is no longer live"
+
+
+def test_a_column_indexed_twice_predicts_two_copies_in_that_index():
+    """Copy COUNTS, not copy locations.
+
+    `CREATE INDEX i ON t(c, c)` gives the column two key slots in one index,
+    so its value exists twice there. Attributing one copy per location expects
+    fewer occurrences than a permitted schema actually has, and the difference
+    is reported as unexplained on a correct system.
+    """
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, c TEXT)")
+    conn.execute("CREATE INDEX i_twice ON t(c, c)")
+
+    locations = expected_locations(conn, ("t", "c"))
+    assert locations["i_twice"] == 2, f"the doubled key slot was not counted: {locations}"
+
+    before = Snapshot.take(conn)
+    conn.execute("INSERT INTO t(id, c) VALUES (1, ?)", (SECRET,))
+    after = Snapshot.take(conn)
+
+    attributions = attribute(conn, delta(before, after))
+    # Filter by PATH. Counting every attribution in the index also counts
+    # `t.id`, which is the rowid alias and therefore present in every index on
+    # the table -- so the total was 3 and the doubled slot was invisible.
+    in_index = [a for a in attributions if a.location == "i_twice" and a.path == ("t", "c")]
+    assert len(in_index) == 2, f"predicted {len(in_index)} copies of t.c in i_twice, schema has 2"
+
+    alias = [a for a in attributions if a.location == "i_twice" and a.path == ("t", "id")]
+    assert len(alias) == 1, "the rowid alias should be attributed once per index"
+    conn.close()
+
+
+def test_cells_holding_finds_a_value_stored_as_a_blob():
+    """A logical read still has to cope with every storage class."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, c BLOB)")
+    conn.execute("INSERT INTO t(id, c) VALUES (1, ?)", (SECRET.encode(),))
+
+    stored = conn.execute("SELECT c FROM t").fetchone()[0]
+    assert isinstance(stored, bytes), "premise changed: no longer stored as a BLOB"
+    assert ("t", 1, "c") in cells_holding(conn, SECRET)
+    conn.close()
+
+
+def test_cells_holding_finds_a_non_ascii_value_stored_as_a_blob():
+    """The bytes branch, not the str() fallback.
+
+    `str(b'caf\\xc3\\xa9')` shows escaped hex, so the value's own characters are
+    absent from the string being searched.
+    """
+    secret = "CANARY-café-2a71"
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, c BLOB)")
+    conn.execute("INSERT INTO t(id, c) VALUES (1, ?)", (secret.encode(),))
+
+    stored = conn.execute("SELECT c FROM t").fetchone()[0]
+    assert secret not in str(stored), "premise changed: the repr fallback would find this"
+    assert ("t", 1, "c") in cells_holding(conn, secret)
+    conn.close()
