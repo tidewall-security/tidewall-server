@@ -150,18 +150,40 @@ def test_every_record_carries_an_owner_field(checked_in):
         assert "owner" in record, record
 
 
-def test_the_manifest_is_not_claimed_complete_while_owners_are_unassigned(checked_in):
-    """An owner cannot be derived from source and must not be invented.
+def test_every_record_carries_a_real_owner(checked_in):
+    """Owners were a blocked input; they are supplied now.
 
-    The field is present and marked, rather than absent or filled with a
-    plausible name.
+    This test previously asserted the OPPOSITE -- that every owner was the
+    unassigned sentinel -- and carried a note telling whoever supplied names to
+    come and update it. That is the point: a deferred input should not be able
+    to quietly become satisfied, or quietly stay unsatisfied, without someone
+    editing the oracle on purpose.
     """
-    unassigned = [r for r in checked_in if r["owner"] == OWNER_UNASSIGNED]
-    assert unassigned, "no unassigned owners; if names were supplied, update this test"
-    assert len(unassigned) == len(checked_in)
+    from tests.release.expected_failures import OWNER, OWNER_UNASSIGNED
 
+    still_unassigned = [r for r in checked_in if r["owner"] == OWNER_UNASSIGNED]
+    assert not still_unassigned, still_unassigned[:2]
+
+    assert {r["owner"] for r in checked_in} == {OWNER}, sorted({r["owner"] for r in checked_in})
+
+
+def test_the_owner_is_reachable(checked_in):
+    """A name nobody can contact is not accountability.
+
+    Only a shape check -- whether the address is monitored is not something a
+    test can establish, and pretending otherwise would be the defect this
+    programme removes.
+    """
+    from tests.release.expected_failures import OWNER
+
+    assert "@" in OWNER and OWNER.endswith("tidewall.ai"), OWNER
+    assert not OWNER.startswith("<"), "still a placeholder"
+
+
+def test_the_manifest_header_no_longer_claims_owners_are_blocked(checked_in):
     header = MANIFEST.read_text().split("[[expected_failure]]")[0]
-    assert "not claimed complete" in header
+    assert "BLOCKED" not in header.upper()
+    assert "accountable owner" in header
 
 
 def test_the_owner_sentinel_is_not_mistakable_for_a_name():

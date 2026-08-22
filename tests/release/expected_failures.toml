@@ -3,9 +3,9 @@
 # Each record is a full six-field signature plus an owner. Compared as a
 # MULTISET: two records differing only in representation are two records.
 #
-# OWNERS ARE BLOCKED on the project owner. Every record below carries the
-# unassigned sentinel, and the manifest is not claimed complete until they
-# are supplied.
+# Every record carries an accountable owner, supplied by the project owner.
+# A record is an ACCEPTED security defect: the owner is who answers for it
+# still being accepted.
 
 [[expected_failure]]
 case_id         = "access-rule-name/capture-off/create/admin/plain"
@@ -14,7 +14,7 @@ collector       = "app-log"
 surface_path    = "app.services.access_rule_service:logger.info/created"
 representation  = "plain"
 occurrence_rule = "FORBIDDEN"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "access-rule-name/capture-off/guard/admin/plain"
@@ -23,7 +23,7 @@ collector       = "http-response-body"
 surface_path    = "POST /v1/guard_chat_completions -> $.summary"
 representation  = "plain"
 occurrence_rule = "FORBIDDEN"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "access-rule-name/capture-off/guard/admin/plain#rules"
@@ -32,7 +32,7 @@ collector       = "http-response-body"
 surface_path    = "POST /v1/guard_chat_completions -> $.result.access_rules[*] (key)"
 representation  = "plain"
 occurrence_rule = "FORBIDDEN"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -41,7 +41,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -50,7 +50,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -59,7 +59,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -68,7 +68,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -77,7 +77,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -86,7 +86,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -95,7 +95,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -104,7 +104,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -113,7 +113,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -122,7 +122,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -131,7 +131,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -140,7 +140,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -149,7 +149,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -158,7 +158,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -167,7 +167,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -176,7 +176,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -185,7 +185,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -194,7 +194,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -203,7 +203,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -212,7 +212,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -221,7 +221,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -230,7 +230,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -239,7 +239,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -248,7 +248,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -257,7 +257,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -266,7 +266,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -275,7 +275,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -284,7 +284,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -293,7 +293,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -302,7 +302,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -311,7 +311,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -320,7 +320,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -329,7 +329,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -338,7 +338,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -347,7 +347,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -356,7 +356,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -365,7 +365,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -374,7 +374,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -383,7 +383,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -392,7 +392,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -401,7 +401,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -410,7 +410,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -419,7 +419,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -428,7 +428,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -437,7 +437,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -446,7 +446,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -455,7 +455,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -464,7 +464,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "card@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -473,7 +473,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -482,7 +482,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -491,7 +491,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -500,7 +500,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -509,7 +509,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -518,7 +518,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -527,7 +527,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -536,7 +536,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -545,7 +545,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -554,7 +554,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -563,7 +563,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -572,7 +572,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -581,7 +581,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -590,7 +590,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -599,7 +599,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -608,7 +608,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -617,7 +617,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -626,7 +626,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -635,7 +635,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -644,7 +644,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -653,7 +653,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -662,7 +662,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -671,7 +671,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -680,7 +680,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -689,7 +689,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -698,7 +698,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -707,7 +707,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -716,7 +716,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -725,7 +725,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -734,7 +734,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -743,7 +743,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -752,7 +752,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -761,7 +761,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -770,7 +770,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -779,7 +779,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -788,7 +788,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -797,7 +797,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -806,7 +806,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -815,7 +815,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -824,7 +824,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -833,7 +833,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -842,7 +842,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -851,7 +851,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -860,7 +860,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -869,7 +869,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -878,7 +878,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -887,7 +887,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -896,7 +896,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -905,7 +905,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@message-content/alert.custom_entity.input/scanner_engine.value_reported_failure/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -914,7 +914,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/json-escaped/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -923,7 +923,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/json-escaped/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -932,7 +932,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/json-escaped/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -941,7 +941,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/json-escaped/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -950,7 +950,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/json-escaped/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -959,7 +959,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/json-escaped/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -968,7 +968,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/json-escaped/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -977,7 +977,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/nfc/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -986,7 +986,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/nfc/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -995,7 +995,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/nfc/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1004,7 +1004,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/nfc/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1013,7 +1013,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/nfc/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1022,7 +1022,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/nfc/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1031,7 +1031,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/nfc/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1040,7 +1040,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/nfd/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1049,7 +1049,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/nfd/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1058,7 +1058,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/nfd/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1067,7 +1067,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/nfd/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1076,7 +1076,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/nfd/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1085,7 +1085,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/nfd/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1094,7 +1094,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/nfd/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1103,7 +1103,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/percent-encoded/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1112,7 +1112,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/percent-encoded/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1121,7 +1121,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/percent-encoded/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1130,7 +1130,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/percent-encoded/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1139,7 +1139,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/percent-encoded/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1148,7 +1148,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/percent-encoded/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1157,7 +1157,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/percent-encoded/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1166,7 +1166,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/plain/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1175,7 +1175,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/plain/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1184,7 +1184,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/plain/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1193,7 +1193,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/plain/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1202,7 +1202,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/plain/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1211,7 +1211,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/plain/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1220,7 +1220,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/plain/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1229,7 +1229,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/raw-bytes/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1238,7 +1238,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/raw-bytes/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1247,7 +1247,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/raw-bytes/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1256,7 +1256,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/raw-bytes/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1265,7 +1265,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/raw-bytes/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1274,7 +1274,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/raw-bytes/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1283,7 +1283,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/raw-bytes/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1292,7 +1292,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/unicode-escaped/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1301,7 +1301,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/unicode-escaped/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1310,7 +1310,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/unicode-escaped/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1319,7 +1319,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/unicode-escaped/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1328,7 +1328,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/unicode-escaped/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1337,7 +1337,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/unicode-escaped/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1346,7 +1346,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "custom-match@rule-set-detector-config/allow.custom_entity.input/malicious_prompt.custom_benign_list/capture-on/policy-admin/admin/unicode-escaped/[app-log+artifact-bytes+browser-console+browser-dom+browser-network+browser-state+browser-storage+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1355,7 +1355,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1364,7 +1364,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1373,7 +1373,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1382,7 +1382,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1391,7 +1391,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1400,7 +1400,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1409,7 +1409,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1418,7 +1418,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1427,7 +1427,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1436,7 +1436,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1445,7 +1445,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1454,7 +1454,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1463,7 +1463,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1472,7 +1472,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1481,7 +1481,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1490,7 +1490,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1499,7 +1499,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1508,7 +1508,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1517,7 +1517,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1526,7 +1526,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1535,7 +1535,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1544,7 +1544,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1553,7 +1553,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1562,7 +1562,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1571,7 +1571,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1580,7 +1580,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1589,7 +1589,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1598,7 +1598,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1607,7 +1607,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1616,7 +1616,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1625,7 +1625,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1634,7 +1634,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1643,7 +1643,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1652,7 +1652,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1661,7 +1661,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1670,7 +1670,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1679,7 +1679,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1688,7 +1688,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1697,7 +1697,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1706,7 +1706,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1715,7 +1715,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1724,7 +1724,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1733,7 +1733,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1742,7 +1742,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1751,7 +1751,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1760,7 +1760,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1769,7 +1769,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1778,7 +1778,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1787,7 +1787,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "email@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1796,7 +1796,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1805,7 +1805,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1814,7 +1814,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1823,7 +1823,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1832,7 +1832,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1841,7 +1841,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1850,7 +1850,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/json-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1859,7 +1859,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1868,7 +1868,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1877,7 +1877,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1886,7 +1886,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1895,7 +1895,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1904,7 +1904,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1913,7 +1913,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfc/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1922,7 +1922,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1931,7 +1931,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1940,7 +1940,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1949,7 +1949,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1958,7 +1958,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1967,7 +1967,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1976,7 +1976,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/nfd/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1985,7 +1985,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -1994,7 +1994,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2003,7 +2003,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2012,7 +2012,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2021,7 +2021,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2030,7 +2030,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2039,7 +2039,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/percent-encoded/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2048,7 +2048,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2057,7 +2057,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2066,7 +2066,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2075,7 +2075,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2084,7 +2084,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2093,7 +2093,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2102,7 +2102,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/plain/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2111,7 +2111,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2120,7 +2120,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2129,7 +2129,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2138,7 +2138,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2147,7 +2147,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2156,7 +2156,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2165,7 +2165,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/raw-bytes/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2174,7 +2174,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2183,7 +2183,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "json-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2192,7 +2192,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfc"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2201,7 +2201,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "nfd"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2210,7 +2210,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "percent-encoded"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2219,7 +2219,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "plain"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2228,7 +2228,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "raw-bytes"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "ssn@message-content/transform.confidential_and_pii_entity.input/pii.entities_redacted/capture-on/guard/api/unicode-escaped/[app-log+artifact-bytes+database+http-response-body+http-response-headers+http-status+stderr+transport-bytes+uvicorn-access-log+uvicorn-error-log]#matches_json"
@@ -2237,7 +2237,7 @@ collector       = "database"
 surface_path    = "interactions.matches_json"
 representation  = "unicode-escaped"
 occurrence_rule = "REQUIRED"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "validation-echo/capture-off/guard/api/json-escaped"
@@ -2246,7 +2246,7 @@ collector       = "http-response-body"
 surface_path    = "POST /v1/guard_chat_completions -> $.detail[*].input"
 representation  = "json-escaped"
 occurrence_rule = "FORBIDDEN"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "validation-echo/capture-off/guard/api/nfc"
@@ -2255,7 +2255,7 @@ collector       = "http-response-body"
 surface_path    = "POST /v1/guard_chat_completions -> $.detail[*].input"
 representation  = "nfc"
 occurrence_rule = "FORBIDDEN"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "validation-echo/capture-off/guard/api/nfd"
@@ -2264,7 +2264,7 @@ collector       = "http-response-body"
 surface_path    = "POST /v1/guard_chat_completions -> $.detail[*].input"
 representation  = "nfd"
 occurrence_rule = "FORBIDDEN"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "validation-echo/capture-off/guard/api/percent-encoded"
@@ -2273,7 +2273,7 @@ collector       = "http-response-body"
 surface_path    = "POST /v1/guard_chat_completions -> $.detail[*].input"
 representation  = "percent-encoded"
 occurrence_rule = "FORBIDDEN"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "validation-echo/capture-off/guard/api/plain"
@@ -2282,7 +2282,7 @@ collector       = "http-response-body"
 surface_path    = "POST /v1/guard_chat_completions -> $.detail[*].input"
 representation  = "plain"
 occurrence_rule = "FORBIDDEN"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "validation-echo/capture-off/guard/api/raw-bytes"
@@ -2291,7 +2291,7 @@ collector       = "http-response-body"
 surface_path    = "POST /v1/guard_chat_completions -> $.detail[*].input"
 representation  = "raw-bytes"
 occurrence_rule = "FORBIDDEN"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"
 
 [[expected_failure]]
 case_id         = "validation-echo/capture-off/guard/api/unicode-escaped"
@@ -2300,4 +2300,4 @@ collector       = "http-response-body"
 surface_path    = "POST /v1/guard_chat_completions -> $.detail[*].input"
 representation  = "unicode-escaped"
 occurrence_rule = "FORBIDDEN"
-owner           = "<unassigned: blocked on project owner>"
+owner           = "tidewallsec@tidewall.ai"

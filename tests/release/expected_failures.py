@@ -9,10 +9,9 @@ The six fields are compared as a MULTISET. Two records differing only in
 representation are two records, and a run producing one of them has not
 reconciled.
 
-OWNERS ARE A BLOCKED INPUT. An owner cannot be derived from source and must
-not be invented by the implementer, so every record ships with the field
-present and set to the sentinel below. The manifest is NOT claimed complete
-until the project owner supplies names.
+OWNERS WERE A BLOCKED INPUT and are no longer. An owner cannot be derived from
+source and must not be invented by the implementer; the project owner supplied
+`tidewallsec@tidewall.ai` on 2026-08-23, and every record now carries it.
 """
 
 from __future__ import annotations
@@ -21,9 +20,18 @@ from dataclasses import asdict, dataclass
 
 from tests.release.representations import FAMILIES
 
-#: Not a name. A record carrying this is incomplete by construction, and the
-#: oracle in test_expected_failures.py refuses to call the manifest complete
-#: while any remain.
+#: The accountable owner for every expected-failure record, supplied by the
+#: project owner on 2026-08-23.
+#:
+#: A role address rather than a person: this is a single-maintainer project
+#: today, and writing one individual's name into 255 records would have to be
+#: rewritten the moment anyone else touches it. The point of the field is that
+#: an ACCEPTED security defect has somewhere to answer for it -- and a role
+#: address survives the maintainer changing, which a personal name does not.
+OWNER = "tidewallsec@tidewall.ai"
+
+#: Retained so the oracle can prove no record still carries it. A record with
+#: this owner is incomplete by construction.
 OWNER_UNASSIGNED = "<unassigned: blocked on project owner>"
 
 #: Verified against source, not assumed. `POST /v1/guard` does not exist;
@@ -39,7 +47,7 @@ class Record:
     surface_path: str
     representation: str
     occurrence_rule: str
-    owner: str = OWNER_UNASSIGNED
+    owner: str = OWNER
 
     def signature(self) -> tuple:
         return (
@@ -161,9 +169,9 @@ def render(records: list[Record]) -> str:
         "# Each record is a full six-field signature plus an owner. Compared as a",
         "# MULTISET: two records differing only in representation are two records.",
         "#",
-        "# OWNERS ARE BLOCKED on the project owner. Every record below carries the",
-        "# unassigned sentinel, and the manifest is not claimed complete until they",
-        "# are supplied.",
+        "# Every record carries an accountable owner, supplied by the project owner.",
+        "# A record is an ACCEPTED security defect: the owner is who answers for it",
+        "# still being accepted.",
         "",
     ]
     for record in records:
