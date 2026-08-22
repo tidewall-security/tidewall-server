@@ -28,24 +28,38 @@ import collections
 import sqlite3
 from dataclasses import dataclass
 
-#: Every foreign key at head, as (table, column, parent, on_update, on_delete).
+#: Every foreign key at head, as (table, column, parent, parent_column,
+#: on_update, on_delete).
+#:
+#: The parent COLUMN is part of the identity: an `ON UPDATE CASCADE` copies a
+#: specific parent value, and updating `policies.name` is a different event
+#: from updating `policies.id`. Without it, retargeting an FK from one unique
+#: parent column to another -- same child column, same table, same actions --
+#: is invisible.
 #:
 #: All ten are pinned, not only the six that write. "Exactly the six" was
 #: ambiguous about whether RESTRICT and NO ACTION were inside or outside the
 #: set; they are inside the pin and outside the cascade map, because they
 #: cannot copy a value anywhere.
-REFERENTIAL_ACTIONS: frozenset[tuple[str, str, str, str]] = frozenset(
+REFERENTIAL_ACTIONS: frozenset[tuple[str, str, str, str, str, str]] = frozenset(
     {
-        ("access_rules", "rule_set_id", "rule_sets", "NO ACTION", "CASCADE"),
-        ("access_tokens", "device_id", "devices", "NO ACTION", "CASCADE"),
-        ("interaction_contents", "interaction_id", "interactions", "NO ACTION", "CASCADE"),
-        ("rule_sets", "policy_id", "policies", "NO ACTION", "CASCADE"),
-        ("api_keys", "policy_id", "policies", "NO ACTION", "SET NULL"),
-        ("devices", "reg_token_id", "registration_tokens", "NO ACTION", "SET NULL"),
-        ("devices", "policy_id", "policies", "NO ACTION", "RESTRICT"),
-        ("registration_tokens", "policy_id", "policies", "NO ACTION", "RESTRICT"),
-        ("content_export_notes", "attempt_id", "content_export_attempts", "NO ACTION", "NO ACTION"),
-        ("content_export_reconciliations", "attempt_id", "content_export_attempts", "NO ACTION", "NO ACTION"),
+        ("access_rules", "rule_set_id", "rule_sets", "id", "NO ACTION", "CASCADE"),
+        ("access_tokens", "device_id", "devices", "id", "NO ACTION", "CASCADE"),
+        ("interaction_contents", "interaction_id", "interactions", "id", "NO ACTION", "CASCADE"),
+        ("rule_sets", "policy_id", "policies", "id", "NO ACTION", "CASCADE"),
+        ("api_keys", "policy_id", "policies", "id", "NO ACTION", "SET NULL"),
+        ("devices", "reg_token_id", "registration_tokens", "id", "NO ACTION", "SET NULL"),
+        ("devices", "policy_id", "policies", "id", "NO ACTION", "RESTRICT"),
+        ("registration_tokens", "policy_id", "policies", "id", "NO ACTION", "RESTRICT"),
+        ("content_export_notes", "attempt_id", "content_export_attempts", "attempt_id", "NO ACTION", "NO ACTION"),
+        (
+            "content_export_reconciliations",
+            "attempt_id",
+            "content_export_attempts",
+            "attempt_id",
+            "NO ACTION",
+            "NO ACTION",
+        ),
     }
 )
 
@@ -67,7 +81,7 @@ def _tables(conn: sqlite3.Connection) -> list[str]:
     return [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")]
 
 
-def referential_actions(conn: sqlite3.Connection) -> set[tuple[str, str, str, str, str]]:
+def referential_actions(conn: sqlite3.Connection) -> set[tuple[str, str, str, str, str, str]]:
     """Every foreign key, as (table, column, parent, on_update, on_delete).
 
     foreign_key_list columns: (id, seq, table, from, to, on_update, on_delete,
@@ -76,23 +90,26 @@ def referential_actions(conn: sqlite3.Connection) -> set[tuple[str, str, str, st
     out: set[tuple[str, str, str, str, str]] = set()
     for table in _tables(conn):
         for fk in conn.execute(f"PRAGMA foreign_key_list('{table}')"):
-            out.add((table, fk[3], fk[2], fk[5], fk[6]))
+            # (id, seq, table, from, to, on_update, on_delete, match)
+            out.add((table, fk[3], fk[2], fk[4], fk[5], fk[6]))
     return out
 
 
-def cascade_map(conn: sqlite3.Connection) -> dict[str, set[tuple[str, str, str, str]]]:
-    """Parent table -> the (child, column, event, action) writes it causes.
+def cascade_map(conn: sqlite3.Connection) -> dict[tuple[str, str], set[tuple[str, str, str]]]:
+    """(parent table, parent column) -> the (child, column, event, action) writes it causes.
 
     Both events. RESTRICT and NO ACTION refuse or defer and never modify a
     child value, so they carry nothing and have nothing to attribute -- but
     that is an argument about those two ACTIONS, not about the DELETE event,
     and reading only `on_delete` would silently drop every ON UPDATE CASCADE.
     """
-    out: dict[str, set[tuple[str, str, str, str]]] = {}
-    for table, column, parent, on_update, on_delete in referential_actions(conn):
+    out: dict[tuple[str, str], set[tuple[str, str, str]]] = {}
+    for table, column, parent, parent_column, on_update, on_delete in referential_actions(conn):
         for event, action in (("UPDATE", on_update), ("DELETE", on_delete)):
             if action in WRITING_ACTIONS:
-                out.setdefault(parent, set()).add((table, column, event, action))
+                # Keyed by (parent table, parent COLUMN): which value changing
+                # causes the write is the fact attribution needs.
+                out.setdefault((parent, parent_column), set()).add((table, column, event, action))
     return out
 
 
@@ -115,7 +132,15 @@ def copy_map(conn: sqlite3.Connection) -> dict[tuple[str, str], collections.Coun
         # map built only from NAMED key columns reports one location for a
         # value that has five. Measured on `interactions.id`: five secondary
         # indexes, all invisible to the named-column pass.
-        rowid_alias = next((r[1] for r in info if r[5] == 1 and (r[2] or "").upper() == "INTEGER"), None)
+        # A rowid alias is a SINGLE-column INTEGER PRIMARY KEY. `table_info.pk`
+        # is the ordinal within the key, so in `PRIMARY KEY(a, b)` the column
+        # `a` also reports pk == 1 and is NOT an alias -- treating it as one
+        # put its value in indexes that never carry it and double-counted the
+        # composite autoindex, on a schema the invariant permits.
+        key_columns = [r for r in info if r[5] > 0]
+        rowid_alias = (
+            key_columns[0][1] if len(key_columns) == 1 and (key_columns[0][2] or "").upper() == "INTEGER" else None
+        )
         if rowid_alias is not None:
             for index in conn.execute(f"PRAGMA index_list('{table}')"):
                 out[(table, rowid_alias)][index[1]] += 1

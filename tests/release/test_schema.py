@@ -84,7 +84,7 @@ def test_ten_relationships_of_which_six_write_on_delete(conn):
     """
     observed = referential_actions(conn)
     assert len(observed) == 10
-    assert len([a for a in observed if a[4] in WRITING_ACTIONS]) == 6
+    assert len([a for a in observed if a[5] in WRITING_ACTIONS]) == 6
 
 
 def test_on_update_is_pinned_too(conn):
@@ -95,7 +95,7 @@ def test_on_update_is_pinned_too(conn):
     only `on_delete` and would have missed every one. Pinning the current
     values means introducing one is a build failure rather than a silent hole.
     """
-    assert {a[3] for a in referential_actions(conn)} == {"NO ACTION"}
+    assert {a[4] for a in referential_actions(conn)} == {"NO ACTION"}
 
 
 def test_an_added_on_update_cascade_is_refused(scratch_path: Path):
@@ -123,16 +123,17 @@ def test_an_added_on_update_cascade_is_refused(scratch_path: Path):
 
 def test_the_cascade_map_covers_exactly_the_writing_actions(conn):
     mapped = {e for entries in cascade_map(conn).values() for e in entries}
-    expected = {(t, c, "DELETE", d) for t, c, _p, _u, d in REFERENTIAL_ACTIONS if d in WRITING_ACTIONS} | {
-        (t, c, "UPDATE", u) for t, c, _p, u, _d in REFERENTIAL_ACTIONS if u in WRITING_ACTIONS
+    expected = {(t, c, "DELETE", d) for t, c, _p, _pc, _u, d in REFERENTIAL_ACTIONS if d in WRITING_ACTIONS} | {
+        (t, c, "UPDATE", u) for t, c, _p, _pc, u, _d in REFERENTIAL_ACTIONS if u in WRITING_ACTIONS
     }
     assert mapped == expected
     assert all(action in WRITING_ACTIONS for _, _, _, action in mapped)
 
 
 def test_deleting_a_policy_is_mapped_to_its_cascading_children(conn):
-    assert ("rule_sets", "policy_id", "DELETE", "CASCADE") in cascade_map(conn)["policies"]
-    assert ("api_keys", "policy_id", "DELETE", "SET NULL") in cascade_map(conn)["policies"]
+    by_policy_id = cascade_map(conn)[("policies", "id")]
+    assert ("rule_sets", "policy_id", "DELETE", "CASCADE") in by_policy_id
+    assert ("api_keys", "policy_id", "DELETE", "SET NULL") in by_policy_id
 
 
 def test_the_copy_map_finds_the_unique_index_holding_a_policy_name(conn):
@@ -373,3 +374,44 @@ def test_each_remaining_detector_is_the_only_one_catching_its_mutation(scratch, 
         f"{kind}'s mutation is also caught by another detector: "
         f"{[(v.kind, v.detail) for v in _violations_with_detector_removed(scratch, {kind})]}"
     )
+
+
+# --- the rowid alias, pinned and bounded ----------------------------------
+
+
+def test_the_rowid_alias_copies_are_pinned_at_head(conn):
+    """Deleting the alias block left all 31 tests green.
+
+    The repair was correct and unbound: nothing exercised an INTEGER PRIMARY
+    KEY with secondary indexes, so it could regress silently. These are the
+    measured head counts.
+    """
+    mapping = copy_map(conn)
+    assert sum(mapping[("interactions", "id")].values()) == 6, dict(mapping[("interactions", "id")])
+    assert sum(mapping[("interaction_contents", "id")].values()) == 5
+    assert sum(mapping[("content_access_audit", "id")].values()) == 5
+    assert sum(mapping[("policies", "name")].values()) == 2
+
+
+def test_a_composite_primary_key_column_is_not_treated_as_a_rowid_alias(scratch):
+    """`table_info.pk` is an ordinal, not a flag.
+
+    In `PRIMARY KEY(a, b)` the column `a` also reports pk == 1. Treating it as
+    a rowid alias put its value in indexes that never carry it and counted the
+    composite autoindex twice -- and the invariant permits this schema, so
+    Task 4's canonical count would have been wrong with nothing failing.
+    """
+    scratch.execute("CREATE TABLE composite (a INTEGER, b TEXT, PRIMARY KEY(a, b))")
+    scratch.execute("CREATE INDEX composite_b ON composite(b)")
+    assert invariant(scratch) == [], "the invariant permits this table"
+
+    locations = copy_map(scratch)[("composite", "a")]
+    assert "composite_b" not in locations, dict(locations)
+    assert locations["composite"] == 1
+
+
+def test_a_genuine_single_column_alias_is_still_recognised(scratch):
+    scratch.execute("CREATE TABLE aliased (id INTEGER PRIMARY KEY, v TEXT)")
+    scratch.execute("CREATE INDEX aliased_v ON aliased(v)")
+    locations = copy_map(scratch)[("aliased", "id")]
+    assert locations["aliased_v"] == 1, dict(locations)
