@@ -88,29 +88,61 @@ def test_in_flight_capture_takes_every_sidecar_that_exists(tmp_path: Path):
     conn.close()
 
 
-def test_a_held_reader_stops_the_wal_being_checkpointed_away(tmp_path: Path):
-    """Why the reader exists at all.
+def _wal_only_canary(tmp_path: Path, canary: bytes, name: str):
+    """Leave *canary* present ONLY in WAL frames, never in the live page image.
 
-    Without an open snapshot, a checkpoint between the write and the copy
-    truncates the WAL, and the capture reads a file that no longer holds the
-    frames it was taken for.
+    Written and committed, then deleted and committed with secure_delete on,
+    so the live image no longer holds the bytes and the pre-delete page image
+    survives only as a frame.
     """
-    db = _wal_database(tmp_path)
+    root = tmp_path / name
+    root.mkdir()
+    db = _wal_database(root)
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA secure_delete=ON")
+    conn.execute("PRAGMA wal_autocheckpoint=0")
+    conn.execute("INSERT INTO t(v) VALUES (?)", (canary.decode(),))
+    conn.commit()
+    conn.execute("DELETE FROM t")
+    conn.commit()
+    return db, conn
+
+
+def test_a_held_reader_stops_the_wal_being_checkpointed_away(tmp_path: Path):
+    """Both arms, because one arm proves nothing.
+
+    Earlier this test held a reader, ran a TRUNCATE checkpoint, and asserted
+    the canary was still found. It passed with the reader removed: the
+    checkpoint simply moved the canary from the WAL into the main file, and
+    the sweep found it there. The reader was load-bearing for nothing the
+    assertion could see.
+
+    The distinguishing value is one that exists ONLY in a WAL frame -- written
+    and then deleted -- so a successful TRUNCATE destroys it outright.
+    """
     canary = b"CANARY-READER-PIN-7a21"
 
-    writer = sqlite3.connect(db)
-    writer.execute("PRAGMA wal_autocheckpoint=0")
-    writer.execute("INSERT INTO t(v) VALUES (?)", (canary.decode(),))
-    writer.commit()
+    # Arm 1: reader held. The checkpoint cannot reclaim the frames.
+    db_held, conn_held = _wal_only_canary(tmp_path, canary, "held")
+    with capture_with_reader(db_held) as reader:
+        conn_held.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        held = reader.capture(tmp_path / "held-cap")
+    conn_held.close()
 
-    with capture_with_reader(db) as reader:
-        # A checkpoint attempted while the snapshot is held cannot reclaim the
-        # frames the reader may still need.
-        writer.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-        pinned = reader.capture(tmp_path / "pinned")
+    # Arm 2: identical exercise, no reader.
+    db_free, conn_free = _wal_only_canary(tmp_path, canary, "free")
+    conn_free.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    unheld = capture_in_flight(db_free, tmp_path / "free-cap")
+    conn_free.close()
 
-    assert sum(pinned.occurrences(canary).values()) > 0, pinned.occurrences(canary)
-    writer.close()
+    held_counts = held.occurrences(canary)
+    unheld_counts = unheld.occurrences(canary)
+
+    assert sum(held_counts.values()) > 0, f"the pinned capture lost the canary: {held_counts}"
+    assert sum(unheld_counts.values()) == 0, (
+        "premise changed: the canary survived a TRUNCATE checkpoint without a "
+        f"reader, so this no longer isolates what the reader does: {unheld_counts}"
+    )
 
 
 def test_occurrences_reports_per_artifact_counts(tmp_path: Path):
@@ -132,4 +164,28 @@ def test_occurrences_reports_per_artifact_counts(tmp_path: Path):
     assert counts, "no artifact was searched"
     assert all(isinstance(v, int) for v in counts.values())
     assert sum(counts.values()) >= 1
+    conn.close()
+
+
+def test_occurrences_counts_repeats_within_one_artifact(tmp_path: Path):
+    """Cardinality, not presence.
+
+    Step 5's capture-on rule asserts an EXACT count against the canonical live
+    image. A presence boolean satisfies every single-occurrence test and makes
+    that rule unenforceable.
+    """
+    db = _wal_database(tmp_path)
+    canary = b"CANARY-REPEATED-5c07"
+
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA wal_autocheckpoint=0")
+    for i in range(3):
+        conn.execute("INSERT INTO t(v) VALUES (?)", (f"{canary.decode()}-{i}",))
+    conn.commit()
+
+    with capture_with_reader(db) as reader:
+        captured = reader.capture(tmp_path / "cap")
+
+    total = sum(captured.occurrences(canary).values())
+    assert total >= 3, f"expected at least the three rows written, got {total}: {captured.occurrences(canary)}"
     conn.close()
