@@ -119,3 +119,43 @@ def live_cells_holding(db: Path, value: str) -> set[tuple[str, int, str]]:
         return cells_holding(conn, value)
     finally:
         conn.close()
+
+
+#: The only BLOB column in the production schema. Raw bytes live here or
+#: nowhere, which is why the raw-bytes representation is a STORAGE property
+#: rather than an ingress one.
+BLOB_COLUMN = ("vaults", "data")
+
+
+def store_raw_bytes(db: Path, *, payload: bytes) -> None:
+    """Write `payload` into production's only binary column.
+
+    `ScannerEngine.scan` takes `str`, so a BLOB cannot be planted at the text
+    ingress at all -- and a driver that encodes bytes and immediately decodes
+    them back to text has not exercised raw-byte storage. It has exercised
+    text.
+    """
+    from datetime import timedelta
+
+    from app.db.models import Vault
+
+    engine = sa.create_engine(f"sqlite:///{db}")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    try:
+        now = datetime.now(UTC)
+        session.add(Vault(id="release-gate-vault", data=payload, created_at=now, expires_at=now + timedelta(days=1)))
+        session.commit()
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def stored_type(db: Path, table: str, column: str) -> str:
+    """SQLite's own storage class for the value, not Python's opinion."""
+    conn = sqlite3.connect(db)
+    try:
+        row = conn.execute(f'SELECT typeof("{column}") FROM "{table}"').fetchone()
+        return row[0] if row else ""
+    finally:
+        conn.close()

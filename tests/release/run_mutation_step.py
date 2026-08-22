@@ -59,7 +59,7 @@ DEFAULT_MUTATION = Mutation(
 )
 
 
-def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, int]:
+def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, int, int]:
     """Run the release suite; return its signature multiset and UNACCOUNTED failures.
 
     Every JUnit outcome is classified. An `<error>` is a harness error. A
@@ -100,6 +100,7 @@ def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, i
         for row in rows:
             observed[tuple(row[f] for f in FIELDS)] += 1
 
+    errors = 0
     unaccounted = 0
     if junit.exists():
         root = ET.parse(junit).getroot()
@@ -107,7 +108,7 @@ def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, i
             nodeid = f"{(case.get('classname') or '').replace('.', '/')}.py::{case.get('name')}"
             simple = f"{case.get('classname')}::{case.get('name')}"
             if case.find("error") is not None:
-                unaccounted += 1
+                errors += 1
                 continue
             failure = case.find("failure")
             if failure is None:
@@ -126,7 +127,7 @@ def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, i
 
             unaccounted += 1
 
-    return observed, unaccounted
+    return observed, errors, unaccounted
 
 
 def _component_mismatch(message: str) -> str | None:
@@ -154,11 +155,18 @@ def main(argv: list[str]) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = pathlib.Path(tmp)
 
-        unmutated, unmutated_errors = run_suite(tmpdir / "base.json", tmpdir / "base.xml")
-        if unmutated_errors:
+        unmutated, base_errors, base_unaccounted = run_suite(tmpdir / "base.json", tmpdir / "base.xml")
+        # THE UNMUTATED RUN MUST BE CLEAN IN BOTH SENSES. A harness error means
+        # the gate did not run; an unaccounted failure means something is
+        # broken for a reason nobody has attributed, and a later delta cannot
+        # be blamed on the mutation.
+        if base_errors:
+            print(f"MUTATION STEP: {base_errors} harness error(s) in the unmutated run")
+            return 1
+        if base_unaccounted:
             print(
-                f"MUTATION STEP: {unmutated_errors} unaccounted failure(s) in the "
-                "unmutated run; every failure must either emit a signature or be a "
+                f"MUTATION STEP: {base_unaccounted} unaccounted failure(s) in the "
+                "unmutated run; every failure must emit a signature or be a "
                 "recognised component mismatch"
             )
             return 1
@@ -181,7 +189,11 @@ def main(argv: list[str]) -> int:
         try:
             source.write_text(mutation.apply(original))
             verify_applied(mutation, original, source.read_text())
-            mutant, mutant_errors = run_suite(tmpdir / "mut.json", tmpdir / "mut.xml")
+            # In the MUTANT run, unaccounted failures are the mutation's own
+            # effect -- neutering a detector breaks tests that observe it -- and
+            # are expected. A harness error is not, and must never stand in for
+            # the predeclared delta.
+            mutant, mutant_errors, _mutant_unaccounted = run_suite(tmpdir / "mut.json", tmpdir / "mut.xml")
         finally:
             source.write_text(original)
 

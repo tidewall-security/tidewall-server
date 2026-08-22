@@ -25,11 +25,14 @@ from tests.release.execution import SELF_CONTAINED_DETECTORS, chain_for, execute
 from tests.release.manifest import load_cases
 from tests.release.observation import verify_declared_component
 from tests.release.persistence import (
+    BLOB_COLUMN,
     CaptureNotPerformed,
     capture_into,
     live_cells_holding,
     occurrences_in_canonical_image,
     occurrences_in_working_file,
+    store_raw_bytes,
+    stored_type,
 )
 from tests.release.signatures import RECORDER, Signature
 from tests.release.witnesses import AbsenceEvaluator, assert_absent
@@ -254,3 +257,67 @@ def test_the_value_is_in_the_working_file_too(tmp_path: Path):
     canary = "CANARY-CAPTURE-ON-WORKING-8c55"
     capture_into(db, canary=canary)
     assert occurrences_in_working_file(db, canary.encode()) > 0
+
+
+# --- raw-bytes is a STORAGE property, not an ingress one --------------------
+
+
+def test_the_text_ingress_cannot_carry_a_blob_at_all():
+    """Stated, because the alternative is pretending otherwise.
+
+    `ScannerEngine.scan` takes `str`. A driver that encodes bytes and decodes
+    them straight back to text has exercised TEXT, and counting that as
+    raw-bytes coverage is the labelling defect this programme removes.
+    """
+    import inspect
+
+    from app.scanner_engine import ScannerEngine
+
+    annotation = inspect.signature(ScannerEngine.scan).parameters["text"].annotation
+    assert annotation in ("str", str), annotation
+
+
+def test_raw_bytes_are_stored_with_sqlites_blob_storage_class(tmp_path: Path):
+    """The property the family names, at the surface that can hold it."""
+    db = tmp_path / "vault.db"
+    payload = "CANARY-RAW-café-\U0001f600".encode()
+
+    store_raw_bytes(db, payload=payload)
+
+    assert stored_type(db, *BLOB_COLUMN) == "blob", (
+        "the value was not stored as a BLOB, so this does not exercise raw-byte "
+        "storage whatever the column type says"
+    )
+
+
+def test_a_raw_byte_canary_is_found_by_a_byte_scan_of_the_rebuilt_image(tmp_path: Path):
+    db = tmp_path / "vault.db"
+    payload = "CANARY-RAW-SCAN-café-\U0001f600".encode()
+    store_raw_bytes(db, payload=payload)
+
+    assert occurrences_in_canonical_image(db, tmp_path / "img.db", payload) == 1
+
+
+def test_a_non_ascii_blob_is_missed_by_the_text_families_and_found_by_raw_bytes(
+    tmp_path: Path,
+):
+    """Why the family exists at all.
+
+    For ASCII the families are byte-identical, which is why an ASCII probe
+    collapses them. With non-ASCII content the escaped forms are genuinely
+    different bytes, and only the raw form is what is on disk.
+    """
+    from tests.release.representations import FAMILIES
+
+    value = "CANARY-RAW-DISTINCT-café-\U0001f600"
+    db = tmp_path / "vault.db"
+    store_raw_bytes(db, payload=value.encode())
+    image_bytes = canonical_live_image(db, tmp_path / "img.db").read_bytes()
+
+    raw = next(f for f in FAMILIES if f.name == "raw-bytes")
+    assert raw.encode(value) in image_bytes
+
+    escaped = next(f for f in FAMILIES if f.name == "unicode-escaped")
+    assert escaped.encode(value) not in image_bytes, (
+        "the escaped form is on disk too, so this does not distinguish the " "families"
+    )
