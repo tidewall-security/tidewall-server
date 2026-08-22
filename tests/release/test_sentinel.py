@@ -23,7 +23,6 @@ import pytest
 #: hard-fail diagnostic said it was not, and one of those two would be wrong
 #: with nothing to say which.
 STILL_MISSING = (
-    "corpus collectors, delta, trace, in-flight capture (Task 4)",
     "witnesses and the mandatory surfaces (Task 5)",
     "the two canary suites, expected-failure manifest, release-gate job (Task 6)",
 )
