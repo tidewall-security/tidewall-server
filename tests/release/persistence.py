@@ -127,28 +127,43 @@ def live_cells_holding(db: Path, value: str) -> set[tuple[str, int, str]]:
 BLOB_COLUMN = ("vaults", "data")
 
 
-def store_raw_bytes(db: Path, *, payload: bytes) -> None:
-    """Write `payload` into production's only binary column.
+def create_vault_via_production(db: Path) -> tuple[str, object]:
+    """Write the BLOB column THE WAY PRODUCTION DOES.
 
-    `ScannerEngine.scan` takes `str`, so a BLOB cannot be planted at the text
-    ingress at all -- and a driver that encodes bytes and immediately decodes
-    them back to text has not exercised raw-byte storage. It has exercised
-    text.
+    `VaultManager.create_vault` is the only place in the codebase that writes
+    `vaults.data`. A helper that constructs a Vault row and calls
+    `session.add()` itself proves the schema can bind bytes; it proves nothing
+    about production, and a review demonstrated exactly that by neutering
+    `create_vault` and watching every raw-byte test still pass.
     """
-    from datetime import timedelta
+    from sqlalchemy.orm import sessionmaker as _sessionmaker
 
-    from app.db.models import Vault
+    from app.vault_manager import VaultManager
 
     engine = sa.create_engine(f"sqlite:///{db}")
     Base.metadata.create_all(engine)
-    session = sessionmaker(bind=engine)()
     try:
-        now = datetime.now(UTC)
-        session.add(Vault(id="release-gate-vault", data=payload, created_at=now, expires_at=now + timedelta(days=1)))
-        session.commit()
+        manager = VaultManager(session_factory=_sessionmaker(bind=engine))
+        return manager.create_vault()
     finally:
-        session.close()
         engine.dispose()
+
+
+def vault_rows(db: Path) -> int:
+    conn = sqlite3.connect(db)
+    try:
+        return conn.execute("SELECT count(*) FROM vaults").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def vault_blob(db: Path) -> bytes:
+    conn = sqlite3.connect(db)
+    try:
+        row = conn.execute("SELECT data FROM vaults").fetchone()
+        return bytes(row[0]) if row else b""
+    finally:
+        conn.close()
 
 
 def stored_type(db: Path, table: str, column: str) -> str:

@@ -28,11 +28,13 @@ from tests.release.persistence import (
     BLOB_COLUMN,
     CaptureNotPerformed,
     capture_into,
+    create_vault_via_production,
     live_cells_holding,
     occurrences_in_canonical_image,
     occurrences_in_working_file,
-    store_raw_bytes,
     stored_type,
+    vault_blob,
+    vault_rows,
 )
 from tests.release.signatures import RECORDER, Signature
 from tests.release.witnesses import AbsenceEvaluator, assert_absent
@@ -259,7 +261,7 @@ def test_the_value_is_in_the_working_file_too(tmp_path: Path):
     assert occurrences_in_working_file(db, canary.encode()) > 0
 
 
-# --- raw-bytes is a STORAGE property, not an ingress one --------------------
+# --- raw-bytes is a STORAGE property, and production has no surface for it --
 
 
 def test_the_text_ingress_cannot_carry_a_blob_at_all():
@@ -277,47 +279,65 @@ def test_the_text_ingress_cannot_carry_a_blob_at_all():
     assert annotation in ("str", str), annotation
 
 
-def test_raw_bytes_are_stored_with_sqlites_blob_storage_class(tmp_path: Path):
-    """The property the family names, at the surface that can hold it."""
-    db = tmp_path / "vault.db"
-    payload = "CANARY-RAW-café-\U0001f600".encode()
+def test_production_writes_the_blob_column_with_sqlites_blob_storage_class(tmp_path: Path):
+    """Driven through `VaultManager.create_vault`, the only production writer.
 
-    store_raw_bytes(db, payload=payload)
-
-    assert stored_type(db, *BLOB_COLUMN) == "blob", (
-        "the value was not stored as a BLOB, so this does not exercise raw-byte "
-        "storage whatever the column type says"
-    )
-
-
-def test_a_raw_byte_canary_is_found_by_a_byte_scan_of_the_rebuilt_image(tmp_path: Path):
-    db = tmp_path / "vault.db"
-    payload = "CANARY-RAW-SCAN-café-\U0001f600".encode()
-    store_raw_bytes(db, payload=payload)
-
-    assert occurrences_in_canonical_image(db, tmp_path / "img.db", payload) == 1
-
-
-def test_a_non_ascii_blob_is_missed_by_the_text_families_and_found_by_raw_bytes(
-    tmp_path: Path,
-):
-    """Why the family exists at all.
-
-    For ASCII the families are byte-identical, which is why an ASCII probe
-    collapses them. With non-ASCII content the escaped forms are genuinely
-    different bytes, and only the raw form is what is on disk.
+    A helper that constructs a Vault row and calls session.add() itself proves
+    the schema can bind bytes and nothing about production -- demonstrated by
+    neutering create_vault and watching every raw-byte test still pass.
     """
-    from tests.release.representations import FAMILIES
-
-    value = "CANARY-RAW-DISTINCT-café-\U0001f600"
     db = tmp_path / "vault.db"
-    store_raw_bytes(db, payload=value.encode())
-    image_bytes = canonical_live_image(db, tmp_path / "img.db").read_bytes()
+    create_vault_via_production(db)
 
-    raw = next(f for f in FAMILIES if f.name == "raw-bytes")
-    assert raw.encode(value) in image_bytes
+    assert vault_rows(db) == 1, "production wrote no vault row"
+    assert stored_type(db, *BLOB_COLUMN) == "blob"
 
-    escaped = next(f for f in FAMILIES if f.name == "unicode-escaped")
-    assert escaped.encode(value) not in image_bytes, (
-        "the escaped form is on disk too, so this does not distinguish the " "families"
+
+def test_a_neutered_production_writer_fails_this(tmp_path: Path, monkeypatch):
+    """The control that the previous test could not supply for itself."""
+    import app.vault_manager as vault_manager
+
+    original = vault_manager.VaultManager.create_vault
+    monkeypatch.setattr(vault_manager.VaultManager, "create_vault", lambda self: ("id", object()))
+    db = tmp_path / "vault.db"
+    create_vault_via_production(db)
+    assert vault_rows(db) == 0, "the neutering did not take"
+
+    monkeypatch.setattr(vault_manager.VaultManager, "create_vault", original)
+
+
+def test_no_production_path_writes_a_canary_into_the_blob_column(tmp_path: Path):
+    """The honest finding, recorded rather than worked around.
+
+    `create_vault` serialises a FRESH, EMPTY vault, and nothing re-persists it
+    -- `store()` mutates the in-memory object only. So a canary cannot reach
+    `vaults.data` through any production path, and the raw-bytes representation
+    has NO production storage surface in this codebase.
+
+    An earlier version manufactured one with a direct insert. That asserted a
+    property of SQLite, not of Tidewall.
+    """
+    db = tmp_path / "vault.db"
+    _vault_id, vault = create_vault_via_production(db)
+
+    canary = "CANARY-VAULT-café-\U0001f600"
+    placeholder = vault.store("PERSON", canary)
+    assert placeholder.startswith("[REDACTED_"), placeholder
+
+    assert canary.encode() not in vault_blob(db), (
+        "premise changed: the vault's contents now reach the BLOB column, so "
+        "the raw-bytes family HAS a production storage surface and should be "
+        "driven through it"
     )
+    assert (
+        canary.encode() not in db.read_bytes()
+    ), "the canary is in the database file although no production path writes it"
+
+
+def test_the_persisted_vault_is_the_empty_serialisation(tmp_path: Path):
+    """Pins the reason above, so a change to it fails loudly."""
+    from app.vault import TidewallVault
+
+    db = tmp_path / "vault.db"
+    create_vault_via_production(db)
+    assert vault_blob(db) == TidewallVault().to_bytes()

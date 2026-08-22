@@ -106,7 +106,6 @@ def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, i
         root = ET.parse(junit).getroot()
         for case in root.iter("testcase"):
             nodeid = f"{(case.get('classname') or '').replace('.', '/')}.py::{case.get('name')}"
-            simple = f"{case.get('classname')}::{case.get('name')}"
             if case.find("error") is not None:
                 errors += 1
                 continue
@@ -120,9 +119,13 @@ def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, i
                 observed[("component-mismatch", mismatch)] += 1
                 continue
 
-            if any(a.startswith(nodeid) or a.startswith(simple) for a in accounted):
-                continue
-            if any(nodeid.split("::")[-1] in a for a in accounted):
+            # EXACT equality on the canonical node id, including the full
+            # parameter id. The prefix and substring fallbacks were both
+            # unnecessary -- the constructed id already matches exactly -- and
+            # unsafe: an unrelated failing test in a DIFFERENT file, named as a
+            # prefix of a parametrised signature-emitting test, was excused
+            # purely because its name was a substring of that test's node id.
+            if nodeid in accounted:
                 continue
 
             unaccounted += 1

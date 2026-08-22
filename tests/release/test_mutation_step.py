@@ -227,32 +227,39 @@ def test_a_wider_spread_than_predicted_fails():
 
 
 def test_the_baseline_matches_what_the_suite_currently_emits():
-    """Baseline drift must FAIL LOUDLY, not break the mutation job silently.
+    """Keys AND MULTIPLICITIES, against an independently derived expectation.
 
-    This is how the job stopped working: seven validation signatures were added
-    after the baseline was written, so the runner aborted at the baseline
-    comparison and never reached the edit. Everything looked fine -- the job
-    just quietly stopped mutating anything.
+    Two earlier versions of this check were both satisfiable by a wrong
+    baseline: one compared sets (so a MISSING entry passed), and the
+    completeness check compared representation NAMES (so a corrupted COUNT
+    passed -- changing a 1 to a 2 left all four baseline tests green).
 
-    Comparing the recorded baseline against the manifest's own expectation
-    catches that at the point the signatures change, rather than the next time
-    someone reads the mutation job's output.
+    The independent derivation is the expected-failure manifest itself: its
+    signatures are unique -- asserted separately -- so each predicts exactly
+    one occurrence, and any baseline count other than that is drift.
     """
+    import collections
     import json
     import pathlib
 
     from tests.release.expected_failures import generate
     from tests.release.manifest import load_cases
 
-    baseline_path = pathlib.Path(__file__).resolve().parent / "mutation_baseline.json"
-    baseline = {tuple(key) for key, _count in json.loads(baseline_path.read_text())}
+    path = pathlib.Path(__file__).resolve().parent / "mutation_baseline.json"
+    recorded = collections.Counter({tuple(key): count for key, count in json.loads(path.read_text())})
 
-    # Every baseline signature must be a record the manifest predicts. A
-    # baseline entry with no matching expected-failure record is a signature
-    # nobody declared.
-    expected = {r.signature() for r in generate(load_cases())}
-    undeclared = sorted(baseline - expected)
+    expected_signatures = collections.Counter(r.signature() for r in generate(load_cases()))
+    assert all(n == 1 for n in expected_signatures.values()), (
+        "the manifest no longer predicts each signature exactly once, so the " "count derivation below is invalid"
+    )
+
+    undeclared = sorted(set(recorded) - set(expected_signatures))
     assert not undeclared, f"the baseline holds signatures the manifest does not predict: {undeclared[:2]}"
+
+    wrong_counts = {sig: n for sig, n in recorded.items() if n != 1}
+    assert not wrong_counts, (
+        f"the manifest predicts each signature once; the baseline records " f"{sorted(wrong_counts.items())[:2]}"
+    )
 
 
 def test_the_baseline_is_not_empty():
