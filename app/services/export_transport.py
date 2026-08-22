@@ -201,6 +201,7 @@ def validate_destination(url: str, posture: Pref64Posture) -> tuple[str, int, li
     # even parsed. Nobody has declared this deployment's NAT64 posture, so the
     # claim this function makes cannot be evaluated at all, whatever the URL
     # says. Refusing here also means no resolution, reservation or send occurs.
+    # release:component export_destination/posture_unset -- refuses before the URL is parsed
     if posture.is_unset:
         raise DestinationRefused(
             "content export requires this deployment's NAT64 posture: set PREF64 to "
@@ -260,6 +261,7 @@ def validate_destination(url: str, posture: Pref64Posture) -> tuple[str, int, li
     # addresses[0] passes every per-length, overlap and route case, because they
     # can all use a single resolved address.
     for addr in addresses:
+        # release:component export_destination/generic_address_policy -- pre-existing scope check, every answer
         if not _is_public(addr):
             raise DestinationRefused("the destination resolves to a non-public address")
         _refuse_translated_non_public(addr, posture)
@@ -285,6 +287,7 @@ def _refuse_translated_non_public(addr: str, posture: Pref64Posture) -> None:
         if parsed not in prefix:
             continue
         embedded = embedded_ipv4(parsed, prefix)
+        # release:component export_destination/malformed_translation -- refused, never treated as a non-match
         if embedded is None:
             # Matched a translation prefix but is not a well-formed RFC 6052
             # address. REFUSED, not skipped: `continue` here would treat a
@@ -293,6 +296,7 @@ def _refuse_translated_non_public(addr: str, posture: Pref64Posture) -> None:
             raise DestinationRefused(
                 "the destination matches a configured NAT64 prefix but is not a " "well-formed translated address"
             )
+        # release:component export_destination/embedded_address_policy -- decoded IPv4 re-checked, every prefix
         if not _is_public(str(embedded)):
             raise DestinationRefused(
                 "the destination translates to a non-public address under a " "configured NAT64 prefix"

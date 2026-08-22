@@ -323,6 +323,7 @@ class MaliciousPromptDetector(BaseDetector):
                 )
 
         # 1. Custom malicious list — override to detected
+        # release:component malicious_prompt/custom_malicious_list -- DB list match, before the ML pipeline
         if self._custom_malicious_enabled and self._prompt_list_svc:
             try:
                 matched = self._prompt_list_svc.check_match(text, "malicious")
@@ -348,6 +349,7 @@ class MaliciousPromptDetector(BaseDetector):
                 return _detected(components)
 
         # 2. Custom benign list — override to not detected
+        # release:component malicious_prompt/custom_benign_list -- benign match short-circuits to not-detected
         if self._custom_benign_enabled and self._prompt_list_svc:
             try:
                 matched = self._prompt_list_svc.check_match(text, "benign")
@@ -437,10 +439,12 @@ class MaliciousPromptDetector(BaseDetector):
                 )
             else:
                 try:
+                    # release:component malicious_prompt/model_intent -- separate method and input from app_intent
                     if self._check_model_intent:
                         violation = self._intent_svc.check_model_intent(text)
                         if violation:
                             analyzer_responses.append(violation)
+                    # release:component malicious_prompt/app_intent -- takes the app's declared intent too
                     if self._check_app_intent:
                         messages = kwargs.get("messages", [])
                         app_intent = None

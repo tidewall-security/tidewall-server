@@ -430,6 +430,7 @@ class ScannerEngine:
         current_text = text
 
         for det_name, detector in self._detectors:
+            # release:component scanner_engine/applicability_skip -- detector does not apply; never runs
             if not _detector_applies(det_name, event_type):
                 continue
 
@@ -450,6 +451,7 @@ class ScannerEngine:
                     det_result = detector.scan(current_text, vault=vault, **extra)
                 else:
                     det_result = detector.scan(current_text, **extra)
+            # release:component scanner_engine/exception_failure -- raised; batch discarded, failure recorded
             except Exception as exc:
                 logger.error("Detector '%s' raised during scan: %s", det_name, describe(exc))
                 _discard_batch(matches, batch)
@@ -461,6 +463,7 @@ class ScannerEngine:
 
             # A detector may also report failure by value rather than raising —
             # most know far better than we do why they could not run.
+            # release:component scanner_engine/value_reported_failure -- reported failure by value, not by raising
             if det_result.status is DetectorStatus.FAILED:
                 assert det_result.failure_code is not None
                 logger.error(
@@ -471,6 +474,7 @@ class ScannerEngine:
                 result.record_failure(det_name, det_result.failure_code, detector.action)
                 continue
 
+            # release:component scanner_engine/degraded -- ran but incomplete; absence proves nothing
             if det_result.degraded:
                 result.partial.append(det_name)
 

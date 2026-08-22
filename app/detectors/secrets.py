@@ -38,6 +38,7 @@ class SecretsDetector(BaseDetector):
         # over-fire on natural-language prompts (every word looks high-entropy
         # to detect-secrets' defaults). Pattern-based vendor detectors below
         # cover the realistic API-key shapes our users will paste.
+        # release:component secrets/plugin_set -- eighteen plugins, each a distinct value shape
         self._plugins = [
             {"name": "AWSKeyDetector"},
             {"name": "AzureStorageKeyDetector"},
