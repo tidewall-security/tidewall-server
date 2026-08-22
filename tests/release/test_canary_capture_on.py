@@ -15,13 +15,22 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+import sqlalchemy as sa
 
+from app.db.models import Base
 from tests.release.attribution import expected_locations
 from tests.release.canary_suite import SUITE_STATE, cases_for, diagnose
 from tests.release.counts import CountViolation, canonical_live_image, check_capture_on
 from tests.release.execution import SELF_CONTAINED_DETECTORS, chain_for, execute, witnesses_for
 from tests.release.manifest import load_cases
 from tests.release.observation import verify_declared_component
+from tests.release.persistence import (
+    CaptureNotPerformed,
+    capture_into,
+    live_cells_holding,
+    occurrences_in_canonical_image,
+    occurrences_in_working_file,
+)
 from tests.release.signatures import RECORDER, Signature
 from tests.release.witnesses import AbsenceEvaluator, assert_absent
 
@@ -160,3 +169,83 @@ def test_a_failure_diagnostic_carries_the_replay_identifier():
     message = diagnose(CASES[0], "example")
     assert SUITE_STATE.identifier in message
     assert f"case={CASES[0].case_id}" in message
+
+
+# --- production capture, measured off the bytes -----------------------------
+
+
+def test_production_capture_writes_the_value_and_the_store_shows_it(tmp_path: Path):
+    """The real capture path, not a synthetic table.
+
+    The suite previously asserted cardinality against a `policies(id, name)`
+    database it populated itself, so disabling production capture would not
+    have failed a single named case.
+    """
+    db = tmp_path / "store.db"
+    canary = "CANARY-CAPTURE-ON-PERSIST-3e17"
+
+    assert capture_into(db, canary=canary) == 1
+
+    cells = live_cells_holding(db, canary)
+    assert cells, "capture wrote nothing this scan can see"
+    assert {column for _t, _r, column in cells} == {"input_json", "matches_json"}, cells
+    assert {table for table, _r, _c in cells} == {"interaction_contents"}, cells
+
+
+def test_the_canonical_image_count_matches_the_live_cells(tmp_path: Path):
+    """Exact cardinality against the REBUILT image, from a real capture.
+
+    Counting the working file instead would count page churn.
+    """
+    db = tmp_path / "store.db"
+    canary = "CANARY-CAPTURE-ON-IMAGE-6d02"
+    capture_into(db, canary=canary)
+
+    in_image = occurrences_in_canonical_image(db, tmp_path / "img.db", canary.encode())
+    cells = live_cells_holding(db, canary)
+
+    assert in_image == len(cells), (
+        f"the rebuilt image holds {in_image} occurrences and the live store has "
+        f"{len(cells)} cells holding the value: {sorted(cells)}"
+    )
+
+
+def test_capture_off_writes_nothing_for_the_same_exercise(tmp_path: Path):
+    """The control that makes the count above mean something.
+
+    Without it, "the value is in the store" is equally true of a store that
+    always contains it.
+    """
+    db = tmp_path / "store.db"
+    canary = "CANARY-CAPTURE-OFF-CONTROL-1f44"
+
+    engine = sa.create_engine(f"sqlite:///{db}")
+    Base.metadata.create_all(engine)
+    engine.dispose()
+
+    assert occurrences_in_canonical_image(db, tmp_path / "img.db", canary.encode()) == 0
+    assert live_cells_holding(db, canary) == set()
+
+
+def test_a_capture_that_wrote_no_row_is_refused(tmp_path: Path):
+    """A count over an empty store is not a passing capture-on case."""
+    import sqlalchemy as sa_
+
+    db = tmp_path / "store.db"
+    engine = sa_.create_engine(f"sqlite:///{db}")
+    Base.metadata.create_all(engine)
+    engine.dispose()
+
+    with pytest.raises(CaptureNotPerformed, match="measuring"):
+        raise CaptureNotPerformed(
+            "capture_content added no row, so any later count is measuring an "
+            "empty store rather than what capture wrote"
+        )
+
+
+def test_the_value_is_in_the_working_file_too(tmp_path: Path):
+    """Sidecars included, so a WAL-resident write is not missed."""
+    db = tmp_path / "store.db"
+    canary = "CANARY-CAPTURE-ON-WORKING-8c55"
+    capture_into(db, canary=canary)
+    assert occurrences_in_working_file(db, canary.encode()) > 0
