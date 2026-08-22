@@ -183,3 +183,59 @@ def test_a_forbidden_pair_whose_table_never_exists_fails_at_the_end():
 def test_verify_passes_when_every_pair_was_actually_read(traced):
     traced.execute("INSERT INTO src(v) VALUES ('ok')")
     traced.verify_every_pair_was_read()
+
+
+def test_a_secret_embedded_in_a_longer_text_value_is_caught():
+    """Storage is not always the bare value.
+
+    An exact-equality comparison passes every test where the canary is the
+    whole cell, and misses the realistic case where it is one field of a
+    serialised record.
+    """
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE audit (id INTEGER PRIMARY KEY, v TEXT)")
+    t = TracedConnection(conn=conn, forbidden=frozenset({("audit", "v")}), watched=(SECRET,))
+    t.execute(
+        "INSERT INTO audit(id, v) VALUES (1, ?)",
+        ('{"policy": "p", "token": "' + SECRET + '"}',),
+    )
+    assert t.violations, "a secret embedded in a longer text value was missed"
+    conn.close()
+
+
+def test_a_non_ascii_secret_in_a_blob_is_caught():
+    """The bytes branch is load-bearing, not a convenience.
+
+    Falling through to `str(value)` reads a Python repr, in which non-ASCII
+    UTF-8 bytes appear escaped as \\xNN -- so the secret's own characters are
+    not present in the string being searched, and the match silently fails.
+    """
+    secret = "CANARY-café-9d2f"
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE audit (id INTEGER PRIMARY KEY, v BLOB)")
+    t = TracedConnection(conn=conn, forbidden=frozenset({("audit", "v")}), watched=(secret,))
+    t.execute("INSERT INTO audit(id, v) VALUES (1, ?)", (secret.encode(),))
+
+    stored = conn.execute("SELECT v FROM audit").fetchone()[0]
+    assert isinstance(stored, bytes) and secret not in str(
+        stored
+    ), "premise changed: the repr fallback would now find this value anyway"
+    assert t.violations, "the bytes branch did not match a non-ASCII secret"
+    conn.close()
+
+
+def test_a_secret_stored_with_a_numeric_type_is_caught():
+    """A watched value need not be stored as text or bytes.
+
+    An account number written into a forbidden INTEGER column is on disk the
+    same as any other value.
+    """
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE audit (id INTEGER PRIMARY KEY, v INTEGER)")
+    t = TracedConnection(conn=conn, forbidden=frozenset({("audit", "v")}), watched=("4929100000",))
+    t.execute("INSERT INTO audit(id, v) VALUES (1, 4929100000)")
+
+    stored = conn.execute("SELECT typeof(v) FROM audit").fetchone()[0]
+    assert stored == "integer", "premise changed: the value is no longer an integer"
+    assert t.violations, "a numeric-typed secret was not read as a violation"
+    conn.close()
