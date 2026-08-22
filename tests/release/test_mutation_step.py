@@ -263,3 +263,39 @@ def test_the_baseline_is_not_empty():
 
     path = pathlib.Path(__file__).resolve().parent / "mutation_baseline.json"
     assert json.loads(path.read_text()), "the recorded baseline is empty"
+
+
+def test_the_baseline_is_complete_over_the_families_it_covers():
+    """Membership is not completeness.
+
+    `baseline <= expected` passes for a baseline missing entries the suite
+    actually emits -- a three-entry baseline satisfies it just as well as a
+    seven-entry one, and the runner then aborts at check_baseline with the job
+    silently doing nothing.
+
+    Every case_id family present in the baseline must be present in FULL: if
+    one representation of the validation echo is recorded, all seven must be,
+    because the suite emits them together.
+    """
+    import collections
+    import json
+    import pathlib
+
+    from tests.release.representations import FAMILIES
+
+    path = pathlib.Path(__file__).resolve().parent / "mutation_baseline.json"
+    records = json.loads(path.read_text())
+
+    by_family = collections.defaultdict(set)
+    for key, _count in records:
+        case_id, _prop, _collector, _surface, representation, _rule = key
+        family = case_id.rsplit("/", 1)[0]
+        by_family[family].add(representation)
+
+    expected = {f.name for f in FAMILIES}
+    for family, representations in sorted(by_family.items()):
+        assert representations == expected, {
+            "family": family,
+            "missing": sorted(expected - representations),
+            "unexpected": sorted(representations - expected),
+        }
