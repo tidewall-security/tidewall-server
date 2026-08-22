@@ -5,6 +5,11 @@
 # marker in app/. CI fails if this file and the source disagree.
 
 [[component]]
+identity = "access_rules/early_block"
+source = "app/routes/guard.py"
+why = "blocks before any detector runs"
+
+[[component]]
 identity = "export_destination/embedded_address_policy"
 source = "app/services/export_transport.py"
 why = "decoded IPv4 re-checked, every prefix"
@@ -48,6 +53,11 @@ why = "HF pipeline; not lists or intent"
 identity = "malicious_prompt/model_intent"
 source = "app/detectors/malicious_prompt.py"
 why = "separate method and input from app_intent"
+
+[[component]]
+identity = "mcp_validation/name_similarity"
+source = "app/detectors/mcp_validation.py"
+why = "reads function.name only"
 
 [[component]]
 identity = "prompt_list/match_exact"

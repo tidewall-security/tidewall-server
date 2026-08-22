@@ -20,7 +20,9 @@ from tests.release.manifest import (
     CASES,
     COLLECTORS,
     DETECTORS,
+    EVENT_SCOPED,
     EVENTS,
+    EXACT_MATCH_DETECTORS,
     LEAVES,
     NOT_EVALUATED,
     PLACEMENTS,
@@ -72,103 +74,101 @@ def test_a_marker_without_a_rationale_is_not_a_declaration(tmp_path: pathlib.Pat
     assert inventory.scan_source(tmp_path) == []
 
 
-# --- oracle 1: source components vs manifest components --------------------
+# --- the oracles, now comparing against checked-in DATA -------------------
+#
+# The previous version generated the cases from the same domains it then
+# compared them against, so every comparison was equality by construction:
+# deleting `nfd` removed it from the declared set and from every case at once,
+# and all seventeen tests passed. The cases now live in a file no generator
+# writes, so a domain edit does not move them.
 
 
 def test_every_source_component_is_exercised_by_a_case():
-    """Produced vs declared, in the direction that catches source drift.
+    """Both directions.
 
-    A component that exists in `app/` and appears in no case is a path the
-    suite never reaches. The eighteen secrets plugins are data-declared and
-    exercised through their detector, so they map to it rather than each
-    needing a case.
+    The one-way version let the manifest name components with no source marker
+    -- phantom paths nobody could reach -- while reporting full coverage.
     """
     from_source = {c.identity for c in inventory.scan_source()}
     exercised = {f"{c.component}/{c.sub_path}" for c in CASES}
-    plugin_components = {i for i in from_source if i.startswith("secrets/")}
-    unreached = from_source - exercised - plugin_components
-    assert unreached == set(), sorted(unreached)
+    assert exercised <= from_source, {"named by a case, no source marker": sorted(exercised - from_source)}
 
 
 def test_every_secrets_plugin_is_registered_individually():
-    """Eighteen entries, not one `plugin_set` identity.
-
-    Collapsing them meant deleting `TwilioKeyDetector` left the rendered
-    artifact byte-identical and every test green.
-    """
     plugins = {i for i in inventory.load_generated() if i.startswith("secrets/")}
     assert len(plugins) == 18, sorted(plugins)
 
 
-# --- oracle 2: the canonical leaf/placement domain vs the cases ------------
+def test_no_case_pairs_an_event_scoped_detector_with_the_wrong_event():
+    """Production scoping, not the manifest's opinion of it.
 
-
-def test_every_declared_leaf_and_placement_pair_has_a_case():
-    """The relation, not a Cartesian product.
-
-    A bare product would demand nonsensical pairs like
-    `policy-name@tool-parameters`; `APPLICABLE` is the canonical relation and
-    this compares the cases against it in both directions.
+    `malicious_entity` runs only for `output` and `mcp_validation` only for
+    `tool_listing` (`_detector_applies`). A row pairing either with another
+    event describes a path that cannot execute -- 56 such rows shipped in the
+    generated version.
     """
-    declared = {(leaf, placement) for leaf, places in APPLICABLE.items() for placement in places}
-    produced = {(c.leaf, c.placement) for c in CASES}
-    assert produced == declared, {
-        "declared but no case": sorted(declared - produced),
-        "case but not declared": sorted(produced - declared),
-    }
+    for case in CASES:
+        scoped = EVENT_SCOPED.get(case.detector)
+        if scoped:
+            assert case.event == scoped, f"{case.detector} is {scoped}-scoped: {case.identity}"
 
 
-def test_every_leaf_is_in_the_applicability_relation():
-    assert set(APPLICABLE) == set(LEAVES)
-    for places in APPLICABLE.values():
-        assert set(places) <= set(PLACEMENTS)
+def test_matches_json_is_only_required_where_a_detector_reports_exact_values():
+    """Only PII and custom-entity call report_match.
 
-
-# --- oracle 3: every other axis -------------------------------------------
-#
-# The gap the first version left entirely: branch, detector, event, capture,
-# representation and collector coverage can all drift while the source
-# components and the leaf/placement projection stay identical. Deleting `nfd`
-# and `browser-network` was already a false green with no case rows at all.
+    A classifier's DetectorResult has no source/value field, so requiring its
+    canary in matches_json manufactures a failure for correct behaviour.
+    """
+    assert EXACT_MATCH_DETECTORS == {"confidential_and_pii_entity", "custom_entity"}
 
 
 @pytest.mark.parametrize(
     "name,declared,observed",
     [
+        ("leaf", lambda: set(LEAVES), lambda: {c.leaf for c in CASES}),
+        ("placement", lambda: set(PLACEMENTS), lambda: {c.placement for c in CASES}),
         ("branch", lambda: set(BRANCHES), lambda: {c.branch for c in CASES}),
         ("detector", lambda: set(DETECTORS), lambda: {c.detector for c in CASES} - {"none"}),
         ("event", lambda: set(EVENTS), lambda: {c.event for c in CASES}),
         ("representation", lambda: set(REPRESENTATIONS), lambda: {c.representation for c in CASES}),
         ("capture", lambda: {m.value for m in CaptureMode}, lambda: {c.capture.value for c in CASES}),
-        (
-            "collector",
-            lambda: set(COLLECTORS),
-            lambda: {col for c in CASES for col in c.collectors},
-        ),
+        ("collector", lambda: set(COLLECTORS), lambda: {x for c in CASES for x in c.collectors}),
     ],
 )
-def test_every_declared_axis_value_is_covered_by_a_case(name, declared, observed):
+def test_every_declared_axis_value_appears_in_the_checked_in_cases(name, declared, observed):
+    """Independent, because the cases are data.
+
+    Deleting `nfd` from REPRESENTATIONS now fails: the constant loses it and
+    the 64 checked-in rows carrying it do not.
+    """
     d, o = declared(), observed()
-    assert o == d, {"declared, no case": sorted(d - o), "in a case, not declared": sorted(o - d)}
+    assert o == d, {"declared, in no case": sorted(d - o), "in a case, not declared": sorted(o - d)}
+
+
+def test_the_relation_and_the_cases_agree_in_both_directions():
+    """One-way was not enough.
+
+    Checking only "every case is applicable" let the relation shrink without
+    failing: collapsing `bearer` to a single placement removed a pair no case
+    happened to use, and every test passed. A declared pair with no case is a
+    gap in coverage, and a case outside the relation is a nonsensical pair --
+    both must fail.
+    """
+    declared = {(leaf, place) for leaf, places in APPLICABLE.items() for place in places}
+    produced = {(c.leaf, c.placement) for c in CASES}
+    assert produced == declared, {
+        "declared, no case exercises it": sorted(declared - produced),
+        "a case uses it, not declared": sorted(produced - declared),
+    }
 
 
 def test_the_collector_set_is_part_of_case_identity():
-    """Two rows differing only by a dropped collector must not share an identity.
-
-    Omitting collectors from the identity meant a case that silently stopped
-    sweeping the database, a log selector or transport looked unchanged.
-    """
     case = CASES[0]
     thinner = type(case)(**{**case.__dict__, "collectors": case.collectors[:-1]})
     assert thinner.identity != case.identity
 
 
 def test_not_evaluated_is_keyed_by_component_not_only_leaf():
-    """The fact is about a component not reading a leaf.
-
-    Keyed by leaf alone it would still look true if some other component began
-    evaluating MCP descriptions tomorrow.
-    """
     assert set(NOT_EVALUATED) == {
         ("mcp-description", "mcp_validation", "scan"),
         ("mcp-parameters", "mcp_validation", "scan"),

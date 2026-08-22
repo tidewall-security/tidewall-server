@@ -34,6 +34,7 @@ class MCPValidationDetector(BaseDetector):
     def name(self) -> str:
         return "mcp_validation"
 
+    # release:component mcp_validation/name_similarity -- reads function.name only
     def scan(self, text: str, **kwargs: Any) -> DetectorResult:
         tools = kwargs.get("tools", [])
         if not tools:
