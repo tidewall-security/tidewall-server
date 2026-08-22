@@ -401,6 +401,29 @@ def applicable_events(detector: str) -> tuple[str, ...]:
 #: any case reaches it.
 VERIFICATION_DEFERRED_TO_TASK_5 = True
 
+#: A SECOND deferred obligation, distinct from the mapping above.
+#:
+#: The accepted plan requires the inventory to capture behaviour-changing
+#: STATES -- enabled/disabled, success/failure, short-circuit -- not just
+#: component names. The registry does not. `malicious_prompt/custom_malicious_list`
+#: is one marker although the list can be disabled, clean, detected, fail to
+#: configure, fail operationally, or short-circuit past later stages; Topic's
+#: pipeline markers collapse skipped, failed, clean, detected and degraded
+#: aggregation; ScannerEngine has no success/aggregation or detector-block
+#: short-circuit marker at all.
+#:
+#: This is NOT covered by the mapping deferral. That one asks whether a case
+#: reaches the component it names; this asks whether the component's state
+#: domain is declared at all. Marking states is cheap -- they are comments --
+#: but choosing WHICH states are behaviour-changing requires observing which
+#: ones alter a surface, which is again Task 5's instrumentation.
+#:
+#: Task 5's second obligation: derive the behaviour-changing state set from
+#: what the witnesses observe, and mark those states at their definition sites.
+#: Until then the manifest's third axis is component-level, not state-level,
+#: and no test here should be read as establishing state coverage.
+STATE_DOMAIN_DEFERRED_TO_TASK_5 = True
+
 CASES_FILE = pathlib.Path(__file__).resolve().parent / "manifest.cases.toml"
 
 

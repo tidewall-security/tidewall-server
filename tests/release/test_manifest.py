@@ -90,6 +90,21 @@ def test_a_marker_without_a_rationale_is_not_a_declaration(tmp_path: pathlib.Pat
 # writes, so a domain edit does not move them.
 
 
+def test_the_component_state_domain_is_recorded_as_deferred():
+    """The plan requires states; the registry has component names.
+
+    Distinct from the mapping deferral: that asks whether a case reaches the
+    component it names, this asks whether the component's state domain exists
+    at all. Neither is established here, and both are Task 5's.
+    """
+    from tests.release import manifest
+
+    assert manifest.STATE_DOMAIN_DEFERRED_TO_TASK_5 is True
+    doc = pathlib.Path(manifest.__file__).read_text()
+    assert "component-level, not state-level" in doc
+    assert "Task 5's second obligation" in doc
+
+
 def test_the_component_mapping_is_recorded_as_unverified():
     """What this module can and cannot establish.
 
