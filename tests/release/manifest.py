@@ -325,6 +325,35 @@ def applicable_events(detector: str) -> tuple[str, ...]:
 #: Cases now live in a file no generator writes. A domain change does not move
 #: them, so the comparison fails until someone deliberately edits both -- a
 #: two-file diff a reviewer sees.
+#: DEFERRED VERIFICATION -- read this before trusting a case's component.
+#:
+#: Each case names the component and sub-path it claims to exercise. **That
+#: claim is asserted, not verified, and cannot be verified here.** Confirming
+#: that a case actually reaches a component requires running it and observing
+#: which code executed, which is Task 5's instrumentation. Every oracle in this
+#: module compares a declaration against another declaration.
+#:
+#: The evidence that this matters is concrete: a review changed a row from
+#: `malicious_prompt/generic_injection_ml` to `topic/topics_pipeline` and all
+#: twenty tests passed. Moving these claims out of a Python table and into TOML
+#: changed where they live, not whether they are true.
+#:
+#: Known-suspect mappings, recorded rather than defended, for Task 5 to confirm
+#: or correct when the witnesses exist:
+#:
+#:   allow/code            -> topic/topics_pipeline
+#:   allow/language        -> topic/toxicity_pipeline
+#:   report/emoji          -> malicious_prompt/app_intent
+#:   PII transform rows    -> scanner_engine/degraded
+#:   mcp-description and mcp-parameters -> mcp_validation/name_similarity,
+#:       which production does not read at all (see NOT_EVALUATED)
+#:
+#: Task 5's obligation: reject any case whose declared component is not the one
+#: its evaluated-input witness observes. Until then the coverage oracle
+#: establishes that every marked component is NAMED by some case -- not that
+#: any case reaches it.
+VERIFICATION_DEFERRED_TO_TASK_5 = True
+
 CASES_FILE = pathlib.Path(__file__).resolve().parent / "manifest.cases.toml"
 
 

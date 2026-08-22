@@ -88,8 +88,26 @@ def test_a_marker_without_a_rationale_is_not_a_declaration(tmp_path: pathlib.Pat
 # writes, so a domain edit does not move them.
 
 
-def test_source_components_and_exercised_components_are_equal():
-    """Actually both directions.
+def test_the_component_mapping_is_recorded_as_unverified():
+    """What this module can and cannot establish.
+
+    A case naming a component is not evidence that it reaches one. Verifying
+    that requires observing execution, which is Task 5's instrumentation, so
+    the claim is recorded as deferred rather than defended by oracles that
+    cannot see it. This test exists so removing that acknowledgement fails.
+    """
+    from tests.release import manifest
+
+    assert manifest.VERIFICATION_DEFERRED_TO_TASK_5 is True
+    doc = pathlib.Path(manifest.__file__).read_text()
+    assert "asserted, not verified" in doc
+    assert "Task 5's obligation" in doc
+
+
+def test_source_components_and_exercised_components_are_named_by_a_case():
+    """Named by a case -- NOT reached by one.
+
+    Actually both directions.
 
     The previous version said "both directions" in its docstring and asserted
     only `exercised <= from_source`. On the shipped branch that left FIFTEEN
@@ -97,10 +115,10 @@ def test_source_components_and_exercised_components_are_equal():
     plugin except the three a case happened to name.
     """
     from_source = {c.identity for c in inventory.scan_source()}
-    exercised = {f"{c.component}/{c.sub_path}" for c in CASES}
-    assert exercised == from_source, {
-        "in source, no case exercises it": sorted(from_source - exercised),
-        "named by a case, no source marker": sorted(exercised - from_source),
+    named = {f"{c.component}/{c.sub_path}" for c in CASES}
+    assert named == from_source, {
+        "in source, named by no case": sorted(from_source - named),
+        "named by a case, no source marker": sorted(named - from_source),
     }
 
 
