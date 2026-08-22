@@ -105,8 +105,21 @@ def copy_map(conn: sqlite3.Connection) -> dict[tuple[str, str], collections.Coun
     """
     out: dict[tuple[str, str], collections.Counter[str]] = {}
     for table in _tables(conn):
-        for column in (r[1] for r in conn.execute(f"PRAGMA table_info('{table}')")):
+        info = list(conn.execute(f"PRAGMA table_info('{table}')"))
+        for column in (r[1] for r in info):
             out[(table, column)] = collections.Counter({table: 1})
+
+        # An INTEGER PRIMARY KEY IS the rowid, and every index on a rowid table
+        # carries the rowid as its `cid=-1, name=NULL` auxiliary entry. So that
+        # column's value physically exists in every index on the table, and a
+        # map built only from NAMED key columns reports one location for a
+        # value that has five. Measured on `interactions.id`: five secondary
+        # indexes, all invisible to the named-column pass.
+        rowid_alias = next((r[1] for r in info if r[5] == 1 and (r[2] or "").upper() == "INTEGER"), None)
+        if rowid_alias is not None:
+            for index in conn.execute(f"PRAGMA index_list('{table}')"):
+                out[(table, rowid_alias)][index[1]] += 1
+
         for index in conn.execute(f"PRAGMA index_list('{table}')"):
             name = index[1]
             for entry in conn.execute(f"PRAGMA index_xinfo('{name}')"):

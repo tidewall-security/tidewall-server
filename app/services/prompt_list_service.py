@@ -160,12 +160,15 @@ class PromptListService:
         for entry in entries:
             pattern_lower = entry.pattern.lower()
 
+            # release:component prompt_list/match_substring -- substring containment
             if entry.match_type == "substring":
                 if pattern_lower in text_lower:
                     return True
+            # release:component prompt_list/match_exact -- whole-string equality
             elif entry.match_type == "exact":
                 if text_lower == pattern_lower:
                     return True
+            # release:component prompt_list/match_regex -- compiled pattern search
             elif entry.match_type == "regex":
                 try:
                     # Compiled per read rather than cached: list rows are

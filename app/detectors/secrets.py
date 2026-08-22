@@ -38,7 +38,24 @@ class SecretsDetector(BaseDetector):
         # over-fire on natural-language prompts (every word looks high-entropy
         # to detect-secrets' defaults). Pattern-based vendor detectors below
         # cover the realistic API-key shapes our users will paste.
-        # release:component secrets/plugin_set -- eighteen plugins, each a distinct value shape
+        # release:component secrets/awskey -- a distinct secret shape
+        # release:component secrets/azurestoragekey -- a distinct secret shape
+        # release:component secrets/basicauth -- a distinct secret shape
+        # release:component secrets/cloudant -- a distinct secret shape
+        # release:component secrets/discordbottoken -- a distinct secret shape
+        # release:component secrets/githubtoken -- a distinct secret shape
+        # release:component secrets/ibmcloudiam -- a distinct secret shape
+        # release:component secrets/ibmcoshmac -- a distinct secret shape
+        # release:component secrets/jwttoken -- a distinct secret shape
+        # release:component secrets/mailchimp -- a distinct secret shape
+        # release:component secrets/npm -- a distinct secret shape
+        # release:component secrets/privatekey -- a distinct secret shape
+        # release:component secrets/sendgrid -- a distinct secret shape
+        # release:component secrets/slack -- a distinct secret shape
+        # release:component secrets/softlayer -- a distinct secret shape
+        # release:component secrets/squareoauth -- a distinct secret shape
+        # release:component secrets/stripe -- a distinct secret shape
+        # release:component secrets/twiliokey -- a distinct secret shape
         self._plugins = [
             {"name": "AWSKeyDetector"},
             {"name": "AzureStorageKeyDetector"},

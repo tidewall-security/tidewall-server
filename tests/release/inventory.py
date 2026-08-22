@@ -38,7 +38,7 @@ GENERATED = Path(__file__).resolve().parent / "inventory.generated.toml"
 #: The one rule. Everything after `--` is the reason, kept for a reader and
 #: excluded from the identity, so rewording a rationale is not schema drift.
 _MARKER = re.compile(
-    r"#\s*release:component\s+(?P<component>[a-z0-9_.]+)/(?P<sub_path>[a-z0-9_.]+)\s*(?:--\s*(?P<why>.*))?$"
+    r"^#\s*release:component\s+(?P<component>[a-z0-9_.]+)/(?P<sub_path>[a-z0-9_.]+)\s+--\s+(?P<why>\S.*)$"
 )
 
 
@@ -67,19 +67,54 @@ def scan_source(root: Path = APP) -> list[Component]:
     """Every marked component under *root*, in a stable order."""
     found: list[Component] = []
     for path in sorted(root.rglob("*.py")):
-        for number, text in enumerate(path.read_text().splitlines(), start=1):
-            match = _MARKER.search(text)
+        for token in _comment_tokens(path):
+            match = _MARKER.match(token.string.strip())
             if match:
                 found.append(
                     Component(
                         component=match.group("component"),
                         sub_path=match.group("sub_path"),
                         source=_display(path),
-                        line=number,
-                        why=(match.group("why") or "").strip(),
+                        line=token.start[0],
+                        why=match.group("why").strip(),
                     )
                 )
+
+    # A duplicate identity would render two artifact rows and collapse to one
+    # in any set comparison, so two definition sites could claim the same
+    # component and no oracle would notice.
+    seen: dict[str, Component] = {}
+    for entry in found:
+        if entry.identity in seen:
+            first = seen[entry.identity]
+            raise DuplicateComponent(
+                f"{entry.identity} is declared twice: " f"{first.source}:{first.line} and {entry.source}:{entry.line}"
+            )
+        seen[entry.identity] = entry
     return sorted(found)
+
+
+class DuplicateComponent(Exception):
+    """Two definition sites claim the same component identity."""
+
+
+def _comment_tokens(path: Path):
+    """Real Python COMMENT tokens, not any line containing the text.
+
+    A regex over raw lines accepted the marker inside a string literal --
+    `x = "# release:component string_literal/not_a_comment -- ..."` registered
+    a component with no declaration comment anywhere. Tokenizing means only an
+    actual comment can declare one.
+    """
+    import tokenize
+
+    try:
+        with path.open("rb") as handle:
+            for token in tokenize.tokenize(handle.readline):
+                if token.type == tokenize.COMMENT:
+                    yield token
+    except (tokenize.TokenError, SyntaxError) as exc:  # pragma: no cover
+        raise ValueError(f"{path} could not be tokenized: {exc}") from exc
 
 
 def render(components: list[Component]) -> str:

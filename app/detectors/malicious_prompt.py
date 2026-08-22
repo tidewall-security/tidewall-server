@@ -394,6 +394,7 @@ class MaliciousPromptDetector(BaseDetector):
                 return DetectorResult(detected=False, components=components)
 
         # 3. Generic injection ML model — direct HF pipeline only.
+        # release:component malicious_prompt/generic_injection_ml -- HF pipeline; not lists or intent
         if self._generic_injection_enabled and self._pipeline:
             try:
                 results = self._pipeline(text)

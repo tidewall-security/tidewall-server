@@ -17,9 +17,12 @@ import pytest
 
 #: What is still missing, checked off as each task lands. The gate is not
 #: complete until this is empty AND the real job decides the build.
+#:
+#: Tasks 1-3 are removed as they land. Leaving a completed task listed here is
+#: not harmless: the branch would claim the task is done while the checked-in
+#: hard-fail diagnostic said it was not, and one of those two would be wrong
+#: with nothing to say which.
 STILL_MISSING = (
-    "execution manifest and generated component inventory (Task 2)",
-    "occurrence matrix with resolved rows (Task 3)",
     "corpus collectors, delta, trace, in-flight capture (Task 4)",
     "witnesses and the mandatory surfaces (Task 5)",
     "the two canary suites, expected-failure manifest, release-gate job (Task 6)",

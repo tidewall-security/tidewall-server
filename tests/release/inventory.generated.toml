@@ -40,9 +40,29 @@ source = "app/detectors/malicious_prompt.py"
 why = "DB list match, before the ML pipeline"
 
 [[component]]
+identity = "malicious_prompt/generic_injection_ml"
+source = "app/detectors/malicious_prompt.py"
+why = "HF pipeline; not lists or intent"
+
+[[component]]
 identity = "malicious_prompt/model_intent"
 source = "app/detectors/malicious_prompt.py"
 why = "separate method and input from app_intent"
+
+[[component]]
+identity = "prompt_list/match_exact"
+source = "app/services/prompt_list_service.py"
+why = "whole-string equality"
+
+[[component]]
+identity = "prompt_list/match_regex"
+source = "app/services/prompt_list_service.py"
+why = "compiled pattern search"
+
+[[component]]
+identity = "prompt_list/match_substring"
+source = "app/services/prompt_list_service.py"
+why = "substring containment"
 
 [[component]]
 identity = "scanner_engine/applicability_skip"
@@ -65,9 +85,94 @@ source = "app/scanner_engine.py"
 why = "reported failure by value, not by raising"
 
 [[component]]
-identity = "secrets/plugin_set"
+identity = "secrets/awskey"
 source = "app/detectors/secrets.py"
-why = "eighteen plugins, each a distinct value shape"
+why = "a distinct secret shape"
+
+[[component]]
+identity = "secrets/azurestoragekey"
+source = "app/detectors/secrets.py"
+why = "a distinct secret shape"
+
+[[component]]
+identity = "secrets/basicauth"
+source = "app/detectors/secrets.py"
+why = "a distinct secret shape"
+
+[[component]]
+identity = "secrets/cloudant"
+source = "app/detectors/secrets.py"
+why = "a distinct secret shape"
+
+[[component]]
+identity = "secrets/discordbottoken"
+source = "app/detectors/secrets.py"
+why = "a distinct secret shape"
+
+[[component]]
+identity = "secrets/githubtoken"
+source = "app/detectors/secrets.py"
+why = "a distinct secret shape"
+
+[[component]]
+identity = "secrets/ibmcloudiam"
+source = "app/detectors/secrets.py"
+why = "a distinct secret shape"
+
+[[component]]
+identity = "secrets/ibmcoshmac"
+source = "app/detectors/secrets.py"
+why = "a distinct secret shape"
+
+[[component]]
+identity = "secrets/jwttoken"
+source = "app/detectors/secrets.py"
+why = "a distinct secret shape"
+
+[[component]]
+identity = "secrets/mailchimp"
+source = "app/detectors/secrets.py"
+why = "a distinct secret shape"
+
+[[component]]
+identity = "secrets/npm"
+source = "app/detectors/secrets.py"
+why = "a distinct secret shape"
+
+[[component]]
+identity = "secrets/privatekey"
+source = "app/detectors/secrets.py"
+why = "a distinct secret shape"
+
+[[component]]
+identity = "secrets/sendgrid"
+source = "app/detectors/secrets.py"
+why = "a distinct secret shape"
+
+[[component]]
+identity = "secrets/slack"
+source = "app/detectors/secrets.py"
+why = "a distinct secret shape"
+
+[[component]]
+identity = "secrets/softlayer"
+source = "app/detectors/secrets.py"
+why = "a distinct secret shape"
+
+[[component]]
+identity = "secrets/squareoauth"
+source = "app/detectors/secrets.py"
+why = "a distinct secret shape"
+
+[[component]]
+identity = "secrets/stripe"
+source = "app/detectors/secrets.py"
+why = "a distinct secret shape"
+
+[[component]]
+identity = "secrets/twiliokey"
+source = "app/detectors/secrets.py"
+why = "a distinct secret shape"
 
 [[component]]
 identity = "topic/both_pipelines_unavailable"
