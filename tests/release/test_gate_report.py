@@ -150,16 +150,45 @@ def test_a_record_missing_a_field_is_an_error_not_a_default():
 
 
 def test_xfail_is_not_used_anywhere_in_the_release_suite():
-    """The gate refuses xfailed counts; using xfail would make that
-    unreachable by construction."""
+    """The gate refuses non-zero xfailed counts, so using xfail would make
+    that rule unreachable by construction -- a manifested failure must still
+    FAIL and be reconciled by the aggregator.
+
+    Detects USAGE, not the word. An earlier version matched the substring and
+    flagged a file that merely explains why xfail is not used: a string match
+    wearing the name of a usage check.
+    """
+    import ast
+
     root = pathlib.Path(__file__).resolve().parent
-    offenders = [
-        p.name
-        for p in root.rglob("*.py")
-        if "xfail" in p.read_text()
-        and p.name not in {"gate_report.py", "conftest.py", __file__.split("/")[-1], "test_counts_reporter.py"}
-    ]
+    offenders = []
+    for path in root.rglob("*.py"):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            # @pytest.mark.xfail / @mark.xfail, bare or called
+            target = node.func if isinstance(node, ast.Call) else node
+            if isinstance(target, ast.Attribute) and target.attr == "xfail":
+                offenders.append(f"{path.name}:{node.lineno}")
+            # pytest.xfail("...") imperative form
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "xfail":
+                offenders.append(f"{path.name}:{node.lineno}")
+
     assert not offenders, offenders
+
+
+def test_the_xfail_detector_finds_a_real_xfail(tmp_path):
+    """The control. A detector that finds nothing anywhere proves nothing."""
+    import ast
+
+    module = tmp_path / "t.py"
+    module.write_text("import pytest\n@pytest.mark.xfail\ndef test_a(): pass\n")
+
+    found = [
+        node
+        for node in ast.walk(ast.parse(module.read_text()))
+        if isinstance(node, ast.Attribute) and node.attr == "xfail"
+    ]
+    assert found, "the detector would not notice a real xfail"
 
 
 # --- end to end -------------------------------------------------------------

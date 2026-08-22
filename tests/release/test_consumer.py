@@ -212,3 +212,29 @@ def test_an_occurrence_that_never_reaches_the_resolver_is_the_failure_mode():
         check_emitted_are_resolved([occurrence])
 
     assert calls == [occurrence.path], "the occurrence never reached the resolver, so no rule was applied"
+
+
+def test_an_out_of_domain_path_is_reported_as_out_of_domain():
+    """Not as an unresolved occurrence.
+
+    Out-of-domain means the surface was deliberately excluded; unresolved
+    means the matrix has a hole. Collapsing them turns a recorded decision
+    into a bug report, and hides the hole among the exclusions.
+    """
+    from tests.release.occurrences import EXCLUDED_FROM_HTTP_DOMAIN, OutOfDomain
+
+    excluded = sorted(EXCLUDED_FROM_HTTP_DOMAIN)[0]
+    with pytest.raises(OutOfDomain, match="excluded"):
+        route(_emitted(path=excluded))
+
+
+def test_the_signature_distinguishes_representations():
+    """A required occurrence in one representation is not satisfied by
+    another. Dropping representation from the signature lets a plain-text
+    emission satisfy a required \\uXXXX row."""
+    plain = _emitted(representation="plain", path="$.matches_json")
+    escaped = _emitted(representation="unicode-escaped", path="$.matches_json")
+
+    assert plain.signature() != escaped.signature()
+    with pytest.raises(RequiredOccurrenceMissing):
+        check_required_are_emitted(emitted=[plain], required=[escaped])
