@@ -119,6 +119,25 @@ jobs:
           release.xml release-counts.json
           browser.xml browser-counts.json
 
+  manifest-empty:
+    name: Expected-Failure Manifest Is Empty
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --group dev
+      # A STANDALONE required step, landed independently of the deferred
+      # publish decision. Asserting the manifest is empty is NOT the same as
+      # gating publication on it, and this repository does not claim that
+      # release-gate failures block release until a publish job exists that
+      # `needs: release-gate`.
+      - run: uv run python tests/release/manifest_empty.py
+
   frontend-tests:
     name: Frontend Tests
     runs-on: ubuntu-latest
