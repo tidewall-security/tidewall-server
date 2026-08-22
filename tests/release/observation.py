@@ -58,6 +58,28 @@ def _statement_regions(path: Path) -> list[tuple[int, int]]:
     return sorted(out)
 
 
+def _branch_bodies(path: Path) -> dict[int, tuple[int, int]]:
+    """For each branching statement, the extent of the branch it GUARDS.
+
+    A marker above `if cond:` is credited whenever the CHECK runs, whatever
+    branch is taken -- so `scanner_engine/applicability_skip` was reported by
+    every scan, including single-detector runs where nothing was ever skipped.
+    Nineteen of the source's markers had this shape, and every component
+    observation made through them was "the check ran", not "this happened".
+
+    Each of those markers describes what happens WHEN THE CONDITION HOLDS, so
+    the marked region is the guarded body, not the test.
+    """
+    tree = ast.parse(path.read_text())
+    out: dict[int, tuple[int, int]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If | ast.While | ast.For | ast.AsyncFor) and node.body:
+            first, last = node.body[0], node.body[-1]
+            if last.end_lineno is not None:
+                out[node.lineno] = (first.lineno, last.end_lineno)
+    return out
+
+
 def region_for(component: Component, root: Path = APP) -> Region:
     """The AST extent of the statement the marker introduces."""
     path = root.parent / component.source
@@ -68,6 +90,12 @@ def region_for(component: Component, root: Path = APP) -> Region:
     # and taking the first also picks the outermost when several begin on the
     # same line, which is the region the marker is about.
     start, end = min(candidates)
+
+    # If that statement is a branch, narrow to the body it guards.
+    bodies = _branch_bodies(path)
+    if start in bodies:
+        start, end = bodies[start]
+
     return Region(identity=component.identity, source=component.source, start=start, end=end)
 
 

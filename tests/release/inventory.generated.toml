@@ -10,6 +10,31 @@ source = "app/routes/guard.py"
 why = "blocks before any detector runs"
 
 [[component]]
+identity = "code/classification"
+source = "app/detectors/code.py"
+why = "the classifier ran and produced a verdict"
+
+[[component]]
+identity = "code/inference_failure"
+source = "app/detectors/code.py"
+why = "classifier raised; no verdict was produced"
+
+[[component]]
+identity = "code/pipeline_unavailable"
+source = "app/detectors/code.py"
+why = "model never loaded; absence proves nothing"
+
+[[component]]
+identity = "emoji/pattern_match"
+source = "app/detectors/emoji_detector.py"
+why = "the pattern ran over the text"
+
+[[component]]
+identity = "emoji/reported"
+source = "app/detectors/emoji_detector.py"
+why = "emoji found and carried into the result"
+
+[[component]]
 identity = "export_destination/embedded_address_policy"
 source = "app/services/export_transport.py"
 why = "decoded IPv4 re-checked, every prefix"
@@ -28,6 +53,21 @@ why = "refused, never treated as a non-match"
 identity = "export_destination/posture_unset"
 source = "app/services/export_transport.py"
 why = "refuses before the URL is parsed"
+
+[[component]]
+identity = "language/classification"
+source = "app/detectors/language.py"
+why = "the classifier ran and produced a verdict"
+
+[[component]]
+identity = "language/inference_failure"
+source = "app/detectors/language.py"
+why = "classifier raised; no verdict was produced"
+
+[[component]]
+identity = "language/pipeline_unavailable"
+source = "app/detectors/language.py"
+why = "model never loaded; absence proves nothing"
 
 [[component]]
 identity = "malicious_prompt/app_intent"
@@ -58,6 +98,26 @@ why = "separate method and input from app_intent"
 identity = "mcp_validation/name_similarity"
 source = "app/detectors/mcp_validation.py"
 why = "reads function.name only"
+
+[[component]]
+identity = "pii/analysis_failure"
+source = "app/detectors/pii.py"
+why = "analyzer raised; no verdict was produced"
+
+[[component]]
+identity = "pii/analyzer_unavailable"
+source = "app/detectors/pii.py"
+why = "analyzer never built; absence proves nothing"
+
+[[component]]
+identity = "pii/entities_redacted"
+source = "app/detectors/pii.py"
+why = "entities found and rewritten into sanitized_text"
+
+[[component]]
+identity = "pii/no_entities"
+source = "app/detectors/pii.py"
+why = "analyzer ran and found nothing"
 
 [[component]]
 identity = "prompt_list/match_exact"
