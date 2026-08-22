@@ -452,3 +452,25 @@ def test_a_desc_primary_key_with_a_comment_is_not_a_rowid_alias(scratch):
     locations = copy_map(scratch)[("desc_comment", "id")]
     assert "desc_comment_v" not in locations, dict(locations)
     assert locations["sqlite_autoindex_desc_comment_1"] == 1, dict(locations)
+
+
+def test_an_unknown_object_type_is_refused_unexamined(scratch):
+    """Allowlisted, not blocklisted.
+
+    Refusing only the `virtual` and `shadow` values known today meant a SQLite
+    version introducing a sixth object type would pass silently, while the
+    module claimed a new class becomes a build failure. A thin proxy stands in
+    for that future type, since sqlite3.Connection.execute cannot be patched.
+    """
+
+    class _FutureType:
+        def __init__(self, real):
+            self._real = real
+
+        def execute(self, sql, *args, **kwargs):
+            if sql.strip() == "PRAGMA table_list":
+                return [("main", "surprise", "some_future_type", 2, 0, 0)]
+            return self._real.execute(sql, *args, **kwargs)
+
+    kinds = {v.kind for v in invariant(_FutureType(scratch))}
+    assert "unknown-object-type" in kinds, kinds

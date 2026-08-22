@@ -263,3 +263,37 @@ def test_forbidden_by_default_is_scoped_to_enumerated_surfaces():
     row = resolve(**BASE, path="db:interactions.undeclared_column")
     assert row.rule is Rule.FORBIDDEN
     assert row in ROWS
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "GET /v1/policies/p1/rule-sets/input -> " "$.detectors.malicious_entity.intel.local_blocklists.urls[0]",
+        "PATCH /v1/policies/p1/rule-sets/input -> " "$.detectors.malicious_entity.intel.local_blocklists.urls[0]",
+        "GET /v1/policies/p1/export -> body:detectors",
+        "PUT /v1/settings/threat-intel -> $.intel.local_blocklists.urls[0]",
+        "db:rule_sets.detectors",
+    ],
+)
+def test_threat_intelligence_config_is_allowed_on_every_surface_that_returns_it(path):
+    """The regression evidence, checked in this time.
+
+    These paths were verified by hand and the tests were reported as added
+    without being added -- so nothing would have caught the rows regressing.
+    Threat-intelligence configuration is stored inside `rule_sets.detectors`,
+    which means it comes back from the rule-set endpoints and the YAML export
+    exactly as the competitor literals do.
+    """
+    row = resolve(
+        **{
+            **BASE,
+            "leaf": "query-url",
+            "placement": "threat-intelligence-config",
+            "detector": "malicious_entity",
+            "event": "output",
+            "operation": "settings-admin",
+            "grant": "admin",
+        },
+        path=path,
+    )
+    assert row.rule is Rule.ALLOWED_BOUNDED, row

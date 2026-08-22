@@ -272,3 +272,39 @@ def test_the_operation_and_grant_domains_are_fully_exercised():
     assert {c.grant for c in CASES} == set(GRANTS), {
         "declared, no case": sorted(set(GRANTS) - {c.grant for c in CASES})
     }
+
+
+def test_a_decoy_class_cannot_satisfy_the_report_match_check(tmp_path: pathlib.Path, monkeypatch):
+    """ "Some class in the module" was not the claim being made.
+
+    Removing the call from the REGISTERED detector and adding an unregistered
+    decoy class that calls the same wrapper left all twenty-seven tests green,
+    while the registered PII detector had stopped supplying the exact matches
+    Task 3 marks REQUIRED in matches_json.
+    """
+    import ast
+
+    from tests.release import manifest
+
+    module = tmp_path / "decoy.py"
+    module.write_text(
+        "def _report_match(*a, **k):\n"
+        "    report_match(*a, **k)\n"
+        "\n"
+        "class Registered:\n"
+        "    def scan(self):\n"
+        "        return None\n"
+        "\n"
+        "class Decoy:\n"
+        "    def scan(self):\n"
+        "        _report_match(1)\n"
+    )
+    tree = ast.parse(module.read_text())
+    helpers = {n.name for n in tree.body if isinstance(n, ast.FunctionDef) and manifest._calls_any(n, {"report_match"})}
+    registered = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Registered")
+    decoy = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Decoy")
+
+    assert not manifest._calls_any(
+        registered, helpers | {"report_match"}
+    ), "the registered class does not call it, and must not be credited"
+    assert manifest._calls_any(decoy, helpers | {"report_match"}), "the decoy does call it"

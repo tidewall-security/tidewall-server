@@ -17,9 +17,10 @@ checks that none exists.
 That list was not arrived at by reasoning. Each entry was found by building the
 attribution argument, being shown a counterexample, and adding the class it
 belonged to: triggers, then referential actions, then generated columns, then
-indexes, then virtual tables. **Completeness is not claimed.** What is claimed
-is that each part is asserted against the live schema and fails on drift, so a
-sixth class arriving becomes a build failure rather than a silent hole.
+indexes, then virtual tables. **Completeness is not claimed.** What is claimed is
+that each part is asserted against the live schema and fails on drift -- and,
+for the one dimension where an unknown value is detectable, that anything
+outside the known-safe set is refused unexamined rather than ignored.
 """
 
 from __future__ import annotations
@@ -195,9 +196,17 @@ def invariant(conn: sqlite3.Connection) -> list[InvariantViolation]:
             if column[6] in (2, 3):
                 violations.append(InvariantViolation("generated-column", f"{table}.{column[1]}"))
 
+    # ALLOWLISTED, not blocklisted. Refusing only the `virtual` and `shadow`
+    # values known today meant a SQLite version introducing a sixth object type
+    # would pass silently -- while the module's own docstring claimed a new
+    # class becomes a build failure. That claim is now implemented rather than
+    # asserted: anything outside the known-safe set is refused unexamined.
+    known_safe = {"table", "view"}
     for row in conn.execute("PRAGMA table_list"):
         if row[2] in ("virtual", "shadow"):
             violations.append(InvariantViolation(row[2], row[1]))
+        elif row[2] not in known_safe:
+            violations.append(InvariantViolation("unknown-object-type", f"{row[2]}:{row[1]}"))
 
     # index_list columns: (seq, name, unique, origin, partial). The structural
     # `partial` flag, not a `" where "` substring: `ON t(c)\nWHERE ...` is legal

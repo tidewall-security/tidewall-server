@@ -302,10 +302,14 @@ def report_match_callers() -> frozenset[str]:
     source = (root / "app" / "scanner_engine.py").read_text()
     block = source[source.index("_DETECTOR_REGISTRY") :]
     block = block[: block.index("\n}")]
-    pairs = _re.findall(r'^\s+"([a-z_]+)":\s*\("([a-z_.]+)"', block, _re.M)
+    # (name, module, ClassName) -- the class was being discarded, so any class
+    # in the module could satisfy the check. A decoy class calling the wrapper
+    # kept every test green while the REGISTERED detector had stopped calling
+    # it, which is precisely the exact-match supply Task 3 marks REQUIRED.
+    pairs = _re.findall(r'^\s+"([a-z_]+)":\s*\("([a-z_.]+)",\s*"([A-Za-z]+)"\)', block, _re.M)
 
     found = set()
-    for detector, module in pairs:
+    for detector, module, class_name in pairs:
         path = root.joinpath(*module.split(".")).with_suffix(".py")
         if not path.exists():  # pragma: no cover - a registry pointing nowhere
             raise AssertionError(f"{detector} names a module that does not exist: {module}")
@@ -320,11 +324,12 @@ def report_match_callers() -> frozenset[str]:
         }
         targets = helpers | {"report_match"}
 
-        # The registered CLASS's own methods must reach one of them.
-        for node in tree.body:
-            if isinstance(node, ast.ClassDef) and _calls_any(node, targets):
-                found.add(detector)
-                break
+        # THE registered class, by name -- not "some class in this module".
+        registered = [node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == class_name]
+        if not registered:
+            raise AssertionError(f"{detector} names a class the module does not define: {class_name}")
+        if _calls_any(registered[0], targets):
+            found.add(detector)
     return frozenset(found)
 
 
