@@ -18,15 +18,6 @@ class NoShapeForLeaf(Exception):
     """A leaf with no shaping rule. NOT a pass -- the case cannot be driven."""
 
 
-def _digits(canary: str, length: int) -> str:
-    """Deterministic digits derived from the canary, so the value is stable."""
-    numeric = "".join(c for c in canary if c.isdigit())
-    while len(numeric) < length:
-        numeric += str(sum(ord(c) for c in canary) % 10)
-        canary += "x"
-    return numeric[:length]
-
-
 def shape(leaf: str, canary: str) -> str:
     """The text to plant for `leaf`, embedding `canary`."""
     if leaf == "email":
@@ -36,7 +27,11 @@ def shape(leaf: str, canary: str) -> str:
         # occurrence remains attributable.
         return f"card 4111111111111111 ref {canary}"
     if leaf == "ssn":
-        return f"ssn {_digits(canary, 3)}-{_digits(canary, 2)}-{_digits(canary, 4)} ref {canary}"
+        # A FIXED, known-recognised value, with the canary alongside. Deriving
+        # the digits from the canary made detection canary-dependent: some
+        # derived strings are not SSN-shaped, so the same case passed or failed
+        # according to which canary it drew.
+        return f"ssn 078-05-1120 ref {canary}"
     if leaf == "random-canary":
         # Opaque by definition, but carrying an emoji so an emoji case can
         # reach its detected branch.

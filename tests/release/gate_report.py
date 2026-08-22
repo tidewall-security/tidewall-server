@@ -26,6 +26,7 @@ broken gate report success forever.
 
 from __future__ import annotations
 
+import collections
 import json
 import pathlib
 import sys
@@ -34,6 +35,10 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 
 MANIFEST = pathlib.Path(__file__).resolve().parent / "expected_failures.toml"
+
+#: Checked in, so the comparison is against an independent number rather than
+#: against what the run happened to select.
+DECLARED_COUNTS = pathlib.Path(__file__).resolve().parent / "declared_counts.json"
 
 #: The six fields compared exactly, as a multiset.
 SIGNATURE_FIELDS = (
@@ -95,8 +100,13 @@ def check_counts(result: SuiteResult) -> list[str]:
     return problems
 
 
-def decide(results: list[SuiteResult], manifest: list[dict]) -> tuple[int, list[str]]:
+def decide(
+    results: list[SuiteResult],
+    manifest: list[dict],
+    observed_signatures: list[dict] | None = None,
+) -> tuple[int, list[str]]:
     reasons: list[str] = []
+    observed_signatures = observed_signatures or []
 
     for result in results:
         if result.errors:
@@ -108,6 +118,8 @@ def decide(results: list[SuiteResult], manifest: list[dict]) -> tuple[int, list[
             reasons.append(f"{result.name}: {len(result.failures)} failure(s): {result.failures[:3]}")
         reasons.extend(check_counts(result))
 
+    reasons.extend(reconcile(observed_signatures, manifest))
+
     if manifest:
         reasons.append(
             f"the expected-failure manifest holds {len(manifest)} record(s); " "the gate is red until it is empty"
@@ -116,11 +128,45 @@ def decide(results: list[SuiteResult], manifest: list[dict]) -> tuple[int, list[
     return (1 if reasons else 0), reasons
 
 
+def reconcile(observed: list[dict], manifest: list[dict]) -> list[str]:
+    """Compare the OBSERVED failure signatures against the expected ones.
+
+    Reading the manifest as a boolean -- non-empty means red -- cannot
+    establish that the failures which happened are the failures that were
+    expected. It cannot notice a baseline failure that stopped happening, and
+    it cannot reject a NOVEL security signature: a brand-new leak lands in a
+    run that was already red and changes nothing the gate looks at.
+
+    So both directions are reported. A novel signature is the one that must
+    never be excused.
+    """
+    produced = collections.Counter(tuple(r[f] for f in SIGNATURE_FIELDS) for r in observed)
+    expected = collections.Counter(signature(r) for r in manifest)
+
+    problems = []
+    novel = produced - expected
+    if novel:
+        problems.append(
+            f"{sum(novel.values())} NOVEL failure signature(s) not in the manifest: " f"{sorted(novel)[:3]}"
+        )
+    absent = expected - produced
+    if absent:
+        problems.append(f"{sum(absent.values())} expected failure(s) did not occur: {sorted(absent)[:3]}")
+    return problems
+
+
 def main(argv: list[str]) -> int:
+    """Positional and small: four required files, then optional signature files.
+
+    Declared counts are NOT an argument. They come from the checked-in
+    declared_counts.json, so `selected == declared` compares against an
+    independent number rather than against whatever this run selected.
+    """
     if len(argv) < 5:
         print(
             "usage: gate_report.py <release.xml> <release-counts.json> "
-            "<browser.xml> <browser-counts.json> [declared_release] [declared_browser]",
+            "<browser.xml> <browser-counts.json> "
+            "[release-signatures.json] [browser-signatures.json]",
             file=sys.stderr,
         )
         return 2
@@ -130,10 +176,18 @@ def main(argv: list[str]) -> int:
     browser = parse_junit(pathlib.Path(argv[3]), "browser")
     browser.counts = json.loads(pathlib.Path(argv[4]).read_text())
 
-    release.declared = int(argv[5]) if len(argv) > 5 else release.counts.get("selected", 0)
-    browser.declared = int(argv[6]) if len(argv) > 6 else browser.counts.get("selected", 0)
+    declared = json.loads(DECLARED_COUNTS.read_text())
+    release.declared = declared["release"]
+    browser.declared = declared["browser"]
 
-    code, reasons = decide([release, browser], load_manifest())
+    observed: list[dict] = []
+    for index in (5, 6):
+        if len(argv) > index:
+            path = pathlib.Path(argv[index])
+            if path.exists():
+                observed.extend(json.loads(path.read_text()))
+
+    code, reasons = decide([release, browser], load_manifest(), observed)
     for reason in reasons:
         print(f"RELEASE GATE: {reason}")
     if code == 0:

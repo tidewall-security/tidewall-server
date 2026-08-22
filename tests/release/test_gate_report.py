@@ -21,11 +21,33 @@ from tests.release.gate_report import (
 CLEAN_COUNTS = {"selected": 5, "deselected": 0, "skipped": 0, "xfailed": 0}
 
 
+def _record(**kw) -> dict:
+    base = {
+        "case_id": "case-x",
+        "property": "FORBIDDEN occurrence reached a surface",
+        "collector": "database",
+        "surface_path": "interactions.matches_json",
+        "representation": "plain",
+        "occurrence_rule": "FORBIDDEN",
+        "owner": "<unassigned>",
+    }
+    base.update(kw)
+    return base
+
+
 def _suite(name="release", **kw) -> SuiteResult:
     s = SuiteResult(name=name, counts=dict(CLEAN_COUNTS), declared=5)
     for k, v in kw.items():
         setattr(s, k, v)
     return s
+
+
+def _declared(tmp_path, release: int, browser: int) -> pathlib.Path:
+    import json as _json
+
+    p = tmp_path / "declared.json"
+    p.write_text(_json.dumps({"release": release, "browser": browser}))
+    return p
 
 
 def _xml(tmp_path, body: str, name="r.xml") -> pathlib.Path:
@@ -43,7 +65,7 @@ def test_a_clean_pair_with_an_empty_manifest_is_green():
 
 
 def test_a_non_empty_manifest_fails_the_gate():
-    code, reasons = decide([_suite()], manifest=[{"case_id": "x"}])
+    code, reasons = decide([_suite()], manifest=[_record()])
     assert code == 1
     assert any("manifest holds 1 record" in r for r in reasons)
 
@@ -210,7 +232,8 @@ def test_main_returns_nonzero_while_the_manifest_is_non_empty(tmp_path, monkeypa
     )
     monkeypatch.setattr("tests.release.gate_report.MANIFEST", manifest)
 
-    code = main(["gate_report.py", str(release_xml), str(rc), str(browser_xml), str(bc), "1", "1"])
+    monkeypatch.setattr("tests.release.gate_report.DECLARED_COUNTS", _declared(tmp_path, 1, 1))
+    code = main(["gate_report.py", str(release_xml), str(rc), str(browser_xml), str(bc)])
     assert code == 1
 
 
@@ -227,5 +250,117 @@ def test_main_is_green_when_everything_holds(tmp_path, monkeypatch):
     monkeypatch.setattr("tests.release.gate_report.MANIFEST", empty)
 
     assert load_manifest(empty) == []
-    code = main(["gate_report.py", str(release_xml), str(rc), str(browser_xml), str(bc), "1", "1"])
+    monkeypatch.setattr("tests.release.gate_report.DECLARED_COUNTS", _declared(tmp_path, 1, 1))
+    code = main(["gate_report.py", str(release_xml), str(rc), str(browser_xml), str(bc)])
     assert code == 0
+
+
+# --- the manifest is RECONCILED, not counted --------------------------------
+
+
+def test_a_novel_failure_signature_fails_the_gate():
+    """The failure a boolean manifest check structurally cannot see.
+
+    A brand-new leak lands in a run that was already red and changes nothing
+    the gate looks at.
+    """
+    expected = _record()
+    novel = _record(case_id="case-brand-new")
+    code, reasons = decide([_suite()], manifest=[expected], observed_signatures=[expected, novel])
+    assert code == 1
+    assert any("NOVEL failure signature" in r for r in reasons)
+
+
+def test_an_expected_failure_that_stopped_happening_is_reported():
+    """The other direction. A baseline record nobody produces any more is a
+    manifest that has drifted from reality."""
+    expected = _record()
+    code, reasons = decide([_suite()], manifest=[expected], observed_signatures=[])
+    assert any("did not occur" in r for r in reasons)
+
+
+def test_an_exact_reconciliation_reports_neither_direction():
+    expected = _record()
+    _code, reasons = decide([_suite()], manifest=[expected], observed_signatures=[expected])
+    assert not any("NOVEL" in r or "did not occur" in r for r in reasons)
+
+
+def test_reconciliation_is_a_multiset_not_a_set():
+    """Expected once, produced twice, is a novel occurrence."""
+    expected = _record()
+    _code, reasons = decide([_suite()], manifest=[expected], observed_signatures=[expected, expected])
+    assert any("NOVEL failure signature" in r for r in reasons)
+
+
+def test_reconciliation_ignores_fields_outside_the_signature():
+    """`owner` is not part of the six, so changing it must not create a
+    spurious novel signature."""
+    expected = _record(owner="someone")
+    observed = _record(owner="someone-else")
+    _code, reasons = decide([_suite()], manifest=[expected], observed_signatures=[observed])
+    assert not any("NOVEL" in r for r in reasons)
+
+
+def test_a_harness_error_emits_no_signature_and_cannot_reconcile():
+    """A harness error records that the gate did not run. Letting it
+    reconcile against a manifest record would excuse a broken gate."""
+    expected = _record()
+    code, reasons = decide([_suite(errors=["t::collect"])], manifest=[expected], observed_signatures=[expected])
+    assert code == 1
+    assert any("never manifestable" in r for r in reasons)
+
+
+# --- declared counts are independent, not the observed selection ------------
+
+
+def test_declared_counts_are_checked_in():
+    """Otherwise `selected == declared` is necessarily true.
+
+    In CI no declared counts were passed at all, so both defaulted to the
+    observed selection and the comparison could not detect a reduced suite.
+    The unit tests passed explicit values and hid that.
+    """
+    import json
+
+    from tests.release.gate_report import DECLARED_COUNTS
+
+    assert DECLARED_COUNTS.exists(), DECLARED_COUNTS
+    declared = json.loads(DECLARED_COUNTS.read_text())
+    assert set(declared) == {"release", "browser"}
+    assert all(isinstance(v, int) and v > 0 for v in declared.values()), declared
+
+
+def test_the_declared_counts_match_what_the_two_commands_actually_collect():
+    """Kept honest against the real tree.
+
+    A checked-in number nobody reconciles is a number that drifts, and a
+    drifted declared count fails the gate for a reason nobody can act on.
+    """
+    import json
+    import subprocess
+    import sys
+
+    from tests.release.gate_report import DECLARED_COUNTS
+
+    repo = pathlib.Path(__file__).resolve().parents[2]
+
+    def collected(args: list[str]) -> int:
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "--co", "-p", "no:randomly", *args],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        )
+        return sum(1 for line in result.stdout.splitlines() if "::" in line)
+
+    declared = json.loads(DECLARED_COUNTS.read_text())
+    assert collected(["tests/release", "--ignore=tests/release/browser"]) == declared["release"]
+    assert collected(["tests/release/browser", "-m", "e2e", "-o", "addopts="]) == declared["browser"]
+
+
+def test_a_reduced_suite_is_detected_against_the_declared_count():
+    """The whole point: fewer tests ran than the tree declares."""
+    s = _suite()
+    s.declared = 500
+    s.counts["selected"] = 499
+    assert any("selected 499 != declared 500" in r for r in check_counts(s))

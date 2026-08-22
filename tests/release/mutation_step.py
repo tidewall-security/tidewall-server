@@ -52,6 +52,11 @@ class Mutation:
     old: str
     new: str
     expected_signature: tuple
+    #: How many times the mutant is predicted to produce that signature. One
+    #: signature affecting fourteen cases yields fourteen instances; "exactly
+    #: one signature" is about the SIGNATURE, and the count is predeclared so
+    #: a mutation that spread further than predicted is still a failure.
+    expected_count: int = 1
 
     def apply(self, source: str) -> str:
         if self.old not in source:
@@ -90,7 +95,7 @@ def check_delta(
         )
 
     delta = mutant - baseline
-    if delta != Counter({mutation.expected_signature: 1}):
+    if delta != Counter({mutation.expected_signature: mutation.expected_count}):
         raise UnexpectedDelta(
             f"{mutation.name}: expected exactly {mutation.expected_signature}, " f"got {sorted(delta.items())[:3]}"
         )

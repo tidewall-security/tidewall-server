@@ -31,6 +31,9 @@ CASES = cases_for("capture-off")
 MANIFEST_CASES = {c.identity: c for c in load_cases()}
 EXECUTABLE = [c for c in CASES if c.detector in SELF_CONTAINED_DETECTORS]
 
+#: Measured, and pinned so a shrinking set is visible rather than silent.
+EXPECTED_EXECUTABLE = 53
+
 
 def test_the_suite_covers_every_capture_off_case_in_the_manifest():
     declared = {c.identity for c in load_cases() if c.capture.value == "capture-off"}
@@ -56,7 +59,12 @@ def test_the_unexecutable_cases_are_reported_rather_than_counted_as_passes():
     """
     unexecutable = [c for c in CASES if c.detector not in SELF_CONTAINED_DETECTORS]
     assert len(EXECUTABLE) + len(unexecutable) == len(CASES)
-    assert len(EXECUTABLE) >= 50, f"only {len(EXECUTABLE)} of {len(CASES)} capture-off cases can run here"
+    # PINNED, not a floor pulled from the air. A shrinking executable set is a
+    # silent reduction in coverage, so changing this number is a deliberate act.
+    assert len(EXECUTABLE) == EXPECTED_EXECUTABLE, (
+        f"{len(EXECUTABLE)} of {len(CASES)} cases are executable here, expected "
+        f"{EXPECTED_EXECUTABLE}; update EXPECTED_EXECUTABLE deliberately"
+    )
 
 
 @pytest.mark.parametrize("case", EXECUTABLE, ids=lambda c: c.case_id[:48])

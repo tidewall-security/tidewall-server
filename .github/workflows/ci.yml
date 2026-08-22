@@ -107,17 +107,42 @@ jobs:
           uv run pytest tests/release --ignore=tests/release/browser
           -q -p no:randomly --junitxml=release.xml
           --release-counts=release-counts.json
+          --release-signatures=release-signatures.json
       - id: browser_canary
         continue-on-error: true
         run: >-
           uv run pytest tests/release/browser -q -m e2e -o addopts=''
           --junitxml=browser.xml --release-counts=browser-counts.json
+          --release-signatures=browser-signatures.json
       # The ONLY step that decides the job. JUnit XML cannot carry a
       # deselection count, so the counts files are passed alongside it.
+      # Declared counts come from the checked-in tests/release/declared_counts.json,
+      # NOT from what this run happened to select -- otherwise the
+      # selected == declared comparison is necessarily true.
       - run: >-
           uv run python tests/release/gate_report.py
           release.xml release-counts.json
           browser.xml browser-counts.json
+          release-signatures.json browser-signatures.json
+
+  mutation-step:
+    name: Out-Of-Tree Mutation Step
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --group dev
+      # Runs the suite unmutated, checks it reproduces the recorded baseline
+      # EXACTLY, applies the named edit, proves it applied, runs again, and
+      # requires the delta to be exactly the predeclared signature and count.
+      # It never reads an exit code: while the baseline is red every run exits
+      # non-zero, so an exit code carries no information.
+      - run: uv run python tests/release/run_mutation_step.py
 
   manifest-empty:
     name: Expected-Failure Manifest Is Empty

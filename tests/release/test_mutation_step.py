@@ -150,3 +150,77 @@ def test_the_step_never_reads_an_exit_code():
     source = (pathlib.Path(__file__).resolve().parent / "mutation_step.py").read_text()
     assert "returncode" not in source
     assert "exit" not in source.split('"""')[2] if '"""' in source else True
+
+
+# --- the runner exists and is wired in --------------------------------------
+
+
+def test_the_runner_module_exists_and_calls_the_checkers():
+    """These helpers had no caller outside this file.
+
+    A well-tested set of comparison rules that never runs against anything is
+    not a mutation step.
+    """
+    import pathlib
+
+    runner = pathlib.Path(__file__).resolve().parent / "run_mutation_step.py"
+    assert runner.exists()
+    source = runner.read_text()
+    assert "check_baseline(" in source
+    assert "check_delta(" in source
+    assert "verify_applied(" in source
+
+
+def test_the_runner_is_a_required_ci_job():
+    import pathlib
+
+    import yaml
+
+    workflow = pathlib.Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
+    jobs = yaml.safe_load(workflow.read_text())["jobs"]
+    assert "mutation-step" in jobs, sorted(jobs)
+
+    steps = jobs["mutation-step"]["steps"]
+    assert any("run_mutation_step.py" in s.get("run", "") for s in steps)
+    for step in steps:
+        assert step.get("continue-on-error") is not True
+
+
+def test_the_runner_never_reads_an_exit_code():
+    """While the baseline is red every run exits non-zero."""
+    import pathlib
+
+    source = (pathlib.Path(__file__).resolve().parent / "run_mutation_step.py").read_text()
+    assert ".returncode" not in source
+
+
+def test_the_recorded_baseline_exists_and_the_delta_falls_outside_it():
+    """Otherwise the new signature is indistinguishable from a record that
+    was already there."""
+    import json
+    import pathlib
+
+    from tests.release.run_mutation_step import DEFAULT_MUTATION
+
+    path = pathlib.Path(__file__).resolve().parent / "mutation_baseline.json"
+    assert path.exists(), path
+    baseline = Counter({tuple(k): v for k, v in json.loads(path.read_text())})
+    assert delta_is_outside_baseline(DEFAULT_MUTATION, baseline)
+
+
+def test_the_default_mutation_declares_a_count():
+    """One signature affecting fourteen cases yields fourteen instances.
+
+    Predeclaring only the signature would let a mutation that spread further
+    than predicted pass.
+    """
+    from tests.release.run_mutation_step import DEFAULT_MUTATION
+
+    assert DEFAULT_MUTATION.expected_count > 1
+
+
+def test_a_wider_spread_than_predicted_fails():
+    m = _mutation(expected_count=2)
+    with pytest.raises(UnexpectedDelta):
+        check_delta(m, BASELINE, BASELINE + Counter({SIG: 3}), harness_errors=0)
+    check_delta(m, BASELINE, BASELINE + Counter({SIG: 2}), harness_errors=0)
