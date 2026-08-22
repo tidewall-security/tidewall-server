@@ -57,6 +57,11 @@ class Mutation:
     #: one signature" is about the SIGNATURE, and the count is predeclared so
     #: a mutation that spread further than predicted is still a failure.
     expected_count: int = 1
+    #: Node ids expected to fail ONLY in the mutant run. The mutation's effect
+    #: beyond its signature delta is knowable, so it is declared: discarding it
+    #: let unrelated mutant-only failures be excused while the runner still
+    #: reported an exact result.
+    expected_unaccounted: frozenset[str] = frozenset()
 
     def apply(self, source: str) -> str:
         if self.old not in source:

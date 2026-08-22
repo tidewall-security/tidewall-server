@@ -33,6 +33,7 @@ from collections import Counter
 
 from tests.release.mutation_step import (
     Mutation,
+    UnexpectedDelta,
     check_baseline,
     check_delta,
     verify_applied,
@@ -56,10 +57,28 @@ DEFAULT_MUTATION = Mutation(
     # Measured: 14 manifest cases declare emoji/reported and none of them
     # reaches it once the detector stops detecting.
     expected_count=14,
+    # MEASURED, then declared. Neutering the emoji detector also breaks eight
+    # tests that observe emoji behaviour directly. Each is a legitimate
+    # consequence -- and naming them is what stops an unrelated mutant-only
+    # failure being excused while the runner reports an exact result.
+    expected_unaccounted=frozenset(
+        {
+            "tests/release/test_canary_capture_off.py::test_an_evaluated_case_IS_sensitive_to_its_planted_value",
+            "tests/release/test_component_mapping.py::"
+            "test_a_case_reaches_the_component_it_declares"
+            "[report-emoji-hello \\U0001f600 \\U0001f4a9]",
+            "tests/release/test_component_mapping.py::test_the_mechanism_discriminates_a_taken_branch_from_an_untaken_one",
+            "tests/release/test_leaves.py::test_a_reported_case_reaches_both_which_is_correct",
+            "tests/release/test_observation.py::test_a_marker_on_a_branch_test_is_narrowed_to_the_branch_body",
+            "tests/release/test_observation.py::test_observing_a_real_scan_reports_the_components_it_actually_reached",
+            "tests/release/test_states.py::test_a_surface_comparison_that_looks_at_nothing_finds_no_difference",
+            "tests/release/test_states.py::test_emoji_reported_is_behaviour_changing",
+        }
+    ),
 )
 
 
-def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, int, int]:
+def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, int, set[str]]:
     """Run the release suite; return its signature multiset and UNACCOUNTED failures.
 
     Every JUnit outcome is classified. An `<error>` is a harness error. A
@@ -101,7 +120,7 @@ def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, i
             observed[tuple(row[f] for f in FIELDS)] += 1
 
     errors = 0
-    unaccounted = 0
+    unaccounted: set[str] = set()
     if junit.exists():
         root = ET.parse(junit).getroot()
         for case in root.iter("testcase"):
@@ -128,7 +147,7 @@ def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, i
             if nodeid in accounted:
                 continue
 
-            unaccounted += 1
+            unaccounted.add(nodeid)
 
     return observed, errors, unaccounted
 
@@ -168,9 +187,9 @@ def main(argv: list[str]) -> int:
             return 1
         if base_unaccounted:
             print(
-                f"MUTATION STEP: {base_unaccounted} unaccounted failure(s) in the "
+                f"MUTATION STEP: {len(base_unaccounted)} unaccounted failure(s) in the "
                 "unmutated run; every failure must emit a signature or be a "
-                "recognised component mismatch"
+                f"recognised component mismatch: {sorted(base_unaccounted)[:3]}"
             )
             return 1
 
@@ -196,12 +215,25 @@ def main(argv: list[str]) -> int:
             # effect -- neutering a detector breaks tests that observe it -- and
             # are expected. A harness error is not, and must never stand in for
             # the predeclared delta.
-            mutant, mutant_errors, _mutant_unaccounted = run_suite(tmpdir / "mut.json", tmpdir / "mut.xml")
+            # The mutant's unaccounted failures are its own effect -- neutering
+            # a detector breaks tests that observe it -- but "its own effect" is
+            # KNOWABLE AND DECLARED, not waved through. Discarding this set let
+            # any number of unrelated failures introduced only in the mutant run
+            # be excused while the message still claimed an exact delta.
+            mutant, mutant_errors, mutant_unaccounted = run_suite(tmpdir / "mut.json", tmpdir / "mut.xml")
         finally:
             source.write_text(original)
 
         try:
             check_delta(mutation, baseline, mutant, mutant_errors)
+            unexpected = mutant_unaccounted - mutation.expected_unaccounted
+            absent = mutation.expected_unaccounted - mutant_unaccounted
+            if unexpected or absent:
+                raise UnexpectedDelta(
+                    f"{mutation.name}: mutant-only failures do not match the "
+                    f"predeclared set; unexpected={sorted(unexpected)[:3]} "
+                    f"absent={sorted(absent)[:3]}"
+                )
         except Exception as exc:  # noqa: BLE001
             print(f"MUTATION STEP: {exc}")
             return 1
