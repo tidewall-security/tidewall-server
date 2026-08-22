@@ -6471,3 +6471,2942 @@ operation = "guard"
 grant = "api"
 representation = "percent-encoded"
 collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "cloudant"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "cloudant"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "cloudant"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "cloudant"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "cloudant"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "cloudant"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "cloudant"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "cloudant"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "cloudant"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "cloudant"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "cloudant"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "cloudant"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "cloudant"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "cloudant"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "discordbottoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "discordbottoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "discordbottoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "discordbottoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "discordbottoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "discordbottoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "discordbottoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "discordbottoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "discordbottoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "discordbottoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "discordbottoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "discordbottoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "discordbottoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "discordbottoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "githubtoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "githubtoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "githubtoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "githubtoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "githubtoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "githubtoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "githubtoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "githubtoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "githubtoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "githubtoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "githubtoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "githubtoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "githubtoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "githubtoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcloudiam"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcloudiam"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcloudiam"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcloudiam"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcloudiam"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcloudiam"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcloudiam"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcloudiam"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcloudiam"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcloudiam"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcloudiam"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcloudiam"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcloudiam"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcloudiam"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcoshmac"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcoshmac"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcoshmac"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcoshmac"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcoshmac"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcoshmac"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcoshmac"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcoshmac"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcoshmac"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcoshmac"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcoshmac"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcoshmac"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcoshmac"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "ibmcoshmac"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "jwttoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "jwttoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "jwttoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "jwttoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "jwttoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "jwttoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "jwttoken"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "jwttoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "jwttoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "jwttoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "jwttoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "jwttoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "jwttoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "jwttoken"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "mailchimp"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "mailchimp"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "mailchimp"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "mailchimp"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "mailchimp"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "mailchimp"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "mailchimp"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "mailchimp"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "mailchimp"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "mailchimp"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "mailchimp"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "mailchimp"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "mailchimp"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "mailchimp"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "npm"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "npm"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "npm"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "npm"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "npm"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "npm"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "npm"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "npm"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "npm"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "npm"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "npm"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "npm"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "npm"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "npm"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "privatekey"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "privatekey"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "privatekey"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "privatekey"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "privatekey"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "privatekey"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "privatekey"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "privatekey"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "privatekey"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "privatekey"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "privatekey"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "privatekey"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "privatekey"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "privatekey"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "sendgrid"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "sendgrid"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "sendgrid"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "sendgrid"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "sendgrid"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "sendgrid"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "sendgrid"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "sendgrid"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "sendgrid"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "sendgrid"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "sendgrid"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "sendgrid"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "sendgrid"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "sendgrid"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "slack"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "slack"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "slack"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "slack"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "slack"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "slack"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "slack"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "slack"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "slack"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "slack"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "slack"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "slack"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "slack"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "slack"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "softlayer"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "softlayer"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "softlayer"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "softlayer"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "softlayer"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "softlayer"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "softlayer"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "softlayer"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "softlayer"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "softlayer"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "softlayer"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "softlayer"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "softlayer"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "softlayer"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "squareoauth"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "squareoauth"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "squareoauth"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "squareoauth"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "squareoauth"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "squareoauth"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "squareoauth"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "squareoauth"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "squareoauth"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "squareoauth"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "squareoauth"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "squareoauth"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "squareoauth"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "squareoauth"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "stripe"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "stripe"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "stripe"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "stripe"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "stripe"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "stripe"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "stripe"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "stripe"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "stripe"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "stripe"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "stripe"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "stripe"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "stripe"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "stripe"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "twiliokey"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "twiliokey"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "twiliokey"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "twiliokey"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "twiliokey"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "twiliokey"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "twiliokey"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "twiliokey"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "twiliokey"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "twiliokey"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "unicode-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "twiliokey"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "raw-bytes"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "twiliokey"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfc"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "twiliokey"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "nfd"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "aws-key"
+placement = "message-content"
+branch = "detector-block"
+detector = "secret_and_key_entity"
+event = "input"
+component = "secrets"
+sub_path = "twiliokey"
+capture = "capture-on"
+operation = "guard"
+grant = "api"
+representation = "percent-encoded"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "transport-bytes", "uvicorn-access-log", "uvicorn-error-log"]

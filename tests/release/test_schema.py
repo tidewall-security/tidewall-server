@@ -415,3 +415,22 @@ def test_a_genuine_single_column_alias_is_still_recognised(scratch):
     scratch.execute("CREATE INDEX aliased_v ON aliased(v)")
     locations = copy_map(scratch)[("aliased", "id")]
     assert locations["aliased_v"] == 1, dict(locations)
+
+
+def test_an_integer_primary_key_desc_is_not_a_rowid_alias(scratch):
+    """SQLite's DESC exception.
+
+    `INTEGER PRIMARY KEY DESC` is not a rowid alias: rowid and the column hold
+    different values, so the column is absent from secondary indexes. Counting
+    it as an alias false-fails the canonical byte cardinality on a schema the
+    invariant permits.
+    """
+    scratch.execute("CREATE TABLE desc_pk (id INTEGER PRIMARY KEY DESC, v TEXT)")
+    scratch.execute("CREATE INDEX desc_pk_v ON desc_pk(v)")
+    scratch.execute("INSERT INTO desc_pk(id, v) VALUES (123, 'x')")
+    assert invariant(scratch) == [], "the invariant permits this table"
+    assert scratch.execute("SELECT rowid, id FROM desc_pk").fetchone() == (1, 123)
+
+    locations = copy_map(scratch)[("desc_pk", "id")]
+    assert "desc_pk_v" not in locations, dict(locations)
+    assert locations["desc_pk"] == 1

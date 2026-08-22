@@ -101,6 +101,19 @@ DETECTORS: tuple[str, ...] = (
     "emoji",
 )
 
+#: Operations a case can run under, and the grants they require. Both are in
+#: Case.identity, and neither had a domain -- an invented operation passed
+#: every test.
+OPERATIONS: tuple[str, ...] = (
+    "guard",
+    "access-rule-admin",
+    "policy-admin",
+    "settings-admin",
+    "content-export",
+)
+
+GRANTS: tuple[str, ...] = ("api", "admin", "content:export")
+
 #: The events a scan can be performed for.
 EVENTS: tuple[str, ...] = ("input", "output", "tool_listing")
 
@@ -226,6 +239,61 @@ NOT_EVALUATED: dict[tuple[str, str, str], str] = {
 #: DetectorResult has no source/value field, so a matches_json REQUIRED rule
 #: for a classifier case manufactures a failure for correct behaviour.
 EXACT_MATCH_DETECTORS: frozenset[str] = frozenset({"confidential_and_pii_entity", "custom_entity"})
+
+
+def report_match_callers() -> frozenset[str]:
+    """Which detector modules actually call `report_match`, read from source.
+
+    The constant above was a hand-copied measurement, and a test comparing the
+    constant to the same hardcoded pair could never notice production changing.
+    This reads the tree, so wiring a third detector fails the drift check.
+    """
+    import pathlib as _p
+
+    root = _p.Path(__file__).resolve().parents[2] / "app" / "detectors"
+    module_to_detector = {
+        "pii": "confidential_and_pii_entity",
+        "custom_entity": "custom_entity",
+        "secrets": "secret_and_key_entity",
+        "malicious_prompt": "malicious_prompt",
+        "malicious_entity": "malicious_entity",
+        "competitors": "competitors",
+        "topic": "topic",
+        "language": "language",
+        "code": "code",
+        "emoji_detector": "emoji",
+        "mcp_validation": "mcp_validation",
+    }
+    found = set()
+    for path in root.glob("*.py"):
+        if "report_match" in path.read_text():
+            name = module_to_detector.get(path.stem)
+            if name:
+                found.add(name)
+    return frozenset(found)
+
+
+def registry_detectors() -> tuple[str, ...]:
+    """The detector names production can run, read from _DETECTOR_REGISTRY."""
+    import pathlib as _p
+    import re as _re
+
+    source = (_p.Path(__file__).resolve().parents[2] / "app" / "scanner_engine.py").read_text()
+    block = source[source.index("_DETECTOR_REGISTRY") :]
+    block = block[: block.index("\n}")]
+    return tuple(_re.findall(r'^\s+"([a-z_]+)":', block, _re.M))
+
+
+def source_event_scoping() -> dict[str, str]:
+    """The event-scoped detectors, read from `_detector_applies`."""
+    import pathlib as _p
+    import re as _re
+
+    source = (_p.Path(__file__).resolve().parents[2] / "app" / "scanner_engine.py").read_text()
+    body = source[source.index("def _detector_applies") :]
+    body = body[: body.index("\ndef ", 1)]
+    return dict(_re.findall(r'if name == "([a-z_]+)":\s*\n\s*return event_type == "([a-z_]+)"', body))
+
 
 #: Event scoping, from `_detector_applies`. Two detectors are event-scoped and
 #: a case that pairs them with the wrong event cannot invoke them at all.

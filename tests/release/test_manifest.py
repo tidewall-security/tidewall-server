@@ -23,11 +23,16 @@ from tests.release.manifest import (
     EVENT_SCOPED,
     EVENTS,
     EXACT_MATCH_DETECTORS,
+    GRANTS,
     LEAVES,
     NOT_EVALUATED,
+    OPERATIONS,
     PLACEMENTS,
     REPRESENTATIONS,
     CaptureMode,
+    registry_detectors,
+    report_match_callers,
+    source_event_scoping,
 )
 
 # --- the generated artifact -----------------------------------------------
@@ -83,15 +88,20 @@ def test_a_marker_without_a_rationale_is_not_a_declaration(tmp_path: pathlib.Pat
 # writes, so a domain edit does not move them.
 
 
-def test_every_source_component_is_exercised_by_a_case():
-    """Both directions.
+def test_source_components_and_exercised_components_are_equal():
+    """Actually both directions.
 
-    The one-way version let the manifest name components with no source marker
-    -- phantom paths nobody could reach -- while reporting full coverage.
+    The previous version said "both directions" in its docstring and asserted
+    only `exercised <= from_source`. On the shipped branch that left FIFTEEN
+    marked components unexercised while every test passed -- every secrets
+    plugin except the three a case happened to name.
     """
     from_source = {c.identity for c in inventory.scan_source()}
     exercised = {f"{c.component}/{c.sub_path}" for c in CASES}
-    assert exercised <= from_source, {"named by a case, no source marker": sorted(exercised - from_source)}
+    assert exercised == from_source, {
+        "in source, no case exercises it": sorted(from_source - exercised),
+        "named by a case, no source marker": sorted(exercised - from_source),
+    }
 
 
 def test_every_secrets_plugin_is_registered_individually():
@@ -173,3 +183,34 @@ def test_not_evaluated_is_keyed_by_component_not_only_leaf():
         ("mcp-description", "mcp_validation", "scan"),
         ("mcp-parameters", "mcp_validation", "scan"),
     }
+
+
+# --- production facts, read from source rather than trusted ---------------
+
+
+def test_the_exact_match_detector_constant_matches_production():
+    """Wiring a third detector to report_match must fail this.
+
+    The constant was a hand-copied measurement, and the previous test compared
+    it to the same hardcoded pair -- so a production change could not fail it.
+    """
+    assert EXACT_MATCH_DETECTORS == report_match_callers()
+
+
+def test_the_detector_domain_matches_the_production_registry():
+    assert set(DETECTORS) == set(registry_detectors())
+
+
+def test_the_event_scoping_constant_matches_production():
+    assert EVENT_SCOPED == source_event_scoping()
+
+
+def test_every_case_operation_and_grant_is_declared():
+    """Both are in Case.identity and neither had a domain.
+
+    An invented operation passed all twenty tests before this.
+    """
+    assert {c.operation for c in CASES} <= set(OPERATIONS)
+    assert {c.grant for c in CASES} <= set(GRANTS)
+    assert set(OPERATIONS) == {c.operation for c in CASES}
+    assert set(GRANTS) == {c.grant for c in CASES}
