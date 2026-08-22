@@ -99,10 +99,12 @@ def test_the_component_state_domain_is_recorded_as_deferred():
     """
     from tests.release import manifest
 
-    assert manifest.STATE_DOMAIN_DEFERRED_TO_TASK_5 is True
-    doc = pathlib.Path(manifest.__file__).read_text()
-    assert "component-level, not state-level" in doc
-    assert "Task 5's second obligation" in doc
+    assert manifest.STATE_DOMAIN_DEFERRED_TO_TASK_5 is False
+    assert manifest.STATE_DOMAIN_DERIVED_IN == "tests/release/test_states.py"
+    assert manifest.BEHAVIOUR_CHANGING_STATES, "the derived domain is empty"
+    # The derived NEGATIVE is part of the result, not an omission from it.
+    assert "scanner_engine/applicability_skip" in manifest.MARKED_LOCATIONS_NOT_STATES
+    assert not (manifest.BEHAVIOUR_CHANGING_STATES & manifest.MARKED_LOCATIONS_NOT_STATES)
 
 
 def test_the_component_mapping_is_recorded_as_unverified():
@@ -115,10 +117,9 @@ def test_the_component_mapping_is_recorded_as_unverified():
     """
     from tests.release import manifest
 
-    assert manifest.VERIFICATION_DEFERRED_TO_TASK_5 is True
-    doc = pathlib.Path(manifest.__file__).read_text()
-    assert "asserted, not verified" in doc
-    assert "Task 5's obligation" in doc
+    assert manifest.VERIFICATION_DEFERRED_TO_TASK_5 is False
+    assert manifest.COMPONENT_MAPPING_VERIFIED_IN == "tests/release/test_component_mapping.py"
+    assert pathlib.Path(manifest.COMPONENT_MAPPING_VERIFIED_IN).exists()
 
 
 def test_source_components_and_exercised_components_are_named_by_a_case():

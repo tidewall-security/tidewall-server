@@ -424,7 +424,11 @@ def applicable_events(detector: str) -> tuple[str, ...]:
 #: its evaluated-input witness observes. Until then the coverage oracle
 #: establishes that every marked component is NAMED by some case -- not that
 #: any case reaches it.
-VERIFICATION_DEFERRED_TO_TASK_5 = True
+#: DISCHARGED by Task 5 step 1a. Verified in `tests/release/test_component_mapping.py`
+#: by running each detector and observing which marked regions execute. Four of
+#: the five suspect mappings were wrong and 84 case rows were corrected.
+VERIFICATION_DEFERRED_TO_TASK_5 = False
+COMPONENT_MAPPING_VERIFIED_IN = "tests/release/test_component_mapping.py"
 
 #: A SECOND deferred obligation, distinct from the mapping above.
 #:
@@ -447,7 +451,31 @@ VERIFICATION_DEFERRED_TO_TASK_5 = True
 #: what the witnesses observe, and mark those states at their definition sites.
 #: Until then the manifest's third axis is component-level, not state-level,
 #: and no test here should be read as establishing state coverage.
-STATE_DOMAIN_DEFERRED_TO_TASK_5 = True
+#: DISCHARGED by Task 5 step 1b. The domain is DERIVED, not declared: a state
+#: belongs to it only where reaching it was measured to alter a field of the
+#: ScanResult a caller receives. See `tests/release/states.py` for the rule and
+#: `tests/release/test_states.py` for the measurements.
+STATE_DOMAIN_DEFERRED_TO_TASK_5 = False
+STATE_DOMAIN_DERIVED_IN = "tests/release/test_states.py"
+
+#: States measured to alter an observable surface.
+BEHAVIOUR_CHANGING_STATES: frozenset[str] = frozenset(
+    {
+        "emoji/reported",
+        "pii/entities_redacted",
+        "pii/no_entities",
+        "mcp_validation/name_similarity",
+    }
+)
+
+#: Marked locations that are NOT behaviour-changing on the evidence.
+#:
+#: `scanner_engine/applicability_skip` is the derived negative: skipping a
+#: detector as inapplicable produces a ScanResult identical in every field to
+#: not having configured it. Coverage still wants to know the branch was
+#: taken, so the marker stays -- but it is not a state that changes behaviour,
+#: and recording it as one would be an assumption dressed as a measurement.
+MARKED_LOCATIONS_NOT_STATES: frozenset[str] = frozenset({"scanner_engine/applicability_skip"})
 
 CASES_FILE = pathlib.Path(__file__).resolve().parent / "manifest.cases.toml"
 
