@@ -22,10 +22,7 @@ import pytest
 #: not harmless: the branch would claim the task is done while the checked-in
 #: hard-fail diagnostic said it was not, and one of those two would be wrong
 #: with nothing to say which.
-STILL_MISSING = (
-    "witnesses and the mandatory surfaces (Task 5)",
-    "the two canary suites, expected-failure manifest, release-gate job (Task 6)",
-)
+STILL_MISSING = ("the two canary suites, expected-failure manifest, release-gate job (Task 6)",)
 
 
 def test_the_release_gate_is_not_complete():

@@ -157,3 +157,22 @@ def test_the_census_counts_bytes_per_artifact(tmp_path: Path):
 
     assert set(counts) == set(census.entries)
     assert sum(counts.values()) >= 1
+
+
+def test_the_census_counts_repeats_not_merely_presence(tmp_path: Path):
+    """Byte COUNTS, per the plan.
+
+    A presence flag satisfies every single-occurrence fixture, and the
+    post-migration comparison is against a measured number.
+    """
+    db = tmp_path / "repeats.db"
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA journal_mode=DELETE")  # keep it in one artifact
+    conn.execute("CREATE TABLE t (v TEXT)")
+    for i in range(4):
+        conn.execute("INSERT INTO t(v) VALUES (?)", (f"{CANARY.decode()}-{i}",))
+    conn.commit()
+    conn.close()
+
+    counts = ArtifactCensus.of(db).occurrences(db, CANARY)
+    assert sum(counts.values()) >= 4, f"expected at least the four rows written, got {counts}"
