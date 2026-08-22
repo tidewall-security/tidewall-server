@@ -215,10 +215,34 @@ def test_the_collector_set_is_part_of_case_identity():
 
 
 def test_not_evaluated_is_keyed_by_component_not_only_leaf():
-    assert set(NOT_EVALUATED) == {
-        ("mcp-description", "mcp_validation", "scan"),
-        ("mcp-parameters", "mcp_validation", "scan"),
-    }
+    for leaf, component, sub_path in NOT_EVALUATED:
+        assert leaf and component and sub_path
+
+
+def test_every_not_evaluated_key_matches_a_real_case():
+    """The property that catches a mis-keyed exclusion.
+
+    These were keyed to sub-path "scan" -- the method name -- while every
+    manifest case declares "name_similarity". The exclusion attached to
+    nothing, and the cases went through the ordinary declared-component and
+    evaluated-input checks as though the value had been evaluated. Comparing
+    the keys to a hardcoded pair could not notice, because the pair was the
+    same hardcoded thing.
+    """
+    keys = {(c.leaf, c.component, c.sub_path) for c in CASES}
+    unattached = sorted(set(NOT_EVALUATED) - keys)
+    assert not unattached, unattached
+
+
+def test_the_not_evaluated_leaves_are_the_ones_production_ignores():
+    """Read from the detector, not from this module's opinion of it."""
+    source = pathlib.Path("app/detectors/mcp_validation.py").read_text()
+    assert 'func.get("name"' in source
+    assert 'func.get("description"' not in source
+    assert 'func.get("parameters"' not in source
+
+    excluded_leaves = {leaf for leaf, _c, _s in NOT_EVALUATED}
+    assert excluded_leaves == {"mcp-description", "mcp-parameters"}
 
 
 # --- production facts, read from source rather than trusted ---------------

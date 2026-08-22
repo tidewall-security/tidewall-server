@@ -124,16 +124,44 @@ def execute(case, canary: str) -> Execution:
     )
 
 
+def is_not_evaluated(case) -> str | None:
+    """The recorded reason this component never evaluates this leaf, if any.
+
+    A case whose component does not read its leaf must NOT pass the ordinary
+    declared-component and evaluated-input checks: the component is reached,
+    but for reasons having nothing to do with the planted value.
+    """
+    from tests.release.manifest import NOT_EVALUATED
+
+    return NOT_EVALUATED.get((case.leaf, case.component, case.sub_path))
+
+
+def evaluated_path_and_value(execution: Execution, case) -> tuple[str, str]:
+    """Where the component actually read from, and what it read."""
+    if case.leaf == "mcp-name":
+        return "tools[*].function.name", execution.planted
+    if case.leaf in ("mcp-description", "mcp-parameters"):
+        # Placed, and never read. Naming the placement rather than a field the
+        # component consumed is the honest record.
+        return f"tools[*].function.{case.leaf.removeprefix('mcp-')}", execution.planted
+    return "scan.text", execution.received[0] if execution.received else ""
+
+
 def chain_for(execution: Execution, case) -> WitnessChain:
     """A witness chain built from what was OBSERVED, not declared."""
+    # The witness names the field the component ACTUALLY reads. Reporting
+    # `scan.text` for a tool-placement case claimed the detector consumed the
+    # scan text, when MCPValidationDetector reads `function.name` and never
+    # looks at the text at all.
+    path, value = evaluated_path_and_value(execution, case)
     return WitnessChain(
         case_id=execution.case_id,
-        effective_parsed_path="scan.text",
-        effective_parsed_value=execution.received[0] if execution.received else "",
+        effective_parsed_path=path,
+        effective_parsed_value=value,
         component=case.component,
         sub_path=case.sub_path,
         call_id=execution.call_id,
-        consumed_field="text",
+        consumed_field=path.rsplit(".", 1)[-1],
         result=repr(getattr(execution.result, "blocked", None)),
         response_consumer=f"ScannerEngine.scan/{execution.event}",
     )

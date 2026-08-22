@@ -269,8 +269,12 @@ class Case:
 #: not reading a leaf. Keyed by leaf alone it would stay true-looking if some
 #: other component began evaluating MCP descriptions tomorrow.
 NOT_EVALUATED: dict[tuple[str, str, str], str] = {
-    ("mcp-description", "mcp_validation", "scan"): "reads only function.name",
-    ("mcp-parameters", "mcp_validation", "scan"): "reads only function.name",
+    # Keyed to the sub-path the CASES actually carry. These were keyed to
+    # "scan" -- the method name -- while every manifest case declares
+    # "name_similarity", so the exclusion attached to nothing and the cases
+    # went through the ordinary checks as though the value had been evaluated.
+    ("mcp-description", "mcp_validation", "name_similarity"): "reads only function.name",
+    ("mcp-parameters", "mcp_validation", "name_similarity"): "reads only function.name",
 }
 
 

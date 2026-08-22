@@ -21,6 +21,7 @@ from tests.release.execution import (
     CaseNotExecutable,
     chain_for,
     execute,
+    is_not_evaluated,
     witnesses_for,
 )
 from tests.release.manifest import load_cases
@@ -33,6 +34,14 @@ EXECUTABLE = [c for c in CASES if c.detector in SELF_CONTAINED_DETECTORS]
 
 #: Measured, and pinned so a shrinking set is visible rather than silent.
 EXPECTED_EXECUTABLE = 53
+
+#: Cases whose component NEVER READS their leaf. They must not go through the
+#: ordinary declared-component check: the component is reached, but for
+#: reasons having nothing to do with the planted value. A review proved it by
+#: running the same case with two entirely different values and observing the
+#: identical component both times.
+NOT_EVALUATED_CASES = [c for c in EXECUTABLE if is_not_evaluated(MANIFEST_CASES[c.case_id])]
+EVALUATED_CASES = [c for c in EXECUTABLE if not is_not_evaluated(MANIFEST_CASES[c.case_id])]
 
 
 def test_the_suite_covers_every_capture_off_case_in_the_manifest():
@@ -156,7 +165,7 @@ def test_a_failure_diagnostic_carries_the_replay_identifier():
     assert f"case={CASES[0].case_id}" in message
 
 
-@pytest.mark.parametrize("case", EXECUTABLE, ids=lambda c: c.case_id[:48])
+@pytest.mark.parametrize("case", EVALUATED_CASES, ids=lambda c: c.case_id[:48])
 def test_the_case_reaches_the_component_it_declares(case):
     """Task 5's rule, applied per case in the suite that runs the case.
 
@@ -175,3 +184,70 @@ def test_the_case_reaches_the_component_it_declares(case):
     declared = f"{manifest_case.component}/{manifest_case.sub_path}"
 
     verify_declared_component(diagnose(case, declared), declared, execution.components)
+
+
+def test_there_are_cases_of_both_kinds():
+    """If either list were empty the split would hide a whole family."""
+    assert EVALUATED_CASES, "no evaluated cases"
+    assert NOT_EVALUATED_CASES, "no not-evaluated cases; the exclusion attaches to nothing"
+    assert len(EVALUATED_CASES) + len(NOT_EVALUATED_CASES) == len(EXECUTABLE)
+
+
+@pytest.mark.parametrize("case", NOT_EVALUATED_CASES, ids=lambda c: c.case_id[:48])
+def test_a_not_evaluated_case_is_insensitive_to_its_planted_value(case):
+    """The fact that makes the ordinary declared-component check inapplicable.
+
+    MCPValidationDetector reads `function.name` and nothing else, so a canary
+    in a description or a parameter schema is never evaluated. Running the same
+    case with two entirely different planted values must produce the identical
+    observed component -- which is precisely why passing the ordinary check
+    would have proved nothing about the planted value.
+    """
+    manifest_case = MANIFEST_CASES[case.case_id]
+
+    one = execute(manifest_case, case.canary)
+    two = execute(manifest_case, "TOTALLY-DIFFERENT-VALUE-9a3f")
+
+    assert one.components, diagnose(case, "no component was reached at all")
+    assert one.components == two.components, diagnose(
+        case, f"the planted value changed the component: {one.components} vs {two.components}"
+    )
+
+
+@pytest.mark.parametrize("case", NOT_EVALUATED_CASES, ids=lambda c: c.case_id[:48])
+def test_a_not_evaluated_case_records_why(case):
+    reason = is_not_evaluated(MANIFEST_CASES[case.case_id])
+    assert reason and "function.name" in reason
+
+
+def test_an_evaluated_case_IS_sensitive_to_its_planted_value():
+    """The control on the split.
+
+    If evaluated cases were also insensitive to their planted value, the
+    not-evaluated test above would be asserting nothing special. Same case,
+    two values, and the observed component must differ.
+    """
+    from tests.release.execution import EVENT_FOR
+    from tests.release.observation import all_regions, observing
+
+    case = next(c for c in EVALUATED_CASES if c.detector == "emoji")
+    manifest_case = MANIFEST_CASES[case.case_id]
+
+    from app.scanner_engine import ScannerEngine
+
+    def components(text: str) -> set[str]:
+        engine = ScannerEngine.from_detectors({manifest_case.detector: {"enabled": True}})
+        event = EVENT_FOR.get(manifest_case.detector, manifest_case.event)
+        with observing() as observation:
+            engine.scan(text, event_type=event, vault_id="v", vault=None)
+        return observation.components(all_regions())
+
+    with_emoji = components("value \U0001f600")
+    without = components("value with no emoji at all")
+
+    assert with_emoji != without, (
+        "the emoji detector reported the same component for a value with an "
+        "emoji and one without, so evaluated cases are insensitive too"
+    )
+    assert "emoji/reported" in with_emoji
+    assert "emoji/reported" not in without
