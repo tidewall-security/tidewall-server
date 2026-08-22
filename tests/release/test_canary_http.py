@@ -14,12 +14,11 @@ BEFORE ANY DETECTOR RUNS. Confirmed here rather than asserted.
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.models import GuardRequest
 from tests.release.expected_failures import GUARD_ROUTE
 from tests.release.representations import FAMILIES
 from tests.release.signatures import RECORDER, Signature
@@ -28,28 +27,47 @@ CANARY = "CANARY-VALIDATION-ECHO-4c81"
 SURFACE = f"{GUARD_ROUTE} -> $.detail[*].input"
 
 
+BOOTSTRAP_KEY = "ak_release_gate_bootstrap_only_not_a_real_credential"
+
+
 @pytest.fixture(scope="module")
-def client() -> TestClient:
-    """The real request model on the real route path.
+def client(tmp_path_factory) -> TestClient:
+    """THE PRODUCTION APPLICATION, via `app.main.create_app`.
 
-    Not a stand-in: `app.models.GuardRequest` is what production validates
-    against, and the route string is verified against app/routes/guard.py.
-
-    GuardRequest is imported AT MODULE LEVEL deliberately. With
-    `from __future__ import annotations` every annotation is a string, and
-    FastAPI resolves it against the defining module's namespace -- so importing
-    it inside this fixture left the name unresolvable, FastAPI treated `body`
-    as a QUERY parameter, and the route returned a 422 about a missing query
-    field. The status assertion passed, and the echo assertion passed too,
-    because the body was never parsed. A test that drove the wrong thing.
+    An earlier version built its own `FastAPI()` with a local handler that
+    merely accepted `GuardRequest`, and connected to production only by a
+    substring search for the route path in guard.py. Changes to app
+    construction, router mounting, exception handlers, dependencies or route
+    behaviour could not have affected it. This mounts the real app, runs its
+    real lifespan (which applies migrations), and calls the real route with a
+    real key.
     """
-    app = FastAPI()
+    directory = tmp_path_factory.mktemp("release-gate-http")
+    os.environ["BOOTSTRAP_KEY"] = BOOTSTRAP_KEY
+    os.environ["DB_URL"] = f"sqlite:///{directory}/gate.db"
 
-    @app.post("/v1/guard_chat_completions")
-    async def guard(body: GuardRequest):  # pragma: no cover - never reached
-        return {"ok": True}
+    from app.main import create_app
 
-    return TestClient(app, raise_server_exceptions=False)
+    with TestClient(create_app(), raise_server_exceptions=False) as test_client:
+        yield test_client
+
+
+def test_the_route_is_mounted_on_the_production_application(client):
+    """Structural, not a substring search over source text."""
+    paths = {route.path for route in client.app.routes if hasattr(route, "path")}
+    assert "/v1/guard_chat_completions" in paths, sorted(paths)[:8]
+    assert GUARD_ROUTE.endswith("/v1/guard_chat_completions")
+
+
+def test_authentication_runs_before_the_body_is_parsed(client):
+    """The auth-before-body boundary, and the control on the echo below.
+
+    Unauthenticated, the canary is NOT echoed -- so the echo is a property of
+    the authenticated validation path, not of any 422 the app can produce.
+    """
+    response = client.post("/v1/guard_chat_completions", json={"messages": CANARY})
+    assert response.status_code == 401, response.text
+    assert CANARY not in response.text
 
 
 def _echoed_inputs(response) -> list[str]:
@@ -80,11 +98,6 @@ def _is_a_body_error(response) -> bool:
     )
 
 
-def test_the_route_path_matches_production():
-    source = __import__("pathlib").Path("app/routes/guard.py").read_text()
-    assert '"/v1/guard_chat_completions"' in source
-
-
 def test_there_is_no_request_validation_error_handler():
     """The cause. With one, the echo would not happen."""
     import pathlib
@@ -104,7 +117,11 @@ def test_there_is_no_request_validation_error_handler():
 def test_the_submitted_value_is_echoed_before_any_detector_runs(client, family):
     """One record per representation, emitted as a six-field signature."""
     encoded = family.encode(CANARY).decode("utf-8", "surrogateescape")
-    response = client.post("/v1/guard_chat_completions", json={"messages": encoded})
+    response = client.post(
+        "/v1/guard_chat_completions",
+        json={"messages": encoded},
+        headers={"Authorization": f"Bearer {BOOTSTRAP_KEY}"},
+    )
 
     assert response.status_code == 422, response.text
     assert _is_a_body_error(response), f"the 422 is not about the request body: {response.text[:200]}"
@@ -134,7 +151,11 @@ def test_the_submitted_value_is_echoed_before_any_detector_runs(client, family):
 
 def test_the_echo_is_in_the_input_field_specifically(client):
     """The surface_path names `$.detail[*].input`, so that is what is checked."""
-    response = client.post("/v1/guard_chat_completions", json={"messages": CANARY})
+    response = client.post(
+        "/v1/guard_chat_completions",
+        json={"messages": CANARY},
+        headers={"Authorization": f"Bearer {BOOTSTRAP_KEY}"},
+    )
     detail = json.loads(response.text)["detail"]
     inputs = [json.dumps(entry.get("input")) for entry in detail]
     assert any(CANARY in value for value in inputs), detail
@@ -152,6 +173,10 @@ def test_the_canary_never_reached_a_detector(client):
     from tests.release.surfaces import recording_detector_inputs
 
     with recording_detector_inputs(engine) as inputs:
-        client.post("/v1/guard_chat_completions", json={"messages": CANARY})
+        client.post(
+            "/v1/guard_chat_completions",
+            json={"messages": CANARY},
+            headers={"Authorization": f"Bearer {BOOTSTRAP_KEY}"},
+        )
 
     assert not inputs.received, "a detector received the value, so this is not a pre-detector echo"
