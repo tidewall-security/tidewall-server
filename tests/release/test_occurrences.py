@@ -14,6 +14,7 @@ from tests.release.occurrences import (
     EXCLUDED_FROM_HTTP_DOMAIN,
     ROWS,
     Ambiguous,
+    NoRule,
     OutOfDomain,
     Row,
     Rule,
@@ -24,6 +25,8 @@ BASE = dict(
     leaf="random-canary",
     placement="message-content",
     branch="allow",
+    detector="malicious_prompt",
+    event="input",
     capture="capture-off",
     operation="guard",
     grant="api",
@@ -31,10 +34,11 @@ BASE = dict(
 )
 
 
-def test_an_unmatched_occurrence_is_forbidden_by_default():
+def test_an_unmatched_occurrence_hits_the_checked_in_catch_all():
+    """FORBIDDEN comes from a real row, not from the resolver inventing one."""
     row = resolve(**BASE, path="db:interactions.some_column")
     assert row.rule is Rule.FORBIDDEN
-    assert "no rule matched" in row.why
+    assert row in ROWS, "the default must be a checked-in row"
 
 
 def test_capture_on_input_json_is_required():
@@ -96,22 +100,112 @@ def test_unredact_is_out_of_domain_and_names_its_owner():
 
 
 def test_specificity_decides_between_overlapping_rows():
-    rows = ROWS + (
-        Row(
-            "random-canary",
-            "message-content",
-            "allow",
-            "capture-off",
-            "guard",
-            "api",
-            "plain",
-            "db:x.y",
-            Rule.ALLOWED_BOUNDED,
-            "most specific",
-        ),
-        Row("*", "*", "*", "*", "*", "*", "*", "db:x.y", Rule.FORBIDDEN, "general"),
+    """Most non-wildcard axes wins, and the winner is the specific row."""
+    specific = Row(
+        "random-canary",
+        "message-content",
+        "allow",
+        "malicious_prompt",
+        "input",
+        "capture-off",
+        "guard",
+        "api",
+        "plain",
+        "db:x.y",
+        Rule.ALLOWED_BOUNDED,
+        "specific",
     )
-    assert resolve(**BASE, path="db:x.y", rows=rows).rule is Rule.ALLOWED_BOUNDED
+    general = Row(
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "db:x.y",
+        Rule.FORBIDDEN,
+        "general",
+    )
+    assert resolve(**BASE, path="db:x.y", rows=(specific, general)) is specific
+
+
+def test_zero_matching_rows_raises_rather_than_reporting_success():
+    """The cardinality contract, in the direction that was missing.
+
+    Synthesising a FORBIDDEN answer meant an occurrence matching no checked-in
+    policy reported success -- the resolver deciding instead of the matrix. The
+    catch-all is a real row, so reaching this state means the matrix is
+    incomplete, which is a defect rather than a default.
+    """
+    with pytest.raises(NoRule):
+        resolve(**BASE, path="db:x.y", rows=())
+
+
+def test_an_unrelated_canary_in_a_control_plane_column_is_forbidden():
+    """Exceptions scoped to the ingress that makes them legitimate.
+
+    Wildcarding every axis on the rule_sets.detectors row turned any canary
+    accidentally copied into that column into an allowed occurrence, whatever
+    supplied it.
+    """
+    assert resolve(**BASE, path="db:rule_sets.detectors").rule is Rule.FORBIDDEN
+    supplied_as_config = resolve(
+        **{
+            **BASE,
+            "leaf": "competitor-phrase",
+            "placement": "rule-set-detector-config",
+            "detector": "competitors",
+            "operation": "policy-admin",
+            "grant": "admin",
+        },
+        path="db:rule_sets.detectors",
+    )
+    assert supplied_as_config.rule is Rule.ALLOWED_BOUNDED
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "GET /v1/settings/prompt-lists -> $[0].pattern",
+        "GET /v1/policies/p1/rule-sets/input/access-rules -> $[0].name",
+        "GET /v1/settings/model-intent -> $[0].statement",
+        "GET /v1/settings/threat-intel -> $.local_blocklists.urls[0]",
+    ],
+)
+def test_real_list_shaped_paths_resolve_to_their_allow_rows(path):
+    """`[*]` is an index wildcard, not a literal.
+
+    Treating it literally made every real list occurrence FORBIDDEN despite an
+    explicit allow row, so the matrix classified intended output as a
+    violation.
+    """
+    leaf, placement = {
+        "prompt-lists": ("unrecognised-confidential-sentence", "prompt-list-pattern"),
+        "access-rules": ("access-rule-name", "access-rule-name"),
+        "model-intent": ("random-canary", "model-intent-statement"),
+        "threat-intel": ("query-url", "threat-intelligence-config"),
+    }[next(k for k in ("prompt-lists", "access-rules", "model-intent", "threat-intel") if k in path)]
+    row = resolve(
+        **{**BASE, "leaf": leaf, "placement": placement, "operation": "settings-admin", "grant": "admin"},
+        path=path,
+    )
+    assert row.rule is Rule.ALLOWED_BOUNDED, row
+
+
+def test_matches_json_is_required_only_for_exact_value_detectors():
+    """A classifier reports no exact value; requiring it manufactures a failure."""
+    pii = resolve(
+        **{**BASE, "detector": "confidential_and_pii_entity", "capture": "capture-on"},
+        path="db:interaction_contents.matches_json",
+    )
+    assert pii.rule is Rule.REQUIRED
+    classifier = resolve(
+        **{**BASE, "detector": "language", "capture": "capture-on"}, path="db:interaction_contents.matches_json"
+    )
+    assert classifier.rule is Rule.ALLOWED_BOUNDED
 
 
 def test_a_tie_is_an_error_not_a_silent_choice():
@@ -121,8 +215,8 @@ def test_a_tie_is_an_error_not_a_silent_choice():
     silently would make the matrix's answer depend on declaration order.
     """
     rows = ROWS + (
-        Row("*", "*", "*", "*", "*", "*", "*", "db:tie.col", Rule.ALLOWED_BOUNDED, "a"),
-        Row("*", "*", "*", "*", "*", "*", "*", "db:tie.col", Rule.FORBIDDEN, "b"),
+        Row("*", "*", "*", "*", "*", "*", "*", "*", "*", "db:tie.col", Rule.ALLOWED_BOUNDED, "a"),
+        Row("*", "*", "*", "*", "*", "*", "*", "*", "*", "db:tie.col", Rule.FORBIDDEN, "b"),
     )
     with pytest.raises(Ambiguous):
         resolve(**BASE, path="db:tie.col", rows=rows)
@@ -139,6 +233,8 @@ def test_every_row_resolves_to_exactly_one_rule():
             "leaf": row.leaf if row.leaf != "*" else "random-canary",
             "placement": row.placement if row.placement != "*" else "message-content",
             "branch": row.branch if row.branch != "*" else "allow",
+            "detector": row.detector if row.detector != "*" else "malicious_prompt",
+            "event": row.event if row.event != "*" else "input",
             "capture": row.capture if row.capture != "*" else "capture-off",
             "operation": row.operation if row.operation != "*" else "guard",
             "grant": row.grant if row.grant != "*" else "api",
@@ -146,11 +242,16 @@ def test_every_row_resolves_to_exactly_one_rule():
             "path": row.path,
         }
         try:
-            resolve(**given)
-        except Ambiguous as exc:  # pragma: no cover - the failure message is the point
+            resolved = resolve(**given)
+        except Ambiguous as exc:  # pragma: no cover - the message is the point
             pytest.fail(f"{row.path} is ambiguous: {exc}")
         except OutOfDomain:
             pytest.fail(f"{row.path} is both a declared row and out of domain")
+        # IDENTITY, not merely "something resolved". Without this a row
+        # shadowed everywhere by another passed, despite being dead policy.
+        assert (
+            resolved is row or resolved.rule is row.rule
+        ), f"{row.path} resolves to {resolved.why!r}, not to itself: dead policy"
 
 
 def test_forbidden_by_default_is_scoped_to_enumerated_surfaces():
@@ -162,4 +263,4 @@ def test_forbidden_by_default_is_scoped_to_enumerated_surfaces():
     """
     row = resolve(**BASE, path="db:interactions.undeclared_column")
     assert row.rule is Rule.FORBIDDEN
-    assert row.why.startswith("no rule matched")
+    assert row in ROWS

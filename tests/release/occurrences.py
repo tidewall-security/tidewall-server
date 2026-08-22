@@ -43,6 +43,8 @@ class Row:
     leaf: str
     placement: str
     branch: str
+    detector: str
+    event: str
     capture: str
     operation: str
     grant: str
@@ -59,6 +61,8 @@ class Row:
                 self.leaf,
                 self.placement,
                 self.branch,
+                self.detector,
+                self.event,
                 self.capture,
                 self.operation,
                 self.grant,
@@ -69,8 +73,17 @@ class Row:
         )
 
 
+def _r(leaf, placement, branch, detector, event, capture, operation, grant, representation, path, rule, why=""):
+    """Positional constructor, so a row reads as a row rather than a wall of keywords."""
+    return Row(leaf, placement, branch, detector, event, capture, operation, grant, representation, path, rule, why)
+
+
 class Ambiguous(Exception):
     """Two rows match at the same specificity. A tie must never be resolved silently."""
+
+
+class NoRule(Exception):
+    """No checked-in row matched. The matrix is incomplete, and that is a defect."""
 
 
 class OutOfDomain(Exception):
@@ -98,10 +111,29 @@ def _p(prefix: str, suffix: str = "") -> str:
 #: value. Without them a FORBIDDEN default reports intended output as a
 #: security violation, and the baseline can never reconcile.
 ROWS: tuple[Row, ...] = (
-    # -- prompt list patterns ------------------------------------------------
-    Row(
+    # The catch-all. An explicit checked-in row, not a value the resolver
+    # invents: a zero-match occurrence must fail, and it cannot fail if the
+    # resolver silently manufactures a FORBIDDEN answer for it.
+    _r(
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        Rule.FORBIDDEN,
+        "forbidden by default, on surfaces the sweep enumerates",
+    ),
+    # -- prompt list patterns, scoped to the ingress that makes them legal ---
+    _r(
         "*",
         "prompt-list-pattern",
+        "*",
+        "*",
         "*",
         "*",
         "*",
@@ -111,9 +143,11 @@ ROWS: tuple[Row, ...] = (
         Rule.ALLOWED_BOUNDED,
         "the configured pattern is the rule itself",
     ),
-    Row(
+    _r(
         "*",
         "prompt-list-pattern",
+        "*",
+        "*",
         "*",
         "*",
         "*",
@@ -123,10 +157,40 @@ ROWS: tuple[Row, ...] = (
         Rule.ALLOWED_BOUNDED,
         "admin reads back what an admin configured",
     ),
+    _r(
+        "*",
+        "prompt-list-pattern",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "POST /v1/settings/prompt-lists -> $.pattern",
+        Rule.ALLOWED_BOUNDED,
+        "create returns the stored entry",
+    ),
+    _r(
+        "*",
+        "prompt-list-pattern",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "PUT /v1/settings/prompt-lists/{entry_id} -> $.pattern",
+        Rule.ALLOWED_BOUNDED,
+        "update returns the stored entry",
+    ),
     # -- export target configuration ----------------------------------------
-    Row(
+    _r(
         "*",
         "export-target-config",
+        "*",
+        "*",
         "*",
         "*",
         "*",
@@ -134,9 +198,9 @@ ROWS: tuple[Row, ...] = (
         "*",
         "db:export_targets.config",
         Rule.ALLOWED_BOUNDED,
-        "the destination config is operator-supplied",
+        "operator-supplied destination",
     ),
-    Row(
+    _r(
         "*",
         "export-target-config",
         "*",
@@ -144,14 +208,46 @@ ROWS: tuple[Row, ...] = (
         "*",
         "*",
         "*",
+        "*",
+        "*",
         "GET /v1/settings/export-targets -> $[*].config",
         Rule.ALLOWED_BOUNDED,
-        "admin reads back what an admin configured",
+        "admin reads back configuration",
     ),
-    # -- model intent --------------------------------------------------------
-    Row(
+    _r(
+        "*",
+        "export-target-config",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "POST /v1/settings/export-targets -> $.config",
+        Rule.ALLOWED_BOUNDED,
+        "create returns it",
+    ),
+    _r(
+        "*",
+        "export-target-config",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "PATCH /v1/settings/export-targets/{target_id} -> $.config",
+        Rule.ALLOWED_BOUNDED,
+        "update returns it",
+    ),
+    # -- model intent (the route returns a LIST) ----------------------------
+    _r(
         "*",
         "model-intent-statement",
+        "*",
+        "*",
         "*",
         "*",
         "*",
@@ -161,7 +257,7 @@ ROWS: tuple[Row, ...] = (
         Rule.ALLOWED_BOUNDED,
         "operator-supplied",
     ),
-    Row(
+    _r(
         "*",
         "model-intent-statement",
         "*",
@@ -169,15 +265,32 @@ ROWS: tuple[Row, ...] = (
         "*",
         "*",
         "*",
-        "GET /v1/settings/model-intent -> $.statement",
+        "*",
+        "*",
+        "GET /v1/settings/model-intent -> $[*].statement",
         Rule.ALLOWED_BOUNDED,
-        "admin reads back what an admin configured",
+        "a list, not an object -- the earlier $.statement row never matched",
     ),
     # -- policy name ---------------------------------------------------------
-    Row("*", "policy-name", "*", "*", "*", "*", "*", "db:policies.name", Rule.ALLOWED_BOUNDED, "the policy's own name"),
-    Row(
+    _r(
         "*",
         "policy-name",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "db:policies.name",
+        Rule.ALLOWED_BOUNDED,
+        "the policy's own name",
+    ),
+    _r(
+        "*",
+        "policy-name",
+        "*",
+        "*",
         "*",
         "*",
         "*",
@@ -187,7 +300,7 @@ ROWS: tuple[Row, ...] = (
         Rule.ALLOWED_BOUNDED,
         "the exported YAML names its policy",
     ),
-    Row(
+    _r(
         "*",
         "policy-name",
         "*",
@@ -195,12 +308,76 @@ ROWS: tuple[Row, ...] = (
         "*",
         "*",
         "*",
+        "*",
+        "*",
         "GET /v1/policies/{policy_id}/export -> header:Content-Disposition",
         Rule.ALLOWED_BOUNDED,
-        "the filename is built from the policy name -- a body-only collector misses this",
+        "the filename is built from the name; a body-only collector misses it",
     ),
-    # -- competitor / custom-entity literals --------------------------------
-    Row(
+    _r(
+        "*",
+        "policy-name",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "GET /v1/policies -> $[*].name",
+        Rule.ALLOWED_BOUNDED,
+        "list returns names",
+    ),
+    _r(
+        "*",
+        "policy-name",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "POST /v1/policies -> $.name",
+        Rule.ALLOWED_BOUNDED,
+        "create returns it",
+    ),
+    _r(
+        "*",
+        "policy-name",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "GET /v1/policies/{policy_id} -> $.name",
+        Rule.ALLOWED_BOUNDED,
+        "get returns it",
+    ),
+    _r(
+        "*",
+        "policy-name",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "PATCH /v1/policies/{policy_id} -> $.name",
+        Rule.ALLOWED_BOUNDED,
+        "update returns it",
+    ),
+    # -- competitor / custom-entity literals, SCOPED to their ingress --------
+    #
+    # Wildcarding every axis made any unrelated canary copied into this column
+    # an allowed occurrence. The legitimate home is tied to the placement that
+    # makes it legitimate.
+    _r(
+        "*",
+        "rule-set-detector-config",
         "*",
         "*",
         "*",
@@ -210,9 +387,11 @@ ROWS: tuple[Row, ...] = (
         "*",
         "db:rule_sets.detectors",
         Rule.ALLOWED_BOUNDED,
-        "detector configuration holds the literal it matches",
+        "detector config holds its literal",
     ),
-    Row(
+    _r(
+        "*",
+        "rule-set-detector-config",
         "*",
         "*",
         "*",
@@ -224,7 +403,23 @@ ROWS: tuple[Row, ...] = (
         Rule.ALLOWED_BOUNDED,
         "admin reads back detector configuration",
     ),
-    Row(
+    _r(
+        "*",
+        "rule-set-detector-config",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "*",
+        "PATCH /v1/policies/{policy_id}/rule-sets/{event_type} -> $.detectors",
+        Rule.ALLOWED_BOUNDED,
+        "update returns them",
+    ),
+    _r(
+        "*",
+        "rule-set-detector-config",
         "*",
         "*",
         "*",
@@ -234,11 +429,13 @@ ROWS: tuple[Row, ...] = (
         "*",
         "GET /v1/policies/{policy_id}/export -> body:detectors",
         Rule.ALLOWED_BOUNDED,
-        "the YAML export carries the rule set's detectors",
+        "the YAML export carries them",
     ),
     # -- access rule names ---------------------------------------------------
-    Row(
+    _r(
         "access-rule-name",
+        "*",
+        "*",
         "*",
         "*",
         "*",
@@ -247,10 +444,12 @@ ROWS: tuple[Row, ...] = (
         "*",
         "db:access_rules.name",
         Rule.ALLOWED_BOUNDED,
-        "the rule's own name, needed to exercise it",
+        "the rule's own name",
     ),
-    Row(
+    _r(
         "access-rule-name",
+        "*",
+        "*",
         "*",
         "*",
         "*",
@@ -261,8 +460,10 @@ ROWS: tuple[Row, ...] = (
         Rule.ALLOWED_BOUNDED,
         "_rule_to_dict returns the name on list",
     ),
-    Row(
+    _r(
         "access-rule-name",
+        "*",
+        "*",
         "*",
         "*",
         "*",
@@ -273,8 +474,10 @@ ROWS: tuple[Row, ...] = (
         Rule.ALLOWED_BOUNDED,
         "_rule_to_dict returns the name on create",
     ),
-    Row(
+    _r(
         "access-rule-name",
+        "*",
+        "*",
         "*",
         "*",
         "*",
@@ -285,8 +488,10 @@ ROWS: tuple[Row, ...] = (
         Rule.ALLOWED_BOUNDED,
         "_rule_to_dict returns the name on update",
     ),
-    # -- threat intelligence -------------------------------------------------
-    Row(
+    # -- threat intelligence (real endpoint and nested shape) ---------------
+    _r(
+        "*",
+        "threat-intelligence-config",
         "*",
         "*",
         "*",
@@ -294,14 +499,16 @@ ROWS: tuple[Row, ...] = (
         "*",
         "*",
         "*",
-        "GET /v1/settings/threat-intelligence -> $.urls",
+        "GET /v1/settings/threat-intel -> $.local_blocklists.urls[*]",
         Rule.ALLOWED_BOUNDED,
-        "operator-supplied local threat intelligence",
+        "the endpoint is /threat-intel and the shape is nested",
     ),
     # -- capture-on: where content legitimately lives ------------------------
-    Row(
+    _r(
         "*",
         "message-content",
+        "*",
+        "*",
         "*",
         "capture-on",
         "*",
@@ -309,11 +516,13 @@ ROWS: tuple[Row, ...] = (
         "*",
         "db:interaction_contents.input_json",
         Rule.REQUIRED,
-        "capture-on stores the full input here and nowhere else",
+        "capture-on stores the full input here",
     ),
-    Row(
+    _r(
         "*",
         "message-content",
+        "*",
+        "*",
         "*",
         "capture-on",
         "*",
@@ -323,9 +532,14 @@ ROWS: tuple[Row, ...] = (
         Rule.ALLOWED_BOUNDED,
         "derived output only",
     ),
-    Row(
+    # matches_json is REQUIRED only for detectors that report exact values.
+    # A classifier's DetectorResult has no source/value field, so requiring it
+    # there manufactures a failure for correct behaviour.
+    _r(
         "*",
         "message-content",
+        "*",
+        "confidential_and_pii_entity",
         "*",
         "capture-on",
         "*",
@@ -333,36 +547,70 @@ ROWS: tuple[Row, ...] = (
         "*",
         "db:interaction_contents.matches_json",
         Rule.REQUIRED,
-        "source-bound exact values, for detectors that report them",
+        "PII reports exact values",
     ),
-    # -- protected reads and the explicit export -----------------------------
-    Row(
+    _r(
         "*",
         "message-content",
+        "*",
+        "custom_entity",
+        "*",
+        "capture-on",
+        "*",
+        "*",
+        "*",
+        "db:interaction_contents.matches_json",
+        Rule.REQUIRED,
+        "custom entity reports exact values",
+    ),
+    _r(
+        "*",
+        "message-content",
+        "*",
+        "*",
+        "*",
+        "capture-on",
+        "*",
+        "*",
+        "*",
+        "db:interaction_contents.matches_json",
+        Rule.ALLOWED_BOUNDED,
+        "other detectors report no exact value, so its absence is correct",
+    ),
+    # -- protected reads and the explicit export -----------------------------
+    _r(
+        "*",
+        "message-content",
+        "*",
+        "*",
         "*",
         "capture-on",
         "read-full",
         "content:read-full",
         "*",
-        "GET /v1/logs/{id}/content -> $.input",
+        "GET /v1/logs/{id}/content -> $.messages[*].content",
         Rule.ALLOWED_BOUNDED,
-        "the stronger grant is what this projection requires",
+        "the projection returns messages, not a coarse $.input",
     ),
-    Row(
+    _r(
         "*",
         "message-content",
+        "*",
+        "*",
         "*",
         "capture-on",
         "read-matches",
         "content:read-matches",
         "*",
-        "GET /v1/logs/{id}/content?view=matches -> $.matches",
+        "GET /v1/logs/{id}/content -> $.matches.matches[*].value",
         Rule.ALLOWED_BOUNDED,
-        "matches omit surrounding content",
+        "the matches view is a nested block",
     ),
-    Row(
+    _r(
         "*",
         "message-content",
+        "*",
+        "*",
         "*",
         "capture-on",
         "content-export",
@@ -380,6 +628,8 @@ def resolve(
     leaf: str,
     placement: str,
     branch: str,
+    detector: str,
+    event: str,
     capture: str,
     operation: str,
     grant: str,
@@ -395,6 +645,8 @@ def resolve(
         "leaf": leaf,
         "placement": placement,
         "branch": branch,
+        "detector": detector,
+        "event": event,
         "capture": capture,
         "operation": operation,
         "grant": grant,
@@ -403,20 +655,12 @@ def resolve(
     }
     matches = [row for row in rows if _matches(row, given)]
     if not matches:
-        # FORBIDDEN by default -- on an enumerated surface. This says nothing
-        # about a surface nobody declared.
-        return Row(
-            leaf,
-            placement,
-            branch,
-            capture,
-            operation,
-            grant,
-            representation,
-            path,
-            Rule.FORBIDDEN,
-            "no rule matched; forbidden by default",
-        )
+        # The plan requires a zero-match occurrence to FAIL. Synthesising a
+        # FORBIDDEN row here reported success for an occurrence that matched no
+        # checked-in policy at all -- the resolver deciding, rather than the
+        # matrix. The catch-all below is a real row, so a genuine no-match now
+        # means the matrix itself is incomplete.
+        raise NoRule(f"no checked-in rule matches {path!r}")
 
     best = max(row.specificity for row in matches)
     winners = [row for row in matches if row.specificity == best]
@@ -459,4 +703,9 @@ def _path_matches(declared: str, actual: str) -> bool:
         return True
     pattern = re.escape(declared).replace(r"\{", "{").replace(r"\}", "}")
     pattern = re.sub(r"\{[a-z_]+\}", "[^/]+", pattern)
+    # `[*]` is an INDEX wildcard, not a literal. Treating it literally made
+    # every real list occurrence -- `$[0].pattern`, `$[0].name` -- resolve
+    # FORBIDDEN despite an explicit allow row, so the matrix classified
+    # intended output as a violation.
+    pattern = pattern.replace(re.escape("[*]"), r"\[\d+\]")
     return re.fullmatch(pattern, actual) is not None
