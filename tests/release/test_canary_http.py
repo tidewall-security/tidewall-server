@@ -132,7 +132,10 @@ def test_the_submitted_value_is_echoed_before_any_detector_runs(client, family):
     echoed = any(encoded in value for value in _echoed_inputs(response))
 
     if echoed:
-        RECORDER.record(
+        # Record AND fail with the signature, so the failure is tied to the
+        # occurrence that caused it. Accounting by node id alone excused any
+        # failure this test happened to produce, including an unrelated one.
+        RECORDER.record_and_fail(
             Signature(
                 case_id=f"validation-echo/capture-off/guard/api/{family.name}",
                 property="FORBIDDEN occurrence reached a surface",
@@ -140,13 +143,10 @@ def test_the_submitted_value_is_echoed_before_any_detector_runs(client, family):
                 surface_path=SURFACE,
                 representation=family.name,
                 occurrence_rule="FORBIDDEN",
-            )
+            ),
+            f"the {family.name} form of the canary was echoed in the 422 body "
+            f"before any detector ran: {response.text[:200]}",
         )
-
-    assert not echoed, (
-        f"the {family.name} form of the canary was echoed in the 422 body "
-        f"before any detector ran: {response.text[:200]}"
-    )
 
 
 def test_the_echo_is_in_the_input_field_specifically(client):

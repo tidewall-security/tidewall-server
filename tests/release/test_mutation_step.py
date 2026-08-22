@@ -336,3 +336,38 @@ def test_a_skip_is_classified_as_unaccounted():
     case = next(xml.iter("testcase"))
     assert case.find("skipped") is not None
     assert case.find("failure") is None and case.find("error") is None
+
+
+def test_a_failure_must_carry_the_signature_that_caused_it():
+    """Emitting a signature does not excuse an unrelated failure.
+
+    The runner accounted a failure whenever the same test node had emitted any
+    signature, never establishing that the signature CAUSED the failure. A
+    review probed it: a test that records a signature and then fails an
+    unrelated assertion was accepted. So a mutation could make an
+    already-emitting test fail for a different reason and pass unnoticed.
+
+    The failure message now carries its own signature, and the runner requires
+    the carried signature to be one that test emitted.
+    """
+    import pathlib
+
+    from tests.release.signatures import (
+        FAILURE_MARKER,
+        ExpectedSecurityFailure,
+        Signature,
+        encode,
+        signatures_in,
+    )
+
+    signature = Signature("c", "p", "col", "path", "plain", "FORBIDDEN")
+    message = str(ExpectedSecurityFailure(signature, "detail"))
+
+    assert FAILURE_MARKER in message
+    assert signatures_in(message) == {encode(signature)}
+    assert (
+        signatures_in("an unrelated assertion failed") == set()
+    ), "an unrelated message must carry no signature at all"
+
+    source = (pathlib.Path(__file__).resolve().parent / "run_mutation_step.py").read_text()
+    assert "signatures_in(message)" in source, "the runner no longer reads the signature carried by the failure"

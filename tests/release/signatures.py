@@ -44,12 +44,49 @@ class Signature:
         return tuple(getattr(self, f) for f in FIELDS)
 
 
+#: Marker that ties a JUnit failure to the signature that caused it.
+#:
+#: Accounting a failure by NODE ID alone excused any failure a
+#: signature-emitting test happened to produce -- including an unrelated one. A
+#: mutation could make such a test fail for a different reason and still be
+#: accepted. The failure message now carries its own signature, so the link is
+#: established rather than assumed.
+FAILURE_MARKER = "RELEASE-GATE-SIGNATURE"
+
+
+class ExpectedSecurityFailure(AssertionError):
+    """A security failure that carries the signature it emitted."""
+
+    def __init__(self, signature: Signature, detail: str) -> None:
+        self.signature = signature
+        super().__init__(f"{FAILURE_MARKER}={encode(signature)} :: {detail}")
+
+
+def encode(signature: Signature) -> str:
+    """A canonical, single-line encoding for embedding in a failure message."""
+    return "|".join(getattr(signature, f) for f in FIELDS)
+
+
+def signatures_in(message: str) -> set[str]:
+    """Every encoded signature a JUnit failure message carries."""
+    found = set()
+    for part in message.split(FAILURE_MARKER + "=")[1:]:
+        found.add(part.split(" :: ")[0].strip())
+    return found
+
+
 class Recorder:
     """Collects signatures for one run."""
 
     def __init__(self) -> None:
         self._signatures: list[Signature] = []
         self._nodeids: set[str] = set()
+        self._by_node: dict[str, set[str]] = {}
+
+    def record_and_fail(self, signature: Signature, detail: str) -> None:
+        """Record the signature and fail WITH it, so the two are tied."""
+        self.record(signature)
+        raise ExpectedSecurityFailure(signature, detail)
 
     def record(self, signature: Signature) -> None:
         self._signatures.append(signature)
@@ -59,7 +96,9 @@ class Recorder:
         # mutation runner could ignore.
         current = os.environ.get("PYTEST_CURRENT_TEST", "")
         if current:
-            self._nodeids.add(current.split(" ")[0])
+            node = current.split(" ")[0]
+            self._nodeids.add(node)
+            self._by_node.setdefault(node, set()).add(encode(signature))
 
     @property
     def signatures(self) -> list[Signature]:
@@ -76,6 +115,7 @@ class Recorder:
                 {
                     "signatures": [asdict(s) for s in self._signatures],
                     "nodeids": sorted(self._nodeids),
+                    "by_node": {k: sorted(v) for k, v in sorted(self._by_node.items())},
                 },
                 indent=2,
                 sort_keys=True,
@@ -85,6 +125,7 @@ class Recorder:
     def clear(self) -> None:
         self._signatures.clear()
         self._nodeids.clear()
+        self._by_node.clear()
 
 
 #: One recorder per run, written out by tests/release/conftest.py.
@@ -101,6 +142,16 @@ def _rows(path: pathlib.Path) -> list[dict]:
     """Tolerates the older bare-list format as well as the current object."""
     data = json.loads(path.read_text())
     return data["signatures"] if isinstance(data, dict) else data
+
+
+def signatures_by_node(path: pathlib.Path) -> dict[str, set[str]]:
+    """Which encoded signatures each test emitted."""
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text())
+    if not isinstance(data, dict):
+        return {}
+    return {k: set(v) for k, v in data.get("by_node", {}).items()}
 
 
 def accounted_nodeids(path: pathlib.Path) -> set[str]:

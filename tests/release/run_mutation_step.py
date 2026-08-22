@@ -111,10 +111,10 @@ def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, i
         text=True,
     )
 
-    from tests.release.signatures import accounted_nodeids
+    from tests.release.signatures import signatures_by_node, signatures_in
 
     observed: Counter = Counter()
-    accounted = accounted_nodeids(signatures)
+    by_node = signatures_by_node(signatures)
     if signatures.exists():
         payload = json.loads(signatures.read_text())
         rows = payload["signatures"] if isinstance(payload, dict) else payload
@@ -149,13 +149,13 @@ def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, i
                 observed[("component-mismatch", mismatch)] += 1
                 continue
 
-            # EXACT equality on the canonical node id, including the full
-            # parameter id. The prefix and substring fallbacks were both
-            # unnecessary -- the constructed id already matches exactly -- and
-            # unsafe: an unrelated failing test in a DIFFERENT file, named as a
-            # prefix of a parametrised signature-emitting test, was excused
-            # purely because its name was a substring of that test's node id.
-            if nodeid in accounted:
+            # ACCOUNTED means the failure CARRIES a signature this test
+            # emitted -- not merely that the test emitted one. Matching on node
+            # id alone excused any failure a signature-emitting test happened to
+            # produce, so a mutation could make such a test fail for an
+            # unrelated reason and still be accepted.
+            carried = signatures_in(message)
+            if carried and carried <= by_node.get(nodeid, set()):
                 continue
 
             unaccounted.add(nodeid)
