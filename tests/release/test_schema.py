@@ -72,7 +72,12 @@ def test_the_head_schema_satisfies_the_invariant(conn):
 
 
 def test_every_referential_action_is_pinned(conn):
-    assert referential_actions(conn) == set(REFERENTIAL_ACTIONS)
+    # A Counter now: a duplicate constraint with identical child column,
+    # parent column and actions collapses in a set, so an eleventh
+    # database-side writer could arrive with the count assertion green.
+    observed = referential_actions(conn)
+    assert set(observed) == set(REFERENTIAL_ACTIONS)
+    assert all(count == 1 for count in observed.values()), observed
 
 
 def test_ten_relationships_of_which_six_write_on_delete(conn):
@@ -474,3 +479,55 @@ def test_an_unknown_object_type_is_refused_unexamined(scratch):
 
     kinds = {v.kind for v in invariant(_FutureType(scratch))}
     assert "unknown-object-type" in kinds, kinds
+
+
+def test_a_duplicate_foreign_key_constraint_is_detected(scratch_path):
+    """Multiplicity, not membership.
+
+    Two distinct constraints with the same child column, parent column and
+    actions are one tuple in a set, so a duplicated relationship -- an eleventh
+    database-side writer -- passed a test named for counting ten.
+    """
+    mutate = sqlite3.connect(scratch_path)
+    try:
+        row = mutate.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='rule_sets'").fetchone()
+        original = row[0]
+        needle = next(
+            (line.strip().rstrip(",") for line in original.splitlines() if "FOREIGN KEY" in line),
+            None,
+        )
+        if needle is None:  # pragma: no cover - the schema stopped declaring one
+            pytest.skip("rule_sets has no inline FOREIGN KEY clause to duplicate")
+        mutated = original.replace(needle, f"{needle}, {needle}", 1)
+
+        mutate.execute("PRAGMA writable_schema=ON")
+        mutate.execute("UPDATE sqlite_master SET sql=? WHERE type='table' AND name='rule_sets'", (mutated,))
+        mutate.execute("PRAGMA writable_schema=OFF")
+        mutate.commit()
+    finally:
+        mutate.close()
+
+    reopened = sqlite3.connect(scratch_path)
+    try:
+        observed = referential_actions(reopened)
+        if max(observed.values()) < 2:  # pragma: no cover - rewrite did not take
+            pytest.skip("the stored-schema rewrite did not duplicate a constraint")
+        assert "referential-action-added" in {v.kind for v in invariant(reopened)}
+    finally:
+        reopened.close()
+
+
+def test_an_empty_string_column_name_is_still_mapped(scratch):
+    """`column is not None`, not truthiness.
+
+    SQLite permits a quoted empty-string column name and an ordinary index on
+    it. `""` is falsy, so the index copy was dropped and the canonical count
+    expected one physical copy where the permitted schema has two.
+    """
+    scratch.execute('CREATE TABLE empty_identifier ("" TEXT)')
+    scratch.execute('CREATE INDEX empty_identifier_i ON empty_identifier("")')
+    assert invariant(scratch) == [], "the invariant permits this table"
+
+    locations = copy_map(scratch)[("empty_identifier", "")]
+    assert "empty_identifier_i" in locations, dict(locations)
+    assert sum(locations.values()) == 2

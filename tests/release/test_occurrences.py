@@ -297,3 +297,8 @@ def test_threat_intelligence_config_is_allowed_on_every_surface_that_returns_it(
         path=path,
     )
     assert row.rule is Rule.ALLOWED_BOUNDED, row
+    # The row's identity, not merely its verdict: the catch-all is FORBIDDEN,
+    # so a rule check alone cannot distinguish "the threat-intelligence row
+    # won" from "some unrelated allow row won".
+    assert row in ROWS
+    assert row.placement == "threat-intelligence-config", row

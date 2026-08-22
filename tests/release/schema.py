@@ -82,17 +82,21 @@ def _tables(conn: sqlite3.Connection) -> list[str]:
     return [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")]
 
 
-def referential_actions(conn: sqlite3.Connection) -> set[tuple[str, str, str, str, str, str]]:
+def referential_actions(conn: sqlite3.Connection) -> collections.Counter[tuple[str, str, str, str, str, str]]:
     """Every foreign key, as (table, column, parent, on_update, on_delete).
 
     foreign_key_list columns: (id, seq, table, from, to, on_update, on_delete,
     match).
     """
-    out: set[tuple[str, str, str, str, str]] = set()
+    out: collections.Counter[tuple[str, str, str, str, str, str]] = collections.Counter()
     for table in _tables(conn):
         for fk in conn.execute(f"PRAGMA foreign_key_list('{table}')"):
             # (id, seq, table, from, to, on_update, on_delete, match)
-            out.add((table, fk[3], fk[2], fk[4], fk[5], fk[6]))
+            # A Counter, not a set: two distinct constraints with the same
+            # child column, parent column and actions collapse to one tuple,
+            # so an eleventh database-side writer could arrive while the
+            # count assertion stayed green.
+            out[(table, fk[3], fk[2], fk[4], fk[5], fk[6])] += 1
     return out
 
 
@@ -165,7 +169,12 @@ def copy_map(conn: sqlite3.Connection) -> dict[tuple[str, str], collections.Coun
                 # key slots in one index, so the value exists twice there. A
                 # set of B-tree names collapses that to one and cannot be an
                 # occurrence-count oracle.
-                if entry[5] == 1 and column and (table, column) in out:
+                # `column is not None`, not truthiness: SQLite permits a
+                # quoted empty-string column name and an ordinary index on it,
+                # and `""` is falsy -- so the index copy was dropped and the
+                # canonical count expected one physical copy where the
+                # permitted schema has two.
+                if entry[5] == 1 and column is not None and (table, column) in out:
                     out[(table, column)][name] += 1
     return out
 
@@ -184,10 +193,13 @@ def invariant(conn: sqlite3.Connection) -> list[InvariantViolation]:
                 violations.append(InvariantViolation(f"{prefix}{kind}", name))
 
     observed = referential_actions(conn)
-    for extra in sorted(observed - REFERENTIAL_ACTIONS):
-        violations.append(InvariantViolation("referential-action-added", str(extra)))
-    for missing in sorted(REFERENTIAL_ACTIONS - observed):
-        violations.append(InvariantViolation("referential-action-removed", str(missing)))
+    expected = collections.Counter(REFERENTIAL_ACTIONS)
+    for entry, count in sorted(observed.items()):
+        if count != expected.get(entry, 0):
+            violations.append(InvariantViolation("referential-action-added", f"{entry} x{count}"))
+    for entry in sorted(expected):
+        if entry not in observed:
+            violations.append(InvariantViolation("referential-action-removed", str(entry)))
 
     for table in _tables(conn):
         # table_xinfo, not table_info: only the former can see generated columns

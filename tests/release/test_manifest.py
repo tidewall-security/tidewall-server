@@ -274,20 +274,24 @@ def test_the_operation_and_grant_domains_are_fully_exercised():
     }
 
 
-def test_a_decoy_class_cannot_satisfy_the_report_match_check(tmp_path: pathlib.Path, monkeypatch):
-    """ "Some class in the module" was not the claim being made.
+def test_a_decoy_class_cannot_satisfy_the_report_match_check(tmp_path, monkeypatch):
+    """Exercises `report_match_callers()` itself, not a helper it happens to use.
 
-    Removing the call from the REGISTERED detector and adding an unregistered
-    decoy class that calls the same wrapper left all twenty-seven tests green,
-    while the registered PII detector had stopped supplying the exact matches
-    Task 3 marks REQUIRED in matches_json.
+    The first version called `_calls_any()` directly on synthetic AST nodes and
+    never invoked the function under test at all -- so the round-5 mutant
+    (crediting any class in the module) would have passed it. This points the
+    real function at a fake tree and asserts the registered class is what
+    decides.
     """
-    import ast
-
     from tests.release import manifest
 
-    module = tmp_path / "decoy.py"
-    module.write_text(
+    root = tmp_path
+    (root / "app").mkdir()
+    (root / "app" / "scanner_engine.py").write_text(
+        "_DETECTOR_REGISTRY: dict = {\n" '    "fake_detector": ("app.detectors.fake", "Registered"),\n' "}\n"
+    )
+    (root / "app" / "detectors").mkdir()
+    (root / "app" / "detectors" / "fake.py").write_text(
         "def _report_match(*a, **k):\n"
         "    report_match(*a, **k)\n"
         "\n"
@@ -299,12 +303,34 @@ def test_a_decoy_class_cannot_satisfy_the_report_match_check(tmp_path: pathlib.P
         "    def scan(self):\n"
         "        _report_match(1)\n"
     )
-    tree = ast.parse(module.read_text())
-    helpers = {n.name for n in tree.body if isinstance(n, ast.FunctionDef) and manifest._calls_any(n, {"report_match"})}
-    registered = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Registered")
-    decoy = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Decoy")
+    monkeypatch.setattr(manifest, "__file__", str(root / "tests" / "release" / "manifest.py"))
+    (root / "tests" / "release").mkdir(parents=True)
 
-    assert not manifest._calls_any(
-        registered, helpers | {"report_match"}
-    ), "the registered class does not call it, and must not be credited"
-    assert manifest._calls_any(decoy, helpers | {"report_match"}), "the decoy does call it"
+    assert manifest.report_match_callers() == frozenset(), (
+        "the decoy calls the wrapper and the REGISTERED class does not; "
+        "crediting the detector would be the round-5 defect"
+    )
+
+
+def test_the_registered_class_is_credited_when_it_does_call(tmp_path, monkeypatch):
+    """The other direction, so the check is not simply always-empty."""
+    from tests.release import manifest
+
+    root = tmp_path
+    (root / "app").mkdir()
+    (root / "app" / "scanner_engine.py").write_text(
+        "_DETECTOR_REGISTRY: dict = {\n" '    "fake_detector": ("app.detectors.fake", "Registered"),\n' "}\n"
+    )
+    (root / "app" / "detectors").mkdir()
+    (root / "app" / "detectors" / "fake.py").write_text(
+        "def _report_match(*a, **k):\n"
+        "    report_match(*a, **k)\n"
+        "\n"
+        "class Registered:\n"
+        "    def scan(self):\n"
+        "        _report_match(1)\n"
+    )
+    (root / "tests" / "release").mkdir(parents=True)
+    monkeypatch.setattr(manifest, "__file__", str(root / "tests" / "release" / "manifest.py"))
+
+    assert manifest.report_match_callers() == frozenset({"fake_detector"})

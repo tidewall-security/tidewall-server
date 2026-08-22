@@ -20,8 +20,16 @@ the line whose branch it names, so it moves with the code it describes.
 **What this does and does not buy.** It cannot discover a component nobody
 marked — that is the residual, and it is why the manifest comparison is only
 one of the two oracles. What it does buy is that adding a marked path without
-adding it to the manifest fails the build, and deleting a path from the source
-without deleting its manifest entry fails too.
+adding it to the manifest fails the build, and deleting a MARKER without
+deleting its manifest entry fails too.
+
+Deleting the marked *thing* is a weaker guarantee than deleting its marker. The
+eighteen secrets plugins are declared by a block of comments above the plugin
+list rather than bound to their individual entries, so removing a plugin while
+leaving its marker changes nothing here. Comments cannot bind to the construct
+they name; the honest statement is that this registry tracks DECLARATIONS, and
+a declaration going stale relative to the code beside it is what Task 5's
+observation exists to catch.
 """
 
 from __future__ import annotations
