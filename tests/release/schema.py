@@ -25,7 +25,6 @@ sixth class arriving becomes a build failure rather than a silent hole.
 from __future__ import annotations
 
 import collections
-import re
 import sqlite3
 from dataclasses import dataclass
 
@@ -139,21 +138,20 @@ def copy_map(conn: sqlite3.Connection) -> dict[tuple[str, str], collections.Coun
         # put its value in indexes that never carry it and double-counted the
         # composite autoindex, on a schema the invariant permits.
         key_columns = [r for r in info if r[5] > 0]
-        rowid_alias = None
-        if len(key_columns) == 1 and (key_columns[0][2] or "").upper() == "INTEGER":
-            candidate = key_columns[0][1]
-            # SQLite's DESC exception: `INTEGER PRIMARY KEY DESC` is NOT a
-            # rowid alias, so its value is absent from secondary indexes.
-            # Claiming otherwise false-fails the canonical byte count on a
-            # schema the invariant permits.
-            ddl = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
-            text = (ddl[0] if ddl else "") or ""
-            if not re.search(
-                rf"\b{re.escape(candidate)}\b[^,)]*INTEGER\s+PRIMARY\s+KEY\s+DESC",
-                text,
-                re.IGNORECASE,
-            ):
-                rowid_alias = candidate
+        # A genuine rowid alias is identified STRUCTURALLY: SQLite creates no
+        # pk-origin autoindex for one, because the rowid B-tree already is the
+        # key. Every non-alias primary key has one -- DESC, composite, TEXT.
+        #
+        # The previous rule matched DDL tokens, and a legal SQL comment between
+        # `INTEGER` and `PRIMARY KEY DESC` evaded it, so a non-alias column was
+        # counted into indexes that never carry it. Asking SQLite what it built
+        # needs no lexical guessing at all.
+        has_pk_autoindex = any(index[3] == "pk" for index in conn.execute(f"PRAGMA index_list('{table}')"))
+        rowid_alias = (
+            key_columns[0][1]
+            if len(key_columns) == 1 and (key_columns[0][2] or "").upper() == "INTEGER" and not has_pk_autoindex
+            else None
+        )
         if rowid_alias is not None:
             for index in conn.execute(f"PRAGMA index_list('{table}')"):
                 out[(table, rowid_alias)][index[1]] += 1

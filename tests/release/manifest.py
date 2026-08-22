@@ -110,9 +110,50 @@ OPERATIONS: tuple[str, ...] = (
     "policy-admin",
     "settings-admin",
     "content-export",
+    # The protected reads. Task 3's matrix already referenced these and Task 2
+    # declared neither, so the two halves disagreed about what operations
+    # exist.
+    "read-full",
+    "read-matches",
 )
 
-GRANTS: tuple[str, ...] = ("api", "admin", "content:export")
+GRANTS: tuple[str, ...] = (
+    "api",
+    "admin",
+    "content:export",
+    "content:read-full",
+    "content:read-matches",
+)
+
+#: Which grant each operation requires. Set membership was not enough: swapping
+#: a row's operation for another DECLARED one left both set equalities
+#: unchanged even when that operation cannot invoke the named detector.
+OPERATION_GRANT: dict[str, str] = {
+    "guard": "api",
+    "access-rule-admin": "admin",
+    "policy-admin": "admin",
+    "settings-admin": "admin",
+    "content-export": "content:export",
+    "read-full": "content:read-full",
+    "read-matches": "content:read-matches",
+}
+
+#: Which operations can legitimately carry each placement. A guard case cannot
+#: plant a value through policy administration, and vice versa.
+PLACEMENT_OPERATIONS: dict[str, tuple[str, ...]] = {
+    "message-content": ("guard", "read-full", "read-matches"),
+    "tool-name": ("guard",),
+    "tool-description": ("guard",),
+    "tool-parameters": ("guard",),
+    "caller-metadata": ("guard",),
+    "access-rule-name": ("access-rule-admin",),
+    "prompt-list-pattern": ("guard", "settings-admin"),
+    "export-target-config": ("content-export", "settings-admin"),
+    "model-intent-statement": ("settings-admin",),
+    "policy-name": ("policy-admin",),
+    "rule-set-detector-config": ("policy-admin",),
+    "threat-intelligence-config": ("settings-admin",),
+}
 
 #: The events a scan can be performed for.
 EVENTS: tuple[str, ...] = ("input", "output", "tool_listing")
@@ -242,34 +283,40 @@ EXACT_MATCH_DETECTORS: frozenset[str] = frozenset({"confidential_and_pii_entity"
 
 
 def report_match_callers() -> frozenset[str]:
-    """Which detector modules actually call `report_match`, read from source.
+    """Which registered detectors call `report_match`, derived from the registry.
 
-    The constant above was a hand-copied measurement, and a test comparing the
-    constant to the same hardcoded pair could never notice production changing.
-    This reads the tree, so wiring a third detector fails the drift check.
+    The first version hard-coded a module-to-detector map and substring-matched
+    each file. A detector registered in a NEW module would have been ignored
+    unless someone also updated that second handwritten map -- a source check
+    with a hand-copied blind spot, claiming to detect the drift it could not
+    see. And a mention in a comment counted as a call.
+
+    This walks `_DETECTOR_REGISTRY` for the module of every registered
+    detector, and looks for an actual CALL rather than the bare name.
     """
+    import ast
     import pathlib as _p
+    import re as _re
 
-    root = _p.Path(__file__).resolve().parents[2] / "app" / "detectors"
-    module_to_detector = {
-        "pii": "confidential_and_pii_entity",
-        "custom_entity": "custom_entity",
-        "secrets": "secret_and_key_entity",
-        "malicious_prompt": "malicious_prompt",
-        "malicious_entity": "malicious_entity",
-        "competitors": "competitors",
-        "topic": "topic",
-        "language": "language",
-        "code": "code",
-        "emoji_detector": "emoji",
-        "mcp_validation": "mcp_validation",
-    }
+    root = _p.Path(__file__).resolve().parents[2]
+    source = (root / "app" / "scanner_engine.py").read_text()
+    block = source[source.index("_DETECTOR_REGISTRY") :]
+    block = block[: block.index("\n}")]
+    pairs = _re.findall(r'^\s+"([a-z_]+)":\s*\("([a-z_.]+)"', block, _re.M)
+
     found = set()
-    for path in root.glob("*.py"):
-        if "report_match" in path.read_text():
-            name = module_to_detector.get(path.stem)
-            if name:
-                found.add(name)
+    for detector, module in pairs:
+        path = root.joinpath(*module.split(".")).with_suffix(".py")
+        if not path.exists():  # pragma: no cover - a registry pointing nowhere
+            raise AssertionError(f"{detector} names a module that does not exist: {module}")
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                func = node.func
+                name = getattr(func, "attr", None) or getattr(func, "id", None)
+                if name == "report_match":
+                    found.add(detector)
+                    break
     return frozenset(found)
 
 

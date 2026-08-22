@@ -247,11 +247,10 @@ def test_every_row_resolves_to_exactly_one_rule():
             pytest.fail(f"{row.path} is ambiguous: {exc}")
         except OutOfDomain:
             pytest.fail(f"{row.path} is both a declared row and out of domain")
-        # IDENTITY, not merely "something resolved". Without this a row
-        # shadowed everywhere by another passed, despite being dead policy.
-        assert (
-            resolved is row or resolved.rule is row.rule
-        ), f"{row.path} resolves to {resolved.why!r}, not to itself: dead policy"
+        # Strict identity. An `or resolved.rule is row.rule` arm was the
+        # loophole: a row shadowed everywhere by a more-specific row sharing
+        # its rule passed as reachable, which is dead policy.
+        assert resolved is row, f"{row.path} resolves to {resolved.why!r}, not to itself: dead policy"
 
 
 def test_forbidden_by_default_is_scoped_to_enumerated_surfaces():

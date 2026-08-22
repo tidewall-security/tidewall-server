@@ -26,7 +26,9 @@ from tests.release.manifest import (
     GRANTS,
     LEAVES,
     NOT_EVALUATED,
+    OPERATION_GRANT,
     OPERATIONS,
+    PLACEMENT_OPERATIONS,
     PLACEMENTS,
     REPRESENTATIONS,
     CaptureMode,
@@ -223,12 +225,24 @@ def test_the_event_scoping_constant_matches_production():
     assert EVENT_SCOPED == source_event_scoping()
 
 
-def test_every_case_operation_and_grant_is_declared():
-    """Both are in Case.identity and neither had a domain.
+def test_every_case_binds_its_operation_to_its_placement_and_grant():
+    """The RELATION, not marginal set membership.
 
-    An invented operation passed all twenty tests before this.
+    Set equality left a row free to swap `guard`/`api` for the equally
+    declared `policy-admin`/`admin` even where that operation cannot invoke the
+    named detector. Both halves must hold per case.
     """
+    for case in CASES:
+        assert case.operation in OPERATIONS, case.identity
+        assert case.grant in GRANTS, case.identity
+        assert OPERATION_GRANT[case.operation] == case.grant, (
+            f"{case.identity}: {case.operation} requires " f"{OPERATION_GRANT[case.operation]}, not {case.grant}"
+        )
+        assert (
+            case.operation in PLACEMENT_OPERATIONS[case.placement]
+        ), f"{case.identity}: {case.placement} cannot be reached by {case.operation}"
+
+
+def test_the_operation_and_grant_domains_are_fully_exercised():
     assert {c.operation for c in CASES} <= set(OPERATIONS)
     assert {c.grant for c in CASES} <= set(GRANTS)
-    assert set(OPERATIONS) == {c.operation for c in CASES}
-    assert set(GRANTS) == {c.grant for c in CASES}

@@ -434,3 +434,21 @@ def test_an_integer_primary_key_desc_is_not_a_rowid_alias(scratch):
     locations = copy_map(scratch)[("desc_pk", "id")]
     assert "desc_pk_v" not in locations, dict(locations)
     assert locations["desc_pk"] == 1
+
+
+def test_a_desc_primary_key_with_a_comment_is_not_a_rowid_alias(scratch):
+    """The lexical rule missed this; the structural one cannot.
+
+    A legal SQL comment between `INTEGER` and `PRIMARY KEY DESC` evaded a
+    token-layout regex. SQLite's own metadata answers directly: a genuine alias
+    has no pk-origin autoindex, and every other primary key has one.
+    """
+    scratch.execute("CREATE TABLE desc_comment (id INTEGER /* accepted SQL comment */ PRIMARY KEY DESC, v TEXT)")
+    scratch.execute("CREATE INDEX desc_comment_v ON desc_comment(v)")
+    scratch.execute("INSERT INTO desc_comment(id, v) VALUES (123, 'x')")
+    assert invariant(scratch) == [], "the invariant permits this table"
+    assert scratch.execute("SELECT rowid, id FROM desc_comment").fetchone() == (1, 123)
+
+    locations = copy_map(scratch)[("desc_comment", "id")]
+    assert "desc_comment_v" not in locations, dict(locations)
+    assert locations["sqlite_autoindex_desc_comment_1"] == 1, dict(locations)
