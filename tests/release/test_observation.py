@@ -206,3 +206,47 @@ def test_a_case_that_reached_no_marked_component_says_so():
     """Distinct from reaching the wrong one, and a different thing to fix."""
     with pytest.raises(ComponentMismatch, match="no marked component at all"):
         verify_declared_component("case-1", "malicious_prompt/generic_injection_ml", set())
+
+
+def test_a_trailing_marker_marks_its_own_statement(tmp_path):
+    """The grammar accepts a comment token on a statement's own line.
+
+    Selecting the first statement strictly AFTER the marker line skipped that
+    statement and marked the next one, so the wrong code was credited.
+    """
+    from tests.release.inventory import scan_source
+
+    root = tmp_path / "app"
+    root.mkdir()
+    (root / "t.py").write_text(
+        "def f(flag):\n"
+        "    if flag:\n"
+        "        return 'taken'  # release:component alpha/trailing -- the taken branch\n"
+        "    return 'other'\n"
+    )
+    component = next(c for c in scan_source(root) if c.identity == "alpha/trailing")
+    region = region_for(component, root)
+    assert region.start == 3 and region.end == 3, f"marked lines {region.start}-{region.end}; the marker is on line 3"
+
+
+def test_a_marker_above_a_for_loop_is_narrowed_to_the_loop_body(tmp_path):
+    """Not only `if`. A marker above a loop header is credited when the header
+    runs, including when the loop body never executes."""
+    from tests.release.inventory import scan_source
+
+    root = tmp_path / "app"
+    root.mkdir()
+    (root / "loop.py").write_text(
+        "def f(items):\n"
+        "    # release:component beta/per_item -- work done once per item\n"
+        "    for item in items:\n"
+        "        print(item)\n"
+        "    return 'done'\n"
+    )
+    component = next(c for c in scan_source(root) if c.identity == "beta/per_item")
+    region = region_for(component, root)
+    assert region.start == 4, (
+        f"region starts at {region.start}; the loop BODY starts at line 4, the "
+        "header at line 3 -- a header-anchored region is credited even when the "
+        "body never runs"
+    )

@@ -83,7 +83,11 @@ def _branch_bodies(path: Path) -> dict[int, tuple[int, int]]:
 def region_for(component: Component, root: Path = APP) -> Region:
     """The AST extent of the statement the marker introduces."""
     path = root.parent / component.source
-    candidates = [r for r in _statement_regions(path) if r[0] > component.line]
+    # `>=`, not `>`. The grammar accepts a TRAILING marker -- a comment token
+    # on the same line as a statement -- and `>` skipped that statement to mark
+    # the next one. For a marker on its own line the two are identical, because
+    # no statement begins on a comment line.
+    candidates = [r for r in _statement_regions(path) if r[0] >= component.line]
     if not candidates:
         raise NoRegion(f"{component.identity} at {component.source}:{component.line} " "introduces no statement")
     # The statement STARTING SOONEST after the marker. Sorting by (start, end)
