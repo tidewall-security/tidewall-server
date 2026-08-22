@@ -1,1 +1,79 @@
-[]
+[
+  [
+    [
+      "validation-echo/capture-off/guard/api/json-escaped",
+      "FORBIDDEN occurrence reached a surface",
+      "http-response-body",
+      "POST /v1/guard_chat_completions -> $.detail[*].input",
+      "json-escaped",
+      "FORBIDDEN"
+    ],
+    1
+  ],
+  [
+    [
+      "validation-echo/capture-off/guard/api/nfc",
+      "FORBIDDEN occurrence reached a surface",
+      "http-response-body",
+      "POST /v1/guard_chat_completions -> $.detail[*].input",
+      "nfc",
+      "FORBIDDEN"
+    ],
+    1
+  ],
+  [
+    [
+      "validation-echo/capture-off/guard/api/nfd",
+      "FORBIDDEN occurrence reached a surface",
+      "http-response-body",
+      "POST /v1/guard_chat_completions -> $.detail[*].input",
+      "nfd",
+      "FORBIDDEN"
+    ],
+    1
+  ],
+  [
+    [
+      "validation-echo/capture-off/guard/api/percent-encoded",
+      "FORBIDDEN occurrence reached a surface",
+      "http-response-body",
+      "POST /v1/guard_chat_completions -> $.detail[*].input",
+      "percent-encoded",
+      "FORBIDDEN"
+    ],
+    1
+  ],
+  [
+    [
+      "validation-echo/capture-off/guard/api/plain",
+      "FORBIDDEN occurrence reached a surface",
+      "http-response-body",
+      "POST /v1/guard_chat_completions -> $.detail[*].input",
+      "plain",
+      "FORBIDDEN"
+    ],
+    1
+  ],
+  [
+    [
+      "validation-echo/capture-off/guard/api/raw-bytes",
+      "FORBIDDEN occurrence reached a surface",
+      "http-response-body",
+      "POST /v1/guard_chat_completions -> $.detail[*].input",
+      "raw-bytes",
+      "FORBIDDEN"
+    ],
+    1
+  ],
+  [
+    [
+      "validation-echo/capture-off/guard/api/unicode-escaped",
+      "FORBIDDEN occurrence reached a surface",
+      "http-response-body",
+      "POST /v1/guard_chat_completions -> $.detail[*].input",
+      "unicode-escaped",
+      "FORBIDDEN"
+    ],
+    1
+  ]
+]
