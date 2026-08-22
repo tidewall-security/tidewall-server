@@ -18,8 +18,25 @@ class NoShapeForLeaf(Exception):
     """A leaf with no shaping rule. NOT a pass -- the case cannot be driven."""
 
 
-def shape(leaf: str, canary: str) -> str:
-    """The text to plant for `leaf`, embedding `canary`."""
+#: States whose meaning is "the component ran and found NOTHING". A case
+#: declaring one of these must be planted with a value that finds nothing, or
+#: it reaches the detected state as well and the declared-component check
+#: passes without distinguishing them.
+NEGATIVE_STATES: frozenset[str] = frozenset({"pattern_match", "no_entities"})
+
+
+def shape(leaf: str, canary: str, sub_path: str = "") -> str:
+    """The text to plant for `leaf`, embedding `canary`.
+
+    `sub_path` selects between the found-something and found-nothing forms.
+    Without it, an emoji case declaring `pattern_match` was planted with an
+    emoji and reached `reported` too -- so the check passed, but would have
+    passed for a case declaring either state.
+    """
+    if sub_path in NEGATIVE_STATES:
+        # Opaque, and deliberately carrying nothing any detector matches.
+        return f"{canary} nothing of interest here"
+
     if leaf == "email":
         return f"contact {canary.lower()}@example.com about it"
     if leaf == "card":
@@ -34,7 +51,7 @@ def shape(leaf: str, canary: str) -> str:
         return f"ssn 078-05-1120 ref {canary}"
     if leaf == "random-canary":
         # Opaque by definition, but carrying an emoji so an emoji case can
-        # reach its detected branch.
+        # reach its detected branch. The found-nothing form is returned above.
         return f"{canary} \U0001f600"
     if leaf in ("mcp-name", "mcp-description", "mcp-parameters"):
         return canary

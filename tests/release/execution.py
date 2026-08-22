@@ -93,7 +93,7 @@ def execute(case, canary: str) -> Execution:
     # card correctly ignores an opaque token, and feeding every case the same
     # shapeless canary made 27 of them observe a "found nothing" state while
     # declaring a "found something" one.
-    text = shape(case.leaf, canary)
+    text = shape(case.leaf, canary, case.sub_path)
     tools = tools_for(case.leaf, canary)
 
     from contextlib import nullcontext
