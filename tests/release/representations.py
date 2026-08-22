@@ -77,7 +77,23 @@ def _json_escaped(value: str) -> bytes:
 
 
 def _unicode_escaped(value: str) -> bytes:
-    return "".join(f"\\u{ord(c):04x}" for c in value).encode("ascii")
+    """`\\uXXXX` escapes, with SURROGATE PAIRS for astral codepoints.
+
+    `f"\\u{ord(c):04x}"` emits five hex digits for anything above the BMP --
+    U+1F600 became the malformed `\\u1f600` -- so the form was not decodable
+    and did not round-trip. Every escape is exactly four hex digits, which is
+    what `\\u` means.
+    """
+    out = []
+    for char in value:
+        point = ord(char)
+        if point > 0xFFFF:
+            point -= 0x10000
+            out.append(f"\\u{0xD800 + (point >> 10):04x}")
+            out.append(f"\\u{0xDC00 + (point & 0x3FF):04x}")
+        else:
+            out.append(f"\\u{point:04x}")
+    return "".join(out).encode("ascii")
 
 
 def _raw_bytes(value: str) -> bytes:
@@ -94,6 +110,60 @@ def _nfd(value: str) -> bytes:
 
 def _percent_encoded(value: str) -> bytes:
     return urllib.parse.quote(value, safe="").encode("ascii")
+
+
+# --- DECODERS -----------------------------------------------------------
+#
+# The module docstring has always said each family needs its own decoder. Only
+# the encoders existed, so a case declaring a representation was planted with
+# escaped bytes and handed straight to a detector -- skipping the decode any
+# real boundary performs. The escaped form is not the value; it is the value's
+# wire encoding, and a detector that never sees the decode cannot match it.
+
+
+def _decode_plain(value: str) -> str:
+    return value
+
+
+def _decode_json_escaped(value: str) -> str:
+    return json.loads(f'"{value}"')
+
+
+def _decode_unicode_escaped(value: str) -> str:
+    # `unicode_escape` leaves surrogate halves unpaired; json re-joins them.
+    return json.loads(f'"{value}"')
+
+
+def _decode_nfc(value: str) -> str:
+    return unicodedata.normalize("NFC", value)
+
+
+def _decode_nfd(value: str) -> str:
+    # Decoding an NFD form yields the canonical composed value, which is what a
+    # comparison against the original expects.
+    return unicodedata.normalize("NFC", value)
+
+
+def _decode_percent(value: str) -> str:
+    return urllib.parse.unquote(value)
+
+
+DECODERS: dict[str, Callable[[str], str]] = {
+    "plain": _decode_plain,
+    "json-escaped": _decode_json_escaped,
+    "unicode-escaped": _decode_unicode_escaped,
+    "raw-bytes": _decode_plain,
+    "nfc": _decode_nfc,
+    "nfd": _decode_nfd,
+    "percent-encoded": _decode_percent,
+}
+
+
+def decode(representation: str, value: str) -> str:
+    """The value a boundary would hand on after decoding this family's form."""
+    if representation not in DECODERS:
+        raise KeyError(f"no decoder for representation {representation!r}")
+    return DECODERS[representation](value)
 
 
 #: The seven families the design names, in the manifest's declared order.

@@ -56,6 +56,7 @@ class Execution:
     case_id: str
     canary: str
     planted: str
+    wire: str
     detector: str
     event: str
     result: object
@@ -72,6 +73,42 @@ class Execution:
     def occurrences_of(self, value: str) -> dict[str, int]:
         """Where the canary actually appears in the produced surfaces."""
         return {field_name: text.count(value) for field_name, text in self.surfaces().items() if value in text}
+
+
+def encode_for(representation: str, value: str) -> str:
+    """The planted value in one representation family's form.
+
+    Six of the seven families are byte-identical for ASCII text, which is why
+    an ASCII probe collapses them; the encoders are still applied so a case
+    declaring a family genuinely carries that family's bytes when they differ.
+    """
+    from tests.release.representations import FAMILIES
+
+    family = next((f for f in FAMILIES if f.name == representation), None)
+    if family is None:
+        raise CaseNotExecutable(f"unknown representation {representation!r}")
+    return family.encode(value).decode("utf-8", "surrogateescape")
+
+
+def decode_at_boundary(representation: str, wire: str) -> str:
+    """What the boundary hands on after decoding this family's wire form.
+
+    This is the step whose absence made every representation case identical.
+    Instrumented by `decoded_differs_from_wire` so a suite can assert the
+    decode actually did something for the families where it should.
+    """
+    from tests.release.representations import decode
+
+    return decode(representation, wire)
+
+
+def decoded_differs_from_wire(representation: str, value: str) -> bool:
+    """Whether this family's wire form is distinguishable for `value`.
+
+    Six of seven families are byte-identical for ASCII, so a test asserting
+    "the decode changed something" must only demand it where it is true.
+    """
+    return encode_for(representation, value) != value
 
 
 def execute(case, canary: str) -> Execution:
@@ -93,7 +130,19 @@ def execute(case, canary: str) -> Execution:
     # card correctly ignores an opaque token, and feeding every case the same
     # shapeless canary made 27 of them observe a "found nothing" state while
     # declaring a "found something" one.
-    text = shape(case.leaf, canary, case.sub_path)
+    plain = shape(case.leaf, canary, case.sub_path)
+
+    # THE REPRESENTATION IS APPLIED AT THE WIRE AND DECODED AT THE BOUNDARY,
+    # which is what a real ingress does. Handing the ESCAPED form straight to a
+    # detector skips the decode entirely, and a detector matching emoji
+    # codepoints correctly fails to match the ASCII text `\ud83d\ude00`.
+    #
+    # Before this, the representation was used only to LABEL the emitted
+    # signature: every case ran identical plain text, the manifest's seven-fold
+    # multiplicity was accepted without being driven, and a broken decoder
+    # could not fail any suite. A label is not a drive.
+    wire = encode_for(case.representation, plain)
+    text = decode_at_boundary(case.representation, wire)
     tools = tools_for(case.leaf, canary)
 
     from contextlib import nullcontext
@@ -115,6 +164,7 @@ def execute(case, canary: str) -> Execution:
         case_id=case.identity,
         canary=canary,
         planted=text,
+        wire=wire,
         detector=case.detector,
         event=event,
         result=result,

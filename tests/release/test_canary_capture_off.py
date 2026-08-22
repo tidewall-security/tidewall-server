@@ -20,11 +20,13 @@ from tests.release.execution import (
     SELF_CONTAINED_DETECTORS,
     CaseNotExecutable,
     chain_for,
+    encode_for,
     execute,
     is_not_evaluated,
     witnesses_for,
 )
 from tests.release.manifest import load_cases
+from tests.release.representations import FAMILIES
 from tests.release.signatures import RECORDER, Signature
 from tests.release.witnesses import AbsenceEvaluator, assert_absent, gate
 
@@ -251,3 +253,67 @@ def test_an_evaluated_case_IS_sensitive_to_its_planted_value():
     )
     assert "emoji/reported" in with_emoji
     assert "emoji/reported" not in without
+
+
+# --- the representation axis is DRIVEN, not merely labelled -----------------
+
+
+@pytest.mark.parametrize("family", [f.name for f in FAMILIES], ids=lambda n: n)
+def test_each_representation_family_has_cases_and_is_driven(family: str):
+    """The manifest's seven-fold multiplicity must be exercised, not accepted.
+
+    Every representation case previously ran identical plain text: the value
+    was encoded nowhere and the family used only to label a signature.
+    """
+    cases = [c for c in EXECUTABLE if c.representation == family]
+    assert cases, f"no executable case declares representation {family}"
+
+    case = cases[0]
+    execution = execute(MANIFEST_CASES[case.case_id], case.canary)
+    assert execution.wire, "nothing was placed on the wire"
+    assert execution.planted, "nothing was handed to the boundary"
+
+
+@pytest.mark.parametrize("family", [f.name for f in FAMILIES], ids=lambda n: n)
+def test_the_wire_form_round_trips_through_its_own_decoder(family: str):
+    """A decoder that is not an inverse silently changes the planted value.
+
+    `\\uXXXX` escaping emitted five hex digits for astral codepoints, so the
+    form was malformed and did not round-trip at all.
+    """
+    from tests.release.representations import decode
+
+    value = "CANARY-café-\U0001f600-9f"
+    wire = encode_for(family, value)
+    assert decode(family, wire) == value
+
+
+@pytest.mark.parametrize("family", [f.name for f in FAMILIES if f.name not in ("plain", "raw-bytes", "nfc")])
+def test_a_family_whose_wire_form_differs_is_actually_transformed(family: str):
+    """The control on the drive.
+
+    If encode_for returned its input for every family, the tests above would
+    pass while nothing was encoded. Six of seven families are byte-identical
+    for ASCII, so this uses a value where they must differ.
+    """
+    value = "CANARY-café-\U0001f600-9f"
+    assert encode_for(family, value) != value, f"{family} did not transform the value"
+
+
+def test_the_boundary_decode_is_what_the_detector_sees():
+    """Not the wire form.
+
+    A detector matching emoji codepoints correctly fails to match the ASCII
+    text `\\ud83d\\ude00`, so handing it the escaped form would make every
+    escaped emoji case observe the wrong state -- which is what happened
+    before the decode step existed.
+    """
+    case = next(c for c in EXECUTABLE if c.representation == "unicode-escaped" and c.detector == "emoji")
+    execution = execute(MANIFEST_CASES[case.case_id], case.canary)
+
+    assert (
+        execution.wire != execution.planted
+    ), "the wire and boundary forms are identical, so the decode is untested here"
+    assert (
+        execution.received[0] == execution.planted
+    ), "the detector received the wire form rather than the decoded value"
