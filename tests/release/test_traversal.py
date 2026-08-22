@@ -87,7 +87,13 @@ def test_every_path_is_planted_and_removed(path: str):
         "sweep matched bytes without attributing them to the planted path"
     )
 
+    # The control must PLANT and then REMOVE. An earlier version removed the
+    # path from a fresh, UNPLANTED exchange, so the assertion held whether or
+    # not the removal did anything -- a control that could not fail, and a
+    # mutation making delete_at a no-op survived it.
     removed = _exchange()
+    set_at(removed, path, SECRET)
+    assert sweep.findings(removed, SECRET), "the control's own plant did not take"
     delete_at(removed, path)
     assert sweep.findings(removed, SECRET) == [], f"removing {path} did not clear the finding"
 
@@ -123,14 +129,25 @@ def test_disabling_every_collector_finds_nothing():
 def test_the_serialised_collector_sees_what_the_structural_one_does_not():
     """Two collectors that would be redundant if they saw the same thing.
 
-    A value whose escaped form only exists after JSON encoding is present to
-    `serialised` and absent from `structure`.
-    """
-    secret = "line\nbreak-CANARY"
-    planted = {"body": {"note": secret}}
+    The distinguishing case must be one where JSON encoding differs from
+    Python's own repr. A newline does NOT qualify: `str({"n": "a\nb"})`
+    escapes it to `a\\nb` exactly as JSON does, so a mutation replacing
+    json.dumps with the raw object passed every test.
 
-    structural = Sweep(disabled=frozenset({"serialised"})).findings(planted, "line\\nbreak-CANARY")
-    serialised = Sweep(disabled=frozenset({"structure"})).findings(planted, "line\\nbreak-CANARY")
+    `ensure_ascii=True` escapes non-ASCII to \\uXXXX; repr does not. So the
+    escaped form of a non-ASCII value exists only after encoding.
+    """
+    # A RAW string: the canary is the literal characters c a f \\ u 0 0 e 9,
+    # which is what JSON's ensure_ascii produces and what repr never does.
+    secret = r"caf\u00e9-CANARY"
+    planted = {"body": {"note": "café-CANARY"}}
+
+    assert secret not in str(planted), (
+        "premise changed: repr now produces the escaped form too, so this no " "longer separates the two collectors"
+    )
+
+    structural = Sweep(disabled=frozenset({"serialised"})).findings(planted, secret)
+    serialised = Sweep(disabled=frozenset({"structure"})).findings(planted, secret)
 
     assert not structural, "the escaped form should not exist before encoding"
     assert serialised, "the serialised collector missed the JSON-escaped form"
