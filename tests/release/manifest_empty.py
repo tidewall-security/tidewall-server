@@ -1,15 +1,14 @@
 """The standalone manifest-emptiness assertion.
 
 Task 6 step 5 wants a release workflow whose publish job `needs: release-gate`
-AND asserts the manifest is empty. WHAT THIS PROJECT PUBLISHES IS A DEFERRED
-OWNER DECISION -- PyPI or GHCR changes the trigger, the artifact, the
-credentials, the permissions and the publish command, and whether the gate
-becomes a reusable workflow is part of the same choice.
+AND asserts the manifest is empty. Both now exist: the publish topology was
+answered on 2026-08-23 -- PyPI, via Trusted Publishing.
 
-So the half that does not depend on it lands now, as a required step of its
-own, and the claim that FAILURES BLOCK RELEASE IS NOT MADE. A workflow that
-asserts emptiness is not a workflow that gates publication; saying otherwise
-would be the one thing this whole programme is built to stop.
+This module remains a REQUIRED STEP OF ITS OWN in CI, separate from the
+release workflow, because the two answer different questions. CI asks whether
+the manifest is empty on every commit; the release workflow asks it again at
+the moment of publication. A gate that passed elsewhere is evidence about
+elsewhere.
 """
 
 from __future__ import annotations
@@ -20,11 +19,12 @@ import tomllib
 
 MANIFEST = pathlib.Path(__file__).resolve().parent / "expected_failures.toml"
 
-#: Recorded here so a reader does not have to infer it from an absence.
-BLOCKED_ON_OWNER = (
-    "publish topology (PyPI vs GHCR, and whether the gate becomes a reusable "
-    "workflow) is a deferred owner decision; until it is made, this project "
-    "does NOT claim that release-gate failures block release"
+#: Answered on 2026-08-23. Retained rather than deleted so the record of what
+#: was deferred, and when it stopped being deferred, survives in the source.
+PUBLISH_TOPOLOGY = (
+    "PyPI via Trusted Publishing (OIDC), triggered by a v* tag. The publish "
+    "job needs: release-gate and re-asserts manifest emptiness in its own "
+    "steps, so release-gate failures DO block release."
 )
 
 
@@ -40,7 +40,7 @@ def main(argv: list[str]) -> int:
     records = manifest_records(path)
     if records:
         print(f"MANIFEST NOT EMPTY: {len(records)} expected-failure record(s)")
-        print(f"NOTE: {BLOCKED_ON_OWNER}")
+        print(f"NOTE: {PUBLISH_TOPOLOGY}")
         return 1
     print("MANIFEST EMPTY")
     return 0

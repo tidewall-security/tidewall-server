@@ -6,9 +6,10 @@ import pathlib
 
 import yaml
 
-from tests.release.manifest_empty import BLOCKED_ON_OWNER, main, manifest_records
+from tests.release.manifest_empty import PUBLISH_TOPOLOGY, main, manifest_records
 
 WORKFLOW = pathlib.Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
+RELEASE_WORKFLOW = pathlib.Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml"
 
 
 def test_the_step_exists_as_its_own_required_job():
@@ -40,23 +41,112 @@ def test_a_missing_file_reads_as_empty_rather_than_erroring(tmp_path):
     assert manifest_records(tmp_path / "absent.toml") == []
 
 
-def test_no_publish_job_needs_the_release_gate_yet():
-    """The blocked half, asserted rather than assumed.
+def test_a_publish_job_needs_the_release_gate():
+    """The blocked half, answered on 2026-08-23: PyPI.
 
-    If a publish job is added later, this test fails and whoever adds it must
-    update the claim below deliberately.
+    This test previously asserted the OPPOSITE -- that NO job depended on the
+    gate -- so that adding one would fail it and force whoever added it to
+    update the claim deliberately rather than inherit it. That is what
+    happened.
     """
-    jobs = yaml.safe_load(WORKFLOW.read_text())["jobs"]
-    gated = [name for name, job in jobs.items() if "release-gate" in str(job.get("needs", ""))]
-    assert not gated, gated
+    jobs = yaml.safe_load(RELEASE_WORKFLOW.read_text())["jobs"]
+    assert "publish" in jobs, sorted(jobs)
+    assert jobs["publish"]["needs"] == "release-gate", jobs["publish"].get("needs")
 
 
-def test_the_repository_does_not_claim_that_failures_block_release():
-    """The one thing this programme exists to stop is a claim outrunning its
-    evidence. A workflow that asserts emptiness is not one that gates
-    publication."""
-    assert "does NOT claim" in BLOCKED_ON_OWNER
-    assert "deferred owner decision" in BLOCKED_ON_OWNER
+def test_the_publish_job_also_asserts_the_manifest_itself():
+    """`needs:` is evidence about ANOTHER job.
 
-    workflow = WORKFLOW.read_text()
-    assert "is NOT the same as" in workflow
+    A gate that passed elsewhere is a fact about elsewhere. The publishing job
+    re-asserts emptiness in its own steps, so a change to the job graph cannot
+    silently detach the check from the act it guards.
+    """
+    jobs = yaml.safe_load(RELEASE_WORKFLOW.read_text())["jobs"]
+    runs = [s.get("run", "") for s in jobs["publish"]["steps"]]
+    assert any("manifest_empty.py" in r for r in runs), runs
+
+
+def test_the_release_workflow_runs_the_gate_itself():
+    """`needs:` cannot reach across workflows.
+
+    Inferring "CI passed on this SHA" from an API call is a check that can be
+    wrong in a way nobody sees, so the gate is duplicated into the release
+    workflow rather than assumed from CI.
+    """
+    jobs = yaml.safe_load(RELEASE_WORKFLOW.read_text())["jobs"]
+    assert "release-gate" in jobs
+    runs = [s.get("run", "") for s in jobs["release-gate"]["steps"]]
+    assert any("gate_report.py" in r for r in runs)
+
+
+def test_publication_is_triggered_by_a_tag_not_a_branch():
+    """A workflow that publishes on every merge eventually publishes something
+    nobody decided to release."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text())
+    trigger = workflow[True] if True in workflow else workflow["on"]
+    assert set(trigger) == {"push"}, trigger
+    assert "tags" in trigger["push"], trigger["push"]
+    assert "branches" not in trigger["push"], trigger["push"]
+
+
+def test_publishing_uses_oidc_and_no_long_lived_token():
+    """No API token to leak, be committed, or outlive its creator."""
+    jobs = yaml.safe_load(RELEASE_WORKFLOW.read_text())["jobs"]
+    publish = jobs["publish"]
+    assert publish["permissions"] == {"id-token": "write"}, publish["permissions"]
+
+    body = RELEASE_WORKFLOW.read_text()
+    for secret in ("PYPI_API_TOKEN", "TWINE_PASSWORD", "password:"):
+        assert secret not in body, secret
+
+
+def test_the_gate_step_is_the_only_one_that_can_fail_the_release_gate_job():
+    jobs = yaml.safe_load(RELEASE_WORKFLOW.read_text())["jobs"]
+    steps = jobs["release-gate"]["steps"]
+    decider = steps[-1]
+    assert "gate_report.py" in decider["run"]
+    assert decider.get("continue-on-error") is not True
+    for step in steps:
+        if step.get("id") in {"release_suite", "browser_canary"}:
+            assert step.get("continue-on-error") is True, step["id"]
+
+
+def test_the_claim_that_failures_block_release_is_now_earned():
+    """It was deliberately NOT claimed until both halves existed.
+
+    A workflow that merely asserts emptiness is not one that gates
+    publication. Both now exist: a publish job that `needs: release-gate` and
+    an in-job assertion of the manifest.
+    """
+    jobs = yaml.safe_load(RELEASE_WORKFLOW.read_text())["jobs"]
+    publish = jobs["publish"]
+
+    gated = publish.get("needs") == "release-gate"
+    asserts_manifest = any("manifest_empty.py" in s.get("run", "") for s in publish["steps"])
+    assert gated and asserts_manifest, {
+        "needs release-gate": gated,
+        "asserts the manifest": asserts_manifest,
+    }
+
+
+def test_the_recorded_topology_matches_the_workflow():
+    """The prose and the YAML must not drift.
+
+    A comment describing a workflow is not the workflow; this asserts the
+    recorded description is true of the file it describes.
+    """
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text())
+    body = RELEASE_WORKFLOW.read_text()
+
+    assert "PyPI" in PUBLISH_TOPOLOGY
+    assert "pypi-publish" in body, "the recorded topology says PyPI"
+
+    assert "OIDC" in PUBLISH_TOPOLOGY
+    assert workflow["jobs"]["publish"]["permissions"] == {"id-token": "write"}
+
+    assert "v* tag" in PUBLISH_TOPOLOGY
+    trigger = workflow[True] if True in workflow else workflow["on"]
+    assert trigger["push"]["tags"] == ["v*"], trigger
+
+    assert "DO block release" in PUBLISH_TOPOLOGY
+    assert workflow["jobs"]["publish"]["needs"] == "release-gate"
