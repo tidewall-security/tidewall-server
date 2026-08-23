@@ -17,6 +17,9 @@ deliberately fixed for that reason; the guard response is not.
 
 from __future__ import annotations
 
+import io
+import logging
+
 import pytest
 
 from tests.release.expected_failures import GUARD_ROUTE
@@ -147,3 +150,62 @@ def test_the_export_summary_is_deliberately_fixed():
 
     source = pathlib.Path("app/routes/guard.py").read_text()
     assert 'export_summary = "Blocked by access rule"' in source
+
+
+# --- record 1 of 3: the creation log ----------------------------------------
+
+
+def test_the_rule_name_reaches_the_creation_log(tmp_path):
+    """Driven through AccessRuleService.create_rule, the production writer."""
+    import sqlalchemy as sa
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db.models import Base, Policy, RuleSet
+    from app.services.access_rule_service import AccessRuleService
+
+    engine = sa.create_engine(f"sqlite:///{tmp_path}/rules.db")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    policy = Policy(name="p", type="application", description="d", report_only=False, is_default=True)
+    session.add(policy)
+    session.flush()
+    rule_set = RuleSet(policy_id=policy.id, event_type="input", detectors={})
+    session.add(rule_set)
+    session.commit()
+
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)
+    logger = logging.getLogger("app.services.access_rule_service")
+    logger.addHandler(handler)
+    previous = logger.level
+    logger.setLevel(logging.INFO)
+    try:
+        AccessRuleService(session).create_rule(rule_set_id=rule_set.id, name=CANARY, conditions={})
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous)
+        session.close()
+        engine.dispose()
+
+    logged = buffer.getvalue()
+    if CANARY in logged:
+        RECORDER.record_and_fail(
+            Signature(
+                case_id="access-rule-name/capture-off/create/admin/plain",
+                property=FORBIDDEN,
+                collector="app-log",
+                surface_path=CREATION_LOG,
+                representation="plain",
+                occurrence_rule="FORBIDDEN",
+            ),
+            f"the access rule name reached the creation log: {logged.strip()[:160]}",
+        )
+
+
+def test_the_creation_log_line_exists_at_all():
+    """The premise. If nothing is logged, the assertion above passes for a
+    reason unrelated to the property."""
+    import pathlib
+
+    source = pathlib.Path("app/services/access_rule_service.py").read_text()
+    assert "Created access rule" in source
