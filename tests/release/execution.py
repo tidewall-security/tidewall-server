@@ -111,8 +111,13 @@ def decoded_differs_from_wire(representation: str, value: str) -> bool:
     return encode_for(representation, value) != value
 
 
-def execute(case, canary: str) -> Execution:
-    """Run one manifest case against the real engine."""
+def execute(case, canary: str, collector=None) -> Execution:
+    """Run one manifest case against the real engine.
+
+    `collector` is production's exact-match collector, built by
+    `app.routes.guard._build_collector`. Passing it drives the same channel the
+    guard route uses to populate `interactions.matches_json`.
+    """
     from app.scanner_engine import ScannerEngine
 
     if case.detector not in SELF_CONTAINED_DETECTORS:
@@ -158,7 +163,15 @@ def execute(case, canary: str) -> Execution:
         fault = injected(detector, case.sub_path)
 
     with fault, recording_detector_inputs(engine) as inputs, observing() as observation:
-        result = engine.scan(text, event_type=event, vault_id="v", vault=None, tools=tools)
+        result = engine.scan(
+            text,
+            event_type=event,
+            vault_id="v",
+            vault=None,
+            tools=tools,
+            messages=[{"role": "user", "content": text}],
+            matches=collector,
+        )
 
     return Execution(
         case_id=case.identity,

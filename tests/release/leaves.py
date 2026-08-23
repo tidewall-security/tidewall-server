@@ -53,6 +53,10 @@ def shape(leaf: str, canary: str, sub_path: str = "") -> str:
         # Opaque by definition, but carrying an emoji so an emoji case can
         # reach its detected branch. The found-nothing form is returned above.
         return f"{canary} \U0001f600"
+    if leaf == "custom-match":
+        # A custom entity is whatever an operator configured, so the canary
+        # itself is the value: there is no format to imitate.
+        return f"custom entity {canary} in the message"
     if leaf in ("mcp-name", "mcp-description", "mcp-parameters"):
         return canary
     raise NoShapeForLeaf(f"no shaping rule for leaf {leaf!r}; the case cannot be driven")
