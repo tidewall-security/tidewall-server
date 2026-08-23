@@ -378,45 +378,37 @@ def test_a_failure_must_carry_the_signature_that_caused_it():
     assert "signatures_in(message)" in source, "the runner no longer reads the signature carried by the failure"
 
 
-def test_the_baseline_covers_every_family_the_manifest_currently_predicts():
-    """The gap that let the same failure happen TWICE.
+def test_the_baseline_equals_the_manifest_exactly():
+    """The strongest form, available now that reconciliation is complete.
 
-    Both existing drift checks validate only what is ALREADY in the baseline:
-    one proves every recorded entry is manifest-derivable, the other proves
-    each recorded family is complete. Neither notices a family that has newly
-    started occurring and is absent from the baseline entirely -- which is
-    exactly what happened when the access-rule family was added and the
-    mutation job silently stopped mutating for the second time.
+    Every one of the manifest's 255 records genuinely occurs, so the baseline
+    IS the manifest -- keys and multiplicities. That is independently derived
+    (the manifest is checked-in data with its own generator and oracles) and it
+    subsumes every earlier drift check:
 
-    A family is EXPECTED IN THE BASELINE once a test emits its signatures. That
-    is recorded here as a declared set: adding a family to the suite without
-    adding it here fails, and so does the reverse.
+      * a MISSING entry fails -- the gap that let the mutation job silently
+        stop mutating, twice;
+      * an EXTRA entry fails -- a signature nobody declared;
+      * a CORRUPTED COUNT fails -- the manifest predicts each signature once.
+
+    The earlier version listed emitting families by hand, which needed editing
+    every time a suite started emitting a new one. That list was itself a thing
+    that could go stale.
     """
     import collections
     import json
     import pathlib
 
-    #: Families whose signatures the suite currently emits. Adding a canary
-    #: suite that emits a new family means adding it here, deliberately.
-    EMITTING_FAMILIES = {
-        "validation-echo/capture-off/guard/api",
-        "access-rule-name/capture-off/create/admin",
-        "access-rule-name/capture-off/guard/admin",
-    }
+    from tests.release.expected_failures import generate
+    from tests.release.manifest import load_cases
 
     path = pathlib.Path(__file__).resolve().parent / "mutation_baseline.json"
-    recorded = {key[0].rsplit("/", 1)[0] for key, _count in json.loads(path.read_text())}
+    recorded = collections.Counter({tuple(key): count for key, count in json.loads(path.read_text())})
+    expected = collections.Counter(r.signature() for r in generate(load_cases()))
 
-    assert recorded == EMITTING_FAMILIES, {
-        "emitting but absent from the baseline": sorted(EMITTING_FAMILIES - recorded),
-        "in the baseline but not declared as emitting": sorted(recorded - EMITTING_FAMILIES),
+    missing = expected - recorded
+    extra = recorded - expected
+    assert not missing and not extra, {
+        "in the manifest, missing from the baseline": sorted(missing)[:2],
+        "in the baseline, not in the manifest": sorted(extra)[:2],
     }
-
-    # And the declaration must not drift from the suites themselves.
-    release = pathlib.Path(__file__).resolve().parent
-    emitters = collections.Counter()
-    for module in release.glob("test_canary_*.py"):
-        text = module.read_text()
-        if "record_and_fail" in text or "RECORDER.record(" in text:
-            emitters[module.name] += 1
-    assert emitters, "no canary suite emits signatures any more"
