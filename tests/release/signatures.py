@@ -82,11 +82,29 @@ class Recorder:
         self._signatures: list[Signature] = []
         self._nodeids: set[str] = set()
         self._by_node: dict[str, set[str]] = {}
+        self._mismatches: dict[str, list[str]] = {}
 
     def record_and_fail(self, signature: Signature, detail: str) -> None:
         """Record the signature and fail WITH it, so the two are tied."""
         self.record(signature)
         raise ExpectedSecurityFailure(signature, detail)
+
+    def record_component_mismatch(self, declared: str) -> None:
+        """Record a declared-component mismatch through the SAME recorder.
+
+        These were accounted by regex-matching arbitrary failure text for
+        "ComponentMismatch" and "declares '<x>'". A review supplied fourteen
+        FABRICATED assertion failures naming emoji/reported and the runner
+        accepted them as the mutation's exact predeclared delta. Text a test
+        happens to print is not evidence about what a test observed.
+        """
+        current = os.environ.get("PYTEST_CURRENT_TEST", "")
+        if current:
+            self._mismatches.setdefault(current.split(" ")[0], []).append(declared)
+
+    @property
+    def mismatches(self) -> dict[str, list[str]]:
+        return {k: list(v) for k, v in self._mismatches.items()}
 
     def record(self, signature: Signature) -> None:
         self._signatures.append(signature)
@@ -116,6 +134,7 @@ class Recorder:
                     "signatures": [asdict(s) for s in self._signatures],
                     "nodeids": sorted(self._nodeids),
                     "by_node": {k: sorted(v) for k, v in sorted(self._by_node.items())},
+                    "mismatches": {k: sorted(v) for k, v in sorted(self._mismatches.items())},
                 },
                 indent=2,
                 sort_keys=True,
@@ -126,6 +145,7 @@ class Recorder:
         self._signatures.clear()
         self._nodeids.clear()
         self._by_node.clear()
+        self._mismatches.clear()
 
 
 #: One recorder per run, written out by tests/release/conftest.py.
@@ -152,6 +172,16 @@ def signatures_by_node(path: pathlib.Path) -> dict[str, set[str]]:
     if not isinstance(data, dict):
         return {}
     return {k: set(v) for k, v in data.get("by_node", {}).items()}
+
+
+def recorded_mismatches(path: pathlib.Path) -> dict[str, list[str]]:
+    """Component mismatches each test RECORDED, not ones its text mentioned."""
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text())
+    if not isinstance(data, dict):
+        return {}
+    return {k: list(v) for k, v in data.get("mismatches", {}).items()}
 
 
 def accounted_nodeids(path: pathlib.Path) -> set[str]:

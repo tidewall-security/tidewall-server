@@ -93,7 +93,11 @@ def test_publishing_uses_oidc_and_no_long_lived_token():
     """No API token to leak, be committed, or outlive its creator."""
     jobs = yaml.safe_load(RELEASE_WORKFLOW.read_text())["jobs"]
     publish = jobs["publish"]
-    assert publish["permissions"] == {"id-token": "write"}, publish["permissions"]
+    # BOTH, not just id-token. Asserting exact equality with {"id-token":
+    # "write"} cemented a real bug: overriding permissions sets every unlisted
+    # scope to `none`, so checkout could not read the repository at all. The
+    # test agreed with the workflow and both were wrong.
+    assert publish["permissions"] == {"contents": "read", "id-token": "write"}, publish["permissions"]
 
     body = RELEASE_WORKFLOW.read_text()
     for secret in ("PYPI_API_TOKEN", "TWINE_PASSWORD", "password:"):
@@ -142,7 +146,7 @@ def test_the_recorded_topology_matches_the_workflow():
     assert "pypi-publish" in body, "the recorded topology says PyPI"
 
     assert "OIDC" in PUBLISH_TOPOLOGY
-    assert workflow["jobs"]["publish"]["permissions"] == {"id-token": "write"}
+    assert workflow["jobs"]["publish"]["permissions"]["id-token"] == "write"
 
     assert "v* tag" in PUBLISH_TOPOLOGY
     trigger = workflow[True] if True in workflow else workflow["on"]
@@ -150,3 +154,22 @@ def test_the_recorded_topology_matches_the_workflow():
 
     assert "DO block release" in PUBLISH_TOPOLOGY
     assert workflow["jobs"]["publish"]["needs"] == "release-gate"
+
+
+def test_every_job_that_checks_out_can_read_the_repository():
+    """Overriding `permissions` sets unlisted scopes to `none`.
+
+    A job that overrides permissions and then runs actions/checkout without
+    `contents: read` fails at its first step. In the publish job that happens
+    AFTER the gate has passed -- the worst place to find out.
+    """
+    for workflow in (WORKFLOW, RELEASE_WORKFLOW):
+        jobs = yaml.safe_load(workflow.read_text())["jobs"]
+        for name, job in jobs.items():
+            checks_out = any("actions/checkout" in str(step.get("uses", "")) for step in job["steps"])
+            permissions = job.get("permissions")
+            if checks_out and permissions is not None:
+                assert permissions.get("contents") == "read", (
+                    f"{workflow.name}:{name} overrides permissions and checks out, "
+                    f"but has no contents: read -- {permissions}"
+                )

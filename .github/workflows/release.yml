@@ -54,8 +54,13 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      # OIDC only. No long-lived API token exists to leak, be committed, or
-      # outlive the person who created it.
+      # Overriding `permissions` sets every UNLISTED scope to `none`, so
+      # `contents: read` must be stated explicitly or actions/checkout cannot
+      # read the repository and the job dies at its first step -- after the
+      # gate has passed, which is the worst place to discover it.
+      contents: read
+      # OIDC for Trusted Publishing. No long-lived API token exists to leak, be
+      # committed, or outlive the person who created it.
       id-token: write
     steps:
       - uses: actions/checkout@v4

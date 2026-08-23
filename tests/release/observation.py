@@ -167,6 +167,12 @@ class ComponentMismatch(Exception):
 def verify_declared_component(case_id: str, declared: str, observed: set[str]) -> None:
     """Reject a case whose declared component is not the one it reaches."""
     if declared not in observed:
+        # Recorded through the SAME recorder every other accounted outcome
+        # uses, so the runner never has to parse failure text to learn a
+        # mismatch happened.
+        from tests.release.signatures import RECORDER
+
+        RECORDER.record_component_mismatch(declared)
         raise ComponentMismatch(
             f"{case_id}: declares {declared!r}, observed "
             f"{sorted(observed) if observed else 'no marked component at all'}"

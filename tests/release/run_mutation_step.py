@@ -111,10 +111,15 @@ def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, i
         text=True,
     )
 
-    from tests.release.signatures import signatures_by_node, signatures_in
+    from tests.release.signatures import (
+        recorded_mismatches,
+        signatures_by_node,
+        signatures_in,
+    )
 
     observed: Counter = Counter()
     by_node = signatures_by_node(signatures)
+    mismatches = recorded_mismatches(signatures)
     if signatures.exists():
         payload = json.loads(signatures.read_text())
         rows = payload["signatures"] if isinstance(payload, dict) else payload
@@ -144,9 +149,14 @@ def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, i
                 continue
 
             message = failure.get("message") or ""
-            mismatch = _component_mismatch(message)
-            if mismatch:
-                observed[("component-mismatch", mismatch)] += 1
+
+            # RECORDED, not parsed. Trusting any failure whose text contained
+            # "ComponentMismatch" and "declares '<x>'" let fourteen fabricated
+            # assertion failures be accepted as the mutation's exact delta.
+            recorded = mismatches.get(nodeid, [])
+            if recorded:
+                for declared in recorded:
+                    observed[("component-mismatch", declared)] += 1
                 continue
 
             # ACCOUNTED means the failure CARRIES a signature this test
@@ -161,18 +171,6 @@ def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, i
             unaccounted.add(nodeid)
 
     return observed, errors, unaccounted
-
-
-def _component_mismatch(message: str) -> str | None:
-    """The declared component a mismatch names, whatever it is.
-
-    Two component names were hard-coded here, so a mismatch on any other
-    component was silently ignored.
-    """
-    if "ComponentMismatch" not in message:
-        return None
-    match = re.search(r"declares '([^']+)'", message)
-    return match.group(1) if match else None
 
 
 def main(argv: list[str]) -> int:
