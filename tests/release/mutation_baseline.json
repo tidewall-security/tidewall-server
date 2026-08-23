@@ -1,6 +1,39 @@
 [
   [
     [
+      "access-rule-name/capture-off/create/admin/plain",
+      "FORBIDDEN occurrence reached a surface",
+      "app-log",
+      "app.services.access_rule_service:logger.info/created",
+      "plain",
+      "FORBIDDEN"
+    ],
+    1
+  ],
+  [
+    [
+      "access-rule-name/capture-off/guard/admin/plain",
+      "FORBIDDEN occurrence reached a surface",
+      "http-response-body",
+      "POST /v1/guard_chat_completions -> $.summary",
+      "plain",
+      "FORBIDDEN"
+    ],
+    1
+  ],
+  [
+    [
+      "access-rule-name/capture-off/guard/admin/plain#rules",
+      "FORBIDDEN occurrence reached a surface",
+      "http-response-body",
+      "POST /v1/guard_chat_completions -> $.result.access_rules[*] (key)",
+      "plain",
+      "FORBIDDEN"
+    ],
+    1
+  ],
+  [
+    [
       "validation-echo/capture-off/guard/api/json-escaped",
       "FORBIDDEN occurrence reached a surface",
       "http-response-body",

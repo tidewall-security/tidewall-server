@@ -196,6 +196,18 @@ def main(argv: list[str]) -> int:
         if base_errors:
             print(f"MUTATION STEP: {base_errors} harness error(s) in the unmutated run")
             return 1
+        # `--write-baseline` runs BEFORE the unaccounted gate, deliberately.
+        # Its whole purpose is to record what the suite currently emits, and
+        # the drift oracles legitimately fail while the baseline is stale --
+        # so gating the writer on them makes the baseline unwritable exactly
+        # when it needs rewriting. Harness errors still block: those mean the
+        # run did not happen, and a baseline from a broken run is worthless.
+        if args.write_baseline:
+            path = args.baseline or (REPO / "tests" / "release" / "mutation_baseline.json")
+            path.write_text(json.dumps(sorted([list(k), v] for k, v in unmutated.items()), indent=2) + "\n")
+            print(f"MUTATION STEP: baseline written to {path} ({sum(unmutated.values())} signatures)")
+            return 0
+
         if base_unaccounted:
             print(
                 f"MUTATION STEP: {len(base_unaccounted)} unaccounted failure(s) in the "
@@ -203,12 +215,6 @@ def main(argv: list[str]) -> int:
                 f"recognised component mismatch: {sorted(base_unaccounted)[:3]}"
             )
             return 1
-
-        if args.write_baseline:
-            path = args.baseline or (REPO / "tests" / "release" / "mutation_baseline.json")
-            path.write_text(json.dumps(sorted([list(k), v] for k, v in unmutated.items()), indent=2) + "\n")
-            print(f"MUTATION STEP: baseline written to {path} ({sum(unmutated.values())} signatures)")
-            return 0
 
         baseline_path = args.baseline or (REPO / "tests" / "release" / "mutation_baseline.json")
         baseline = Counter({tuple(key): count for key, count in json.loads(baseline_path.read_text())})
