@@ -276,35 +276,40 @@ def test_the_baseline_is_complete_over_the_families_it_covers():
     """Membership is not completeness.
 
     `baseline <= expected` passes for a baseline missing entries the suite
-    actually emits -- a three-entry baseline satisfies it just as well as a
-    seven-entry one, and the runner then aborts at check_baseline with the job
-    silently doing nothing.
+    emits -- a three-entry baseline satisfies it as well as a ten-entry one,
+    and the runner then aborts at check_baseline with the job silently doing
+    nothing.
 
-    Every case_id family present in the baseline must be present in FULL: if
-    one representation of the validation echo is recorded, all seven must be,
-    because the suite emits them together.
+    Every family present in the baseline must be present in FULL. The expected
+    members are derived from the MANIFEST, not assumed: an earlier version
+    hardcoded "all seven representation families", which is true of the
+    validation-echo family and false of the access-rule ones -- so adding them
+    made this test fail for the wrong reason.
     """
     import collections
     import json
     import pathlib
 
-    from tests.release.representations import FAMILIES
+    from tests.release.expected_failures import generate
+    from tests.release.manifest import load_cases
+
+    def family_of(case_id: str) -> str:
+        return case_id.rsplit("/", 1)[0]
 
     path = pathlib.Path(__file__).resolve().parent / "mutation_baseline.json"
-    records = json.loads(path.read_text())
+    recorded = collections.defaultdict(set)
+    for key, _count in json.loads(path.read_text()):
+        recorded[family_of(key[0])].add(key[0])
 
-    by_family = collections.defaultdict(set)
-    for key, _count in records:
-        case_id, _prop, _collector, _surface, representation, _rule = key
-        family = case_id.rsplit("/", 1)[0]
-        by_family[family].add(representation)
+    declared = collections.defaultdict(set)
+    for record in generate(load_cases()):
+        declared[family_of(record.case_id)].add(record.case_id)
 
-    expected = {f.name for f in FAMILIES}
-    for family, representations in sorted(by_family.items()):
-        assert representations == expected, {
+    for family, members in sorted(recorded.items()):
+        assert members == declared[family], {
             "family": family,
-            "missing": sorted(expected - representations),
-            "unexpected": sorted(representations - expected),
+            "in the manifest, missing from the baseline": sorted(declared[family] - members),
+            "in the baseline, not in the manifest": sorted(members - declared[family]),
         }
 
 
@@ -371,3 +376,47 @@ def test_a_failure_must_carry_the_signature_that_caused_it():
 
     source = (pathlib.Path(__file__).resolve().parent / "run_mutation_step.py").read_text()
     assert "signatures_in(message)" in source, "the runner no longer reads the signature carried by the failure"
+
+
+def test_the_baseline_covers_every_family_the_manifest_currently_predicts():
+    """The gap that let the same failure happen TWICE.
+
+    Both existing drift checks validate only what is ALREADY in the baseline:
+    one proves every recorded entry is manifest-derivable, the other proves
+    each recorded family is complete. Neither notices a family that has newly
+    started occurring and is absent from the baseline entirely -- which is
+    exactly what happened when the access-rule family was added and the
+    mutation job silently stopped mutating for the second time.
+
+    A family is EXPECTED IN THE BASELINE once a test emits its signatures. That
+    is recorded here as a declared set: adding a family to the suite without
+    adding it here fails, and so does the reverse.
+    """
+    import collections
+    import json
+    import pathlib
+
+    #: Families whose signatures the suite currently emits. Adding a canary
+    #: suite that emits a new family means adding it here, deliberately.
+    EMITTING_FAMILIES = {
+        "validation-echo/capture-off/guard/api",
+        "access-rule-name/capture-off/create/admin",
+        "access-rule-name/capture-off/guard/admin",
+    }
+
+    path = pathlib.Path(__file__).resolve().parent / "mutation_baseline.json"
+    recorded = {key[0].rsplit("/", 1)[0] for key, _count in json.loads(path.read_text())}
+
+    assert recorded == EMITTING_FAMILIES, {
+        "emitting but absent from the baseline": sorted(EMITTING_FAMILIES - recorded),
+        "in the baseline but not declared as emitting": sorted(recorded - EMITTING_FAMILIES),
+    }
+
+    # And the declaration must not drift from the suites themselves.
+    release = pathlib.Path(__file__).resolve().parent
+    emitters = collections.Counter()
+    for module in release.glob("test_canary_*.py"):
+        text = module.read_text()
+        if "record_and_fail" in text or "RECORDER.record(" in text:
+            emitters[module.name] += 1
+    assert emitters, "no canary suite emits signatures any more"
