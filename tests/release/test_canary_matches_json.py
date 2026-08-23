@@ -21,7 +21,6 @@ is unresolved.
 
 from __future__ import annotations
 
-import json
 import warnings
 
 import pytest
@@ -91,15 +90,32 @@ DRIVES = [(c, f.name) for c in CASES for f in FAMILIES]
 
 
 @pytest.mark.parametrize(("case", "family"), DRIVES, ids=lambda v: (v.case_id[:36] if hasattr(v, "case_id") else v))
-def test_the_canary_should_reach_matches_json_and_does_not(case, family):
-    """One record per case and representation, through production's channel."""
+def test_the_canary_should_reach_matches_json_and_does_not(case, family, tmp_path):
+    """One record per case and representation, through production's channel
+    AND production's persistence.
+
+    Two things this got wrong first, both of which made the signature a label
+    rather than an observation:
+
+      * it encoded with `manifest_case.representation` instead of the
+        parametrised `family`, so each case executed its OWN representation
+        seven identical times while claiming seven different ones -- the
+        round-2 finding, reproduced exactly;
+      * it serialised the collector in the test and inspected that string, so
+        the signatures named collector `database` and surface
+        `interactions.matches_json` while never touching either. Removing
+        production's assignment of captured_matches to the stored row would
+        not have changed the answer.
+    """
     from app.scanner_engine import ScannerEngine
     from tests.release.execution import decode_at_boundary, encode_for
     from tests.release.leaves import shape
+    from tests.release.persistence import capture_matches_into
 
     manifest_case = MANIFEST_CASES[case.case_id]
     plain = shape(manifest_case.leaf, case.canary, manifest_case.sub_path)
-    text = decode_at_boundary(manifest_case.representation, encode_for(manifest_case.representation, plain))
+    # THE PARAMETRISED FAMILY drives the encoding, not the case's own.
+    text = decode_at_boundary(family, encode_for(family, plain))
 
     messages = [{"role": "user", "content": text}]
     collector = _build_collector(messages)
@@ -114,7 +130,12 @@ def test_the_canary_should_reach_matches_json_and_does_not(case, family):
         matches=collector,
     )
 
-    stored = json.dumps({"schema_version": 1, "matches": [g.as_storable() for g in collector.finalize()]})
+    captured = {
+        "schema_version": 1,
+        "matches": [g.as_storable() for g in collector.finalize()],
+    }
+    # Read back FROM SQLITE, through build_content + capture_content.
+    stored = capture_matches_into(tmp_path / "store.db", matches=captured, canary=case.canary)
 
     if case.canary.lower() not in stored.lower():
         RECORDER.record_and_fail(

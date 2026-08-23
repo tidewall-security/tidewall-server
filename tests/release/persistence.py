@@ -20,6 +20,7 @@ measurements are taken off the bytes:
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -91,6 +92,66 @@ def capture_into(db: Path, *, canary: str, retention_days: int | None = 30) -> i
     finally:
         session.close()
         engine.dispose()
+
+
+def capture_matches_into(db: Path, *, matches: dict | None, canary: str) -> str:
+    """Persist `matches` through production's capture path; return what landed.
+
+    `build_content` + `capture_content` are the pair the guard route calls, and
+    the value is read back FROM SQLITE rather than from the object that was
+    handed in. A test that serialises the collector itself and inspects that
+    string has not touched persistence: removing the assignment of
+    captured_matches to the stored row would not change its answer.
+    """
+    from datetime import timedelta
+
+    from app.db.models import Interaction, InteractionContent, Policy
+
+    engine = sa.create_engine(f"sqlite:///{db}")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    try:
+        policy = Policy(
+            name="release-gate",
+            type="application",
+            description="d",
+            report_only=False,
+            is_default=True,
+        )
+        session.add(policy)
+        session.flush()
+        now = datetime.now(UTC)
+        interaction = Interaction(
+            request_id="tw_release_gate",
+            timestamp=now,
+            event_type="input",
+            policy_id=policy.id,
+            policy_name=policy.name,
+            blocked=False,
+            transformed=False,
+            latency_ms=0,
+            evidence_schema_version=1,
+            content_available=True,
+        )
+        session.add(interaction)
+        session.flush()
+
+        prepared = build_content(
+            input_messages=[{"role": "user", "content": canary}],
+            output_messages=None,
+            matches=matches,
+            tools=None,
+            retention_days=30,
+        )
+        capture_content(session, interaction=interaction, prepared=prepared)
+        session.commit()
+
+        stored = session.query(InteractionContent).one().matches_json
+        return json.dumps(stored) if stored is not None else "null"
+    finally:
+        session.close()
+        engine.dispose()
+        _ = timedelta
 
 
 def occurrences_in_canonical_image(db: Path, into: Path, needle: bytes) -> int:
