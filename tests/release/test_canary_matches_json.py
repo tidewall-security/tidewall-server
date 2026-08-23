@@ -175,3 +175,49 @@ def test_the_collector_finalises_empty_for_a_real_detection():
         "premise changed: a detector now reports through the exact-match "
         "channel, so these 245 records should be reconsidered"
     )
+
+
+def test_the_parametrised_family_genuinely_changes_the_planted_input():
+    """The drive is real even though the OUTCOME cannot discriminate.
+
+    An absence property is insensitive to the decoder by construction: the
+    canary is missing from matches_json whether or not the percent decoder
+    works, so "break one family's decoder and require only its cases to
+    change" cannot be satisfied here and pretending otherwise would be the
+    defect this programme removes.
+
+    What CAN be established is that the parametrised family drives the input
+    rather than labelling it -- which is what was wrong before, when every case
+    executed its own representation seven times under seven different labels.
+    """
+    from tests.release.execution import decode_at_boundary, encode_for
+    from tests.release.leaves import shape
+
+    case = CASES[0]
+    manifest_case = MANIFEST_CASES[case.case_id]
+    plain = shape(manifest_case.leaf, case.canary, manifest_case.sub_path)
+
+    wire = {f.name: encode_for(f.name, plain) for f in FAMILIES}
+    assert len(set(wire.values())) > 1, (
+        f"every family produced identical wire bytes for {plain!r}, so the "
+        "parametrisation cannot be shown to drive anything"
+    )
+
+    # And each round-trips to the same boundary value, which is why the
+    # detector sees the same input and the outcome is uniform.
+    decoded = {name: decode_at_boundary(name, w) for name, w in wire.items()}
+    assert set(decoded.values()) == {plain}, decoded
+
+
+def test_a_broken_decoder_is_caught_where_an_outcome_can_see_it():
+    """Not here -- but not nowhere.
+
+    The representation drive is mutation-tested against the capture-off suite,
+    whose outcome DOES depend on the decoded value. Recorded here so the
+    insensitivity above is not mistaken for the decoders being untested.
+    """
+    import pathlib
+
+    source = (pathlib.Path(__file__).resolve().parent / "test_canary_capture_off.py").read_text()
+    assert "test_the_boundary_decode_is_what_the_detector_sees" in source
+    assert "test_the_wire_form_round_trips_through_its_own_decoder" in source

@@ -17,10 +17,8 @@ deliberately fixed for that reason; the guard response is not.
 
 from __future__ import annotations
 
-import io
-import logging
+import pytest
 
-from app.services.rule_evaluator import evaluate_access_rules
 from tests.release.expected_failures import GUARD_ROUTE
 from tests.release.signatures import RECORDER, Signature
 
@@ -31,86 +29,68 @@ SUMMARY_SURFACE = f"{GUARD_ROUTE} -> $.summary"
 RULES_SURFACE = f"{GUARD_ROUTE} -> $.result.access_rules[*] (key)"
 
 
-def _blocking_rule(name: str) -> dict:
-    return {
-        "name": name,
-        "conditions": {"field": "model", "op": "==", "value": "deepseek"},
-        "then_action": "block_and_stop",
-        "else_action": "continue",
-    }
+BOOTSTRAP_KEY = "ak_release_gate_bootstrap_only_not_a_real_credential"
 
 
-# --- 1. the creation log ----------------------------------------------------
+@pytest.fixture(scope="module")
+def guarded(tmp_path_factory):
+    """The PRODUCTION application with a blocking access rule installed.
 
+    An earlier version called `evaluate_access_rules` and rebuilt `summary` and
+    `result.access_rules` inside the test. A review set production's
+    `GuardResult.access_rules={}` and every signature was still emitted -- so
+    reconciliation could report an HTTP defect production no longer had.
+    Both signatures are now derived by traversing the returned response.
+    """
+    import os
 
-def test_the_rule_name_reaches_the_creation_log(tmp_path):
-    """Driven through AccessRuleService, the production writer."""
     import sqlalchemy as sa
+    from fastapi.testclient import TestClient
     from sqlalchemy.orm import sessionmaker
 
-    from app.db.models import Base, Policy, RuleSet
+    from app.db.models import Policy, RuleSet
     from app.services.access_rule_service import AccessRuleService
 
-    engine = sa.create_engine(f"sqlite:///{tmp_path}/rules.db")
-    Base.metadata.create_all(engine)
-    session = sessionmaker(bind=engine)()
-    policy = Policy(name="p", type="application", description="d", report_only=False, is_default=True)
-    session.add(policy)
-    session.flush()
-    rule_set = RuleSet(policy_id=policy.id, event_type="input", detectors={})
-    session.add(rule_set)
-    session.commit()
+    directory = tmp_path_factory.mktemp("access-rule-gate")
+    os.environ["BOOTSTRAP_KEY"] = BOOTSTRAP_KEY
+    os.environ["DB_URL"] = f"sqlite:///{directory}/gate.db"
 
-    buffer = io.StringIO()
-    handler = logging.StreamHandler(buffer)
-    logger = logging.getLogger("app.services.access_rule_service")
-    logger.addHandler(handler)
-    previous = logger.level
-    logger.setLevel(logging.INFO)
-    try:
-        AccessRuleService(session).create_rule(rule_set_id=rule_set.id, name=CANARY, conditions={})
-    finally:
-        logger.removeHandler(handler)
-        logger.setLevel(previous)
-        session.close()
-        engine.dispose()
+    from app.main import create_app
 
-    logged = buffer.getvalue()
-    if CANARY in logged:
-        RECORDER.record_and_fail(
-            Signature(
-                case_id="access-rule-name/capture-off/create/admin/plain",
-                property=FORBIDDEN,
-                collector="app-log",
-                surface_path=CREATION_LOG,
-                representation="plain",
-                occurrence_rule="FORBIDDEN",
-            ),
-            f"the access rule name reached the creation log: {logged.strip()[:160]}",
+    with TestClient(create_app(), raise_server_exceptions=False) as client:
+        session = sessionmaker(bind=sa.create_engine(f"sqlite:///{directory}/gate.db"))()
+        policy = session.query(Policy).first()
+        rule_set = session.query(RuleSet).filter_by(policy_id=policy.id, event_type="input").first()
+        AccessRuleService(session).create_rule(
+            rule_set_id=rule_set.id,
+            name=CANARY,
+            conditions={"field": "model", "op": "==", "value": "deepseek"},
+            then_action="block_and_stop",
         )
+        session.commit()
+        session.close()
+
+        response = client.post(
+            "/v1/guard_chat_completions",
+            json={
+                "guard_input": {"messages": [{"role": "user", "content": "hi"}]},
+                "model": "deepseek",
+            },
+            headers={"Authorization": f"Bearer {BOOTSTRAP_KEY}"},
+        )
+        yield response
 
 
-def test_the_creation_log_line_exists_at_all():
-    """The premise. If nothing is logged, the assertion above passes for a
-    reason unrelated to the property."""
-    import pathlib
-
-    source = pathlib.Path("app/services/access_rule_service.py").read_text()
-    assert "Created access rule" in source
+def test_the_request_was_blocked_by_the_rule(guarded):
+    """The premise. If nothing blocked, neither surface is built at all."""
+    assert guarded.status_code == 200, guarded.text
+    body = guarded.json()
+    assert body["result"]["blocked"] is True, body["result"]
 
 
-# --- 2 and 3. the guard response --------------------------------------------
-
-
-def test_a_blocking_rules_name_reaches_the_guard_summary():
-    """`summary = f"Blocked by access rule: {matched['name']}"` in guard.py."""
-    result = evaluate_access_rules([_blocking_rule(CANARY)], {"model": "deepseek"})
-    assert result["blocked"], "the rule did not block, so no summary is built"
-
-    matched = result["matched_rules"]
-    assert matched, "no matched rule, so the summary has no name to carry"
-
-    summary = f"Blocked by access rule: {matched[-1]['name']}"
+def test_the_rule_name_reaches_the_guard_summary(guarded):
+    """Record 2 of 3, read from the RESPONSE."""
+    summary = guarded.json().get("summary", "")
     if CANARY in summary:
         RECORDER.record_and_fail(
             Signature(
@@ -125,12 +105,14 @@ def test_a_blocking_rules_name_reaches_the_guard_summary():
         )
 
 
-def test_a_blocking_rules_name_is_a_key_in_the_result():
-    """`result.access_rules` is keyed BY RULE NAME (guard.py:222-225)."""
-    result = evaluate_access_rules([_blocking_rule(CANARY)], {"model": "deepseek"})
-    access_rules = {r["name"]: r.get("action") for r in result["matched_rules"]}
+def test_the_rule_name_is_a_key_in_the_result(guarded):
+    """Record 3 of 3, read from the RESPONSE.
 
-    if any(CANARY in key for key in access_rules):
+    `result.access_rules` is keyed BY RULE NAME, a distinct surface from the
+    summary with its own collector path.
+    """
+    access_rules = guarded.json()["result"].get("access_rules") or {}
+    if any(CANARY in str(key) for key in access_rules):
         RECORDER.record_and_fail(
             Signature(
                 case_id="access-rule-name/capture-off/guard/admin/plain#rules",
@@ -144,17 +126,19 @@ def test_a_blocking_rules_name_is_a_key_in_the_result():
         )
 
 
-def test_the_guard_route_builds_the_summary_from_the_rule_name():
-    """Pins the source this family describes, so a fix there fails these."""
-    import pathlib
+def test_the_two_surfaces_are_independent(guarded):
+    """They are separate records because they are separate surfaces.
 
-    source = pathlib.Path("app/routes/guard.py").read_text()
-    assert "Blocked by access rule: " in source
-    assert "matched_rules" in source
+    A fix to one must not be credited to the other, so this asserts the value
+    is present in each on its own terms.
+    """
+    body = guarded.json()
+    assert CANARY in body.get("summary", "")
+    assert any(CANARY in str(k) for k in (body["result"].get("access_rules") or {}))
 
 
 def test_the_export_summary_is_deliberately_fixed():
-    """The contrast that shows the guard response is the outlier.
+    """The contrast that makes this a finding rather than a preference.
 
     Exports already get a fixed string for exactly this reason; the guard
     response does not.
