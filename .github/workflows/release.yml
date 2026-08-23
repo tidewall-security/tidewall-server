@@ -52,7 +52,14 @@ jobs:
     name: Publish to PyPI
     needs: release-gate
     runs-on: ubuntu-latest
-    environment: pypi
+    # NO `environment:`. The OIDC claim GitHub mints INCLUDES the environment
+    # name, and PyPI's Trusted Publisher for this project was registered with
+    # the environment field blank. Declaring one here would make the claims
+    # disagree and publication would fail at the last hop -- after the gate has
+    # passed, which is the worst place to find out.
+    #
+    # Adding one later means changing BOTH sides together: the PyPI publisher
+    # entry, this line, and a GitHub environment of that name.
     permissions:
       # Overriding `permissions` sets every UNLISTED scope to `none`, so
       # `contents: read` must be stated explicitly or actions/checkout cannot

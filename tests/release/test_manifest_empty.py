@@ -133,6 +133,24 @@ def test_the_claim_that_failures_block_release_is_now_earned():
     }
 
 
+def test_the_publish_job_declares_no_oidc_environment():
+    """The OIDC claim includes the environment name.
+
+    PyPI's Trusted Publisher for this project was registered with the
+    environment field blank, so declaring one here makes the claims disagree
+    and publication fails at the last hop -- after the gate has passed.
+
+    Changing this means changing BOTH sides together: the PyPI publisher entry,
+    the workflow, and a GitHub environment of that name. This test exists so
+    the workflow cannot drift away from the publisher entry silently.
+    """
+    publish = yaml.safe_load(RELEASE_WORKFLOW.read_text())["jobs"]["publish"]
+    assert "environment" not in publish, (
+        "the publish job declares an OIDC environment; the PyPI publisher entry "
+        f"must declare the same one or the claims will not match: {publish.get('environment')}"
+    )
+
+
 def test_the_recorded_topology_matches_the_workflow():
     """The prose and the YAML must not drift.
 
