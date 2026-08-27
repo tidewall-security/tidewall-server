@@ -545,6 +545,12 @@ class RegistrationToken(Base):
     # to live in the WHERE clause.
     max_uses: Mapped[int | None] = mapped_column(Integer, nullable=True)
     uses: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # False by default: a key that is sufficient on its own is a key whose leak
+    # is immediately a working device. True exists for fleet deployment where
+    # the delivery channel is already trusted, which is why it is set per key
+    # and never globally -- and why a pre-authorized key is worth protecting
+    # more carefully than an ordinary one.
+    pre_authorized: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     # Scope an enrolling device inherits. Without this a registration token
     # conferred no policy at all — the middleware set policy_id = None — so
     # enrolled devices had no binding to constrain them.
@@ -585,6 +591,12 @@ class Device(Base):
     # it to the default one.
     policy_id: Mapped[str | None] = mapped_column(String, ForeignKey("policies.id", ondelete="RESTRICT"), nullable=True)
     status: Mapped[str] = mapped_column(String, nullable=False, default="active")
+    # Displayed by the enrolling client and matched by an administrator before
+    # activation. Every other field on this row is supplied by the claimant, so
+    # none of them can decide approval: a key holder copies the expected user,
+    # email, device name, browser and OS and the row looks exactly like a real
+    # one. Cleared on approval so it cannot be replayed.
+    confirmation_code: Mapped[str | None] = mapped_column(String, nullable=True)
     last_seen: Mapped[datetime] = mapped_column(DateTime, default=_now)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 

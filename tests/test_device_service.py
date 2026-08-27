@@ -41,6 +41,12 @@ def _reg_token(session, name="onboarding", policy_id=None) -> tuple[str, Registr
         # Required since keys became bounded. Constructed directly here rather
         # than through the service, so the column has to be supplied.
         expires_at=datetime.now(UTC) + timedelta(days=30),
+        # Pre-authorized so the tests that use this helper stay about what they
+        # test -- refresh, revocation, policy inheritance -- rather than each
+        # growing an approval step. The pending default is pinned separately by
+        # the approval tests, which build their tokens WITHOUT this flag and so
+        # exercise the real default.
+        pre_authorized=True,
     )
     session.add(rt)
     session.commit()
@@ -548,3 +554,88 @@ def test_two_concurrent_enrolments_cannot_share_the_last_use(tmp_path):
         assert verify.query(RegistrationToken).one().uses == 1
     finally:
         verify.close()
+
+
+# ---------------------------------------------------------------------------
+# Approval by default
+#
+# Enrolment used to set status="active" unconditionally, so possession of a key
+# was possession of a working device. It now yields a PENDING device: it holds
+# credentials and carries no api role until an admin confirms it.
+#
+# Approval needs an independent confirmation because every descriptive field is
+# supplied by the claimant. A key holder copies the expected user, email, device
+# name, browser and OS and the row is indistinguishable from a real one. Time
+# and source address are server-derived, but a shared egress address is not an
+# identity.
+# ---------------------------------------------------------------------------
+
+
+def test_enrolment_yields_a_pending_device_by_default(db_session):
+    policy_id = _seed_policy(db_session)
+    service = DeviceService(db_session)
+    raw, _rt = service.create_registration_token(name="k", policy_id=policy_id, expires_at=_soon())
+
+    result = _enrol(db_session, raw, "inst-pending")
+
+    device = db_session.query(Device).one()
+    assert device.status == "pending"
+    assert device.confirmation_code is not None
+    assert len(device.confirmation_code) == 8
+    assert result["result"]["device_status"] == "pending"
+    assert result["result"]["confirmation_code"] == device.confirmation_code
+
+
+def test_pre_authorized_token_yields_an_active_device(db_session):
+    """Fleet deployment, where the delivery channel is already trusted.
+
+    Set per key and never globally: the flag makes the key sufficient on its
+    own, which is exactly what makes the flag worth protecting.
+    """
+    policy_id = _seed_policy(db_session)
+    service = DeviceService(db_session)
+    raw, _rt = service.create_registration_token(
+        name="fleet", policy_id=policy_id, expires_at=_soon(), pre_authorized=True
+    )
+
+    result = _enrol(db_session, raw, "inst-fleet")
+
+    device = db_session.query(Device).one()
+    assert device.status == "active"
+    assert device.confirmation_code is None, "an active device has nothing to confirm"
+    assert "confirmation_code" not in result["result"]
+
+
+def test_approval_requires_the_matching_confirmation_code(db_session):
+    """Approval on device id alone is approval on a claimant-supplied row."""
+    policy_id = _seed_policy(db_session)
+    service = DeviceService(db_session)
+    raw, _rt = service.create_registration_token(name="k", policy_id=policy_id, expires_at=_soon())
+    device_id = _enrol(db_session, raw, "inst-approve")["result"]["device_id"]
+    real_code = db_session.get(Device, device_id).confirmation_code
+
+    with pytest.raises(PermissionError, match="[Cc]onfirmation code"):
+        service.approve_device(device_id, confirmation_code="WRONGXXX")
+
+    db_session.expire_all()
+    assert db_session.get(Device, device_id).status == "pending", "a failed match activated the device"
+
+    service.approve_device(device_id, confirmation_code=real_code)
+
+    db_session.expire_all()
+    approved = db_session.get(Device, device_id)
+    assert approved.status == "active"
+    assert approved.confirmation_code is None, "the code must be single-use"
+
+
+def test_an_already_approved_device_cannot_be_approved_again(db_session):
+    """The code is cleared on approval, so a replay has nothing to match."""
+    policy_id = _seed_policy(db_session)
+    service = DeviceService(db_session)
+    raw, _rt = service.create_registration_token(name="k", policy_id=policy_id, expires_at=_soon())
+    device_id = _enrol(db_session, raw, "inst-replay-approve")["result"]["device_id"]
+    code = db_session.get(Device, device_id).confirmation_code
+    service.approve_device(device_id, confirmation_code=code)
+
+    with pytest.raises(PermissionError, match="not pending"):
+        service.approve_device(device_id, confirmation_code=code)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -22,6 +23,15 @@ _ROTATION_OVERLAP_SECONDS = 60
 
 # A key valid for longer than a quarter is one nobody will remember issuing.
 MAX_REGISTRATION_TOKEN_TTL = timedelta(days=90)
+
+# No I, O, 0 or 1. The code is read off one screen and typed into another, and a
+# transcription error is indistinguishable from a failed match.
+_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+_CODE_LENGTH = 8
+
+
+def _confirmation_code() -> str:
+    return "".join(secrets.choice(_CODE_ALPHABET) for _ in range(_CODE_LENGTH))
 
 
 # 37 sites with mode "block"
@@ -84,6 +94,7 @@ class DeviceService:
         created_by: str | None = None,
         expires_at: datetime | None = None,
         max_uses: int | None = None,
+        pre_authorized: bool = False,
     ) -> tuple[str, RegistrationToken]:
         """Create a new registration token. Returns (raw_token, record).
 
@@ -111,6 +122,7 @@ class DeviceService:
             created_by=created_by,
             expires_at=expires_at,
             max_uses=max_uses,
+            pre_authorized=pre_authorized,
             policy_id=policy_id,
         )
         self._session.add(record)
@@ -217,7 +229,11 @@ class DeviceService:
             reg_token_id=rt.id,
             # Scope is inherited from the token and is immutable thereafter.
             policy_id=rt.policy_id,
-            status="active",
+            # Pending unless the key says otherwise. A leaked key then buys an
+            # attacker a device that does nothing, and an unexpected row in the
+            # admin console.
+            status="active" if rt.pre_authorized else "pending",
+            confirmation_code=None if rt.pre_authorized else _confirmation_code(),
         )
         self._session.add(device)
         try:
@@ -321,10 +337,13 @@ class DeviceService:
         return self._success(device, raw_at)
 
     def _success(self, device: Device, raw_at: str) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "status": "Success",
             "result": {
                 "device_id": device.id,
+                # The client needs its own disposition to decide whether to
+                # call the guard or display a code and wait.
+                "device_status": device.status,
                 "access_token": {
                     "token": raw_at,
                     "expires_in": _ACCESS_TOKEN_TTL_SECONDS,
@@ -334,6 +353,37 @@ class DeviceService:
                 },
             },
         }
+        if device.confirmation_code is not None:
+            # Returned to the ENROLLING client only, so it can display the code
+            # for an administrator to match. Never included in any listing.
+            result["result"]["confirmation_code"] = device.confirmation_code
+        return result
+
+    def approve_device(self, device_id: str, confirmation_code: str) -> Device:
+        """Activate a pending device, proving the administrator saw the endpoint.
+
+        The code is what makes approval decidable. Every descriptive field on a
+        pending row is supplied by the claimant, so approving on the strength of
+        them is approving on the attacker's own account of themselves.
+
+        Compared with compare_digest: the code is short, and an admin endpoint
+        is still an oracle if the comparison is timing-variable.
+        """
+        device = self._session.get(Device, device_id)
+        if device is None:
+            raise LookupError("Device not found")
+        if device.status != "pending":
+            raise PermissionError("Device is not pending approval")
+        if device.confirmation_code is None or not secrets.compare_digest(device.confirmation_code, confirmation_code):
+            raise PermissionError("Confirmation code does not match")
+
+        device.status = "active"
+        # Single use. Left in place it is a standing credential for reactivating
+        # the device after any later revocation.
+        device.confirmation_code = None
+        self._session.commit()
+        logger.info("Approved device %s", device.id)
+        return device
 
     def resolve_access_token(self, token_hash: str) -> Device | None:
         """Resolve an access token hash to its Device. Returns None if expired or inactive."""

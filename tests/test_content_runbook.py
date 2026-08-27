@@ -344,7 +344,7 @@ _PERMITTED_SHELL = [
     # passed all 75 tests while making the published block exit 0 without ever
     # opening the database. A prefix is not authorisation to ignore a line.
     "DB=/path/to/tidewall.db",
-    "REV=c7d3e91f4a20",
+    "REV=e2f8a4b71c53",
     "out=$(sqlite3 \"$DB\" -cmd \".param set :rev '$REV'\" <<'SQL' 2>&1",
     ") || { printf 'the sequence stopped before completing:\\n%s\\n' \"$out\"; exit 1; }",
     "printf '%s\\n' \"$out\" | grep -qx 'SEQUENCE-COMPLETE' || { echo \"incomplete\"; exit 1; }",
@@ -415,7 +415,7 @@ def test_the_session_block_is_exactly_the_permitted_program():
 # Task 4: the preconditions refuse, and refuse before writing anything
 # --------------------------------------------------------------------------
 
-HEAD_REVISION = "c7d3e91f4a20"
+HEAD_REVISION = "e2f8a4b71c53"
 #: The columns head actually has, read from a migrated database by
 #: `_assert_fixture_shape` rather than trusted from here.
 HEAD_INTERACTIONS_COLUMNS = 20
@@ -514,7 +514,7 @@ def _substituted_session(db, revision=HEAD_REVISION) -> str:
     # be seen by the whitelist.
     for published, replacement in (
         ("DB=/path/to/tidewall.db", f"DB={shlex.quote(str(db))}"),
-        ("REV=c7d3e91f4a20", f"REV={shlex.quote(revision)}"),
+        ("REV=e2f8a4b71c53", f"REV={shlex.quote(revision)}"),
     ):
         assert f"\n{published}\n" in f"\n{block}", f"the published line {published!r} moved"
         block = block.replace(published, replacement, 1)
