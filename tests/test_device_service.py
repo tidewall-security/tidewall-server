@@ -639,3 +639,106 @@ def test_an_already_approved_device_cannot_be_approved_again(db_session):
 
     with pytest.raises(PermissionError, match="not pending"):
         service.approve_device(device_id, confirmation_code=code)
+
+
+# ---------------------------------------------------------------------------
+# Enrolment lineage and cascade revocation
+#
+# Expiring or deleting a key stops future enrolments and does nothing about the
+# devices already minted from it -- the whole exposure of a pre_authorized leak.
+#
+# Worse, reg_token_id is ondelete=SET NULL, so deleting the key destroys the
+# attribution needed to find those devices at all. Containment has to survive
+# the administrator's first instinct, which is to delete the key.
+# ---------------------------------------------------------------------------
+
+
+def _key_with_devices(session, count: int, *, name: str, label: str):
+    policy_id = _seed_policy(session)
+    service = DeviceService(session)
+    raw, rt = service.create_registration_token(name=name, policy_id=policy_id, expires_at=_soon(), pre_authorized=True)
+    for n in range(count):
+        assert (
+            service.enrol_device(rt_token_hash=hash_key(raw), installation_id=f"inst-{label}-{n}", **_META)["status"]
+            == "Success"
+        )
+    return raw, rt
+
+
+def test_revoking_a_key_does_not_erase_which_devices_came_from_it(db_session):
+    """The FK is SET NULL, and a revoked key is exactly when attribution matters."""
+    _raw, rt = _key_with_devices(db_session, 1, name="k", label="lineage")
+    rt_id, prefix = rt.id, rt.token_prefix
+
+    DeviceService(db_session).revoke_registration_token(rt_id, cascade=False)
+
+    db_session.expire_all()
+    device = db_session.query(Device).one()
+    assert device.reg_token_prefix == prefix, "lineage lost; the fleet is unattributable"
+
+
+def test_cascade_revocation_deactivates_every_device_from_the_key(db_session):
+    _raw, rt = _key_with_devices(db_session, 3, name="leaked", label="cascade")
+    _other_raw, other_rt = _key_with_devices(db_session, 1, name="clean", label="untouched")
+
+    result = DeviceService(db_session).revoke_registration_token(rt.id, cascade=True)
+
+    db_session.expire_all()
+    assert result["devices_revoked"] == 3
+    assert {d.status for d in db_session.query(Device).filter_by(reg_token_id=rt.id)} == {"revoked"}
+    assert (
+        db_session.query(Device).filter_by(reg_token_id=other_rt.id).one().status == "active"
+    ), "cascade reached a device from a different key"
+
+
+def test_cascade_revocation_destroys_the_credentials_too(db_session):
+    """Status alone leaves the fleet usable for the rest of the token's hour."""
+    _raw, rt = _key_with_devices(db_session, 2, name="leaked", label="creds")
+    device_ids = [d.id for d in db_session.query(Device).filter_by(reg_token_id=rt.id)]
+    assert db_session.query(AccessToken).filter(AccessToken.device_id.in_(device_ids)).count() == 2
+
+    DeviceService(db_session).revoke_registration_token(rt.id, cascade=True)
+
+    db_session.expire_all()
+    assert db_session.query(AccessToken).filter(AccessToken.device_id.in_(device_ids)).count() == 0
+
+
+def test_cascade_revocation_reaches_pending_devices_too(db_session):
+    """A pending device from a leaked key is still a device the key created.
+
+    Left pending it is one admin mistake away from being active, and the
+    approval console gives no sign the key behind it was revoked.
+    """
+    policy_id = _seed_policy(db_session)
+    service = DeviceService(db_session)
+    raw, rt = service.create_registration_token(name="k", policy_id=policy_id, expires_at=_soon())
+    service.enrol_device(rt_token_hash=hash_key(raw), installation_id="inst-pending-cascade", **_META)
+    assert db_session.query(Device).one().status == "pending"
+
+    service.revoke_registration_token(rt.id, cascade=True)
+
+    db_session.expire_all()
+    assert db_session.query(Device).one().status == "revoked"
+
+
+def test_a_revoked_key_cannot_enrol(db_session):
+    _raw, rt = _key_with_devices(db_session, 0, name="k", label="norol")
+    raw = _raw
+    DeviceService(db_session).revoke_registration_token(rt.id, cascade=False)
+
+    assert DeviceService(db_session).lookup_registration_token(hash_key(raw)) is None
+
+
+def test_revocation_is_refused_for_an_unknown_key(db_session):
+    with pytest.raises(LookupError):
+        DeviceService(db_session).revoke_registration_token("no-such-token", cascade=False)
+
+
+def test_there_is_no_way_to_hard_delete_a_registration_token(db_session):
+    """Revocation is soft on purpose, and nothing should offer the alternative.
+
+    A hard delete nulls reg_token_id on every device the key created, so the
+    fleet becomes unattributable at the exact moment attribution is needed.
+    Leaving such a method available is leaving the defect available.
+    """
+    assert not hasattr(DeviceService(db_session), "delete_registration_token")

@@ -44,6 +44,7 @@ def _to_dict(rt) -> dict:
         "max_uses": rt.max_uses,
         "uses": rt.uses,
         "pre_authorized": rt.pre_authorized,
+        "revoked_at": str(rt.revoked_at) if rt.revoked_at else None,
     }
 
 
@@ -83,15 +84,45 @@ async def list_registration_tokens(request: Request) -> list[dict]:
         session.close()
 
 
+class RevokeRegistrationTokenRequest(BaseModel):
+    # Explicit and required. Cascade revokes every device the key ever enrolled
+    # and destroys their credentials; it must be asked for in so many words.
+    cascade: bool = False
+
+
 @router.delete("/{token_id}", status_code=204, dependencies=[Depends(require_role("admin"))])
 async def delete_registration_token(token_id: str, request: Request) -> None:
+    """Revoke a key. Future enrolments only; devices already minted keep working.
+
+    Soft: the row stays so the devices it created remain attributable to it.
+    Use POST /{token_id}/revoke with cascade to take the fleet down with it.
+    """
     session = request.app.state.session_factory()
     try:
         from app.services.device_service import DeviceService
 
-        svc = DeviceService(session)
-        svc.delete_registration_token(token_id)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        DeviceService(session).revoke_registration_token(token_id, cascade=False)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from None
+    finally:
+        session.close()
+
+
+@router.post("/{token_id}/revoke", dependencies=[Depends(require_role("admin"))])
+async def revoke_registration_token(token_id: str, body: RevokeRegistrationTokenRequest, request: Request) -> dict:
+    """Revoke a key, optionally with every device enrolled through it.
+
+    A separate verb rather than a flag on DELETE. Cascade is a containment
+    action taken during an incident: it must be spelled out, and it must report
+    its scope. A query parameter is too easy to add by accident, and DELETE's
+    204 would discard the one number the operator needs.
+    """
+    session = request.app.state.session_factory()
+    try:
+        from app.services.device_service import DeviceService
+
+        return DeviceService(session).revoke_registration_token(token_id, cascade=body.cascade)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from None
     finally:
         session.close()

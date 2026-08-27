@@ -133,18 +133,60 @@ class DeviceService:
     def list_registration_tokens(self) -> list[RegistrationToken]:
         return self._session.query(RegistrationToken).order_by(RegistrationToken.created_at.desc()).all()
 
-    def delete_registration_token(self, token_id: str) -> None:
-        record = self._session.get(RegistrationToken, token_id)
-        if record is None:
-            raise ValueError(f"Registration token {token_id} not found")
-        self._session.delete(record)
+    def revoke_registration_token(self, token_id: str, *, cascade: bool) -> dict[str, Any]:
+        """Revoke a key, optionally with every device enrolled through it.
+
+        Soft, so the lineage survives: hard deletion nulls reg_token_id on every
+        device the key created, which is the attribution needed to find them.
+
+        Expiring or deleting a key only stops FUTURE enrolments. The devices
+        already minted from it keep working, and for a pre_authorized key that
+        is the entire exposure. Cascade is what makes a detected leak
+        containable rather than merely noted.
+
+        One transaction. A partial cascade leaves some of a leaked fleet live
+        and reports success, which is worse than refusing outright.
+        """
+        rt = self._session.get(RegistrationToken, token_id)
+        if rt is None:
+            raise LookupError(f"Registration token {token_id} not found")
+
+        rt.revoked_at = datetime.now(UTC)
+        revoked = 0
+        if cascade:
+            devices = self._session.query(Device).filter_by(reg_token_id=rt.id).all()
+            for device in devices:
+                # Pending devices too: a pending device from a leaked key is one
+                # admin mistake from being active, and the approval console
+                # gives no sign the key behind it was revoked.
+                device.status = "revoked"
+            device_ids = [d.id for d in devices]
+            if device_ids:
+                # Credentials go now. Leaving them to lapse leaves a leaked
+                # fleet usable for the rest of the access token's hour.
+                self._session.query(AccessToken).filter(AccessToken.device_id.in_(device_ids)).delete(
+                    synchronize_session=False
+                )
+            revoked = len(devices)
+
         self._session.commit()
-        logger.info("Deleted registration token id=%s", token_id)
+        logger.info(
+            "Revoked registration token %s (prefix=%s, cascade=%s, devices=%d)",
+            rt.id,
+            rt.token_prefix,
+            cascade,
+            revoked,
+        )
+        return {"token_id": rt.id, "devices_revoked": revoked}
 
     def lookup_registration_token(self, token_hash: str) -> RegistrationToken | None:
         """Look up a registration token by hash. Returns None if not found or expired."""
         record = self._session.query(RegistrationToken).filter_by(token_hash=token_hash).first()
         if record is None:
+            return None
+        # Before the expiry check: a revoked key is refused whether or not it
+        # also happens to have expired.
+        if record.revoked_at is not None:
             return None
         if record.expires_at:
             expires = record.expires_at
@@ -227,6 +269,9 @@ class DeviceService:
             os=os,
             ext_version=ext_version,
             reg_token_id=rt.id,
+            # Snapshot. The FK above is SET NULL on delete, so this is the only
+            # attribution that survives someone deleting the key.
+            reg_token_prefix=rt.token_prefix,
             # Scope is inherited from the token and is immutable thereafter.
             policy_id=rt.policy_id,
             # Pending unless the key says otherwise. A leaked key then buys an
