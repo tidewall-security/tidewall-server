@@ -1310,9 +1310,23 @@ this server perform a DNS lookup of the attacker's choosing.
 
 
 def test_the_validator_contract_is_exactly_the_declared_text():
+    """The contract text is pinned, but its INDENTATION is not the contract.
+
+    Compared through inspect.cleandoc on both sides. Python 3.13 dedents
+    docstrings when it compiles them and 3.12 does not, so a raw __doc__
+    comparison against a dedented literal passes on one supported version and
+    fails on the other -- and this project supports both (>=3.12,<3.14).
+
+    Comparing raw made the test a report on the interpreter rather than on the
+    contract: it went red in CI on 3.12 while passing for anyone developing on
+    3.13. cleandoc normalises the difference away and leaves the actual promise
+    -- the words -- pinned exactly as before.
+    """
+    import inspect
+
     from app.services.export_transport import validate_destination as fn
 
-    assert fn.__doc__ == _VALIDATE_DESTINATION_CONTRACT
+    assert inspect.cleandoc(fn.__doc__ or "") == inspect.cleandoc(_VALIDATE_DESTINATION_CONTRACT)
 
 
 def test_the_validator_contract_makes_no_absolute_public_endpoint_promise():
