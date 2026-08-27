@@ -133,10 +133,16 @@ async def enrol_device(body: DeviceEnrolRequest, request: Request) -> dict:
 
 @router.post("/{device_id}/refresh")
 async def refresh_device(device_id: str, body: DeviceRefreshRequest, request: Request) -> dict:
-    """Refresh a device, proving ownership with its own at_ access token."""
-    token_hash = getattr(request.state, "at_token_hash", None)
+    """Refresh a device, proving ownership with its own dr_ refresh token.
+
+    A clean cut: the at_ access token was the credential here and is now
+    refused. Accepting both would leave the one-hour lockout in place for any
+    client that kept using the old one, which is the entire problem this
+    replaces.
+    """
+    token_hash = getattr(request.state, "dr_token_hash", None)
     if token_hash is None:
-        raise HTTPException(status_code=401, detail="Device access token required")
+        raise HTTPException(status_code=401, detail="Device refresh token required")
 
     session = request.app.state.session_factory()
     try:
@@ -144,7 +150,7 @@ async def refresh_device(device_id: str, body: DeviceRefreshRequest, request: Re
 
         result = DeviceService(session).refresh_device(
             device_id=device_id,
-            access_token_hash=token_hash,
+            refresh_token_hash=token_hash,
             device_name=body.device_name,
             user_name=body.user_name,
             user_email=body.user_email,

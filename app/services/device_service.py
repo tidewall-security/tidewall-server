@@ -11,12 +11,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.key_utils import generate_key, hash_key, key_prefix
-from app.db.models import AccessToken, Device, Policy, RegistrationToken
+from app.db.models import AccessToken, Device, DeviceRefreshToken, Policy, RegistrationToken
 from app.utils import as_utc
 
 logger = logging.getLogger(__name__)
 
 _ACCESS_TOKEN_TTL_SECONDS = 3600
+
+# Long enough that a laptop shut in a drawer over a holiday still comes back.
+REFRESH_TOKEN_TTL = timedelta(days=30)
 # How long a rotated token stays valid after being replaced, so a request
 # already in flight when the refresh landed does not fail.
 _ROTATION_OVERLAP_SECONDS = 60
@@ -167,6 +170,12 @@ class DeviceService:
                 self._session.query(AccessToken).filter(AccessToken.device_id.in_(device_ids)).delete(
                     synchronize_session=False
                 )
+                # And the refresh credentials. Without this a cascade-revoked
+                # device keeps a 30-day token that mints fresh access tokens,
+                # and the revocation is cosmetic.
+                self._session.query(DeviceRefreshToken).filter(DeviceRefreshToken.device_id.in_(device_ids)).delete(
+                    synchronize_session=False
+                )
             revoked = len(devices)
 
         self._session.commit()
@@ -292,13 +301,14 @@ class DeviceService:
         logger.info("Enrolled device %s via registration token %s", device.id, rt.id)
 
         raw_at, _ = self._issue_access_token(device.id)
+        raw_dr, _ = self._issue_refresh_token(device.id)
         self._session.commit()
-        return self._success(device, raw_at)
+        return self._success(device, raw_at, raw_dr)
 
     def refresh_device(
         self,
         device_id: str,
-        access_token_hash: str,
+        refresh_token_hash: str,
         device_name: str | None = None,
         user_name: str | None = None,
         user_email: str | None = None,
@@ -307,32 +317,34 @@ class DeviceService:
         ext_version: str | None = None,
         fingerprint: str | None = None,
     ) -> dict[str, Any]:
-        """Refresh an EXISTING device, proving ownership with its access token.
+        """Refresh an EXISTING device, proving ownership with its dr_ token.
 
-        The presented token must belong to the named device. No registration
-        token is accepted here: holding one says nothing about owning a device.
+        The presented credential must belong to the named device. No
+        registration token is accepted here: holding one says nothing about
+        owning a device. No access token either -- that was the credential this
+        replaces, and accepting both would leave the one-hour lockout in place
+        for any client that still used it.
+
+        Nothing rotates. A client that loses the response simply retries with
+        the same credential, which is the property the access-token rotation
+        could not offer.
         """
-        token = self._session.query(AccessToken).filter_by(token_hash=access_token_hash).first()
+        token = self._session.query(DeviceRefreshToken).filter_by(token_hash=refresh_token_hash).first()
         if token is None:
-            raise PermissionError("Invalid access token")
-        if token.expires_at and as_utc(token.expires_at) < datetime.now(UTC):
-            raise PermissionError("Access token expired")
-        if token.replaced_by_id is not None:
-            # Rotation is one-time. The overlap exists so requests already in
-            # flight with this token still succeed; it is not a licence to
-            # refresh again. Without this check a client could present the same
-            # token repeatedly, minting an unbounded number of live tokens and
-            # renewing its own overlap forever, so it would never expire.
-            raise PermissionError("Access token has already been rotated")
+            raise PermissionError("Invalid refresh token")
+        if token.revoked_at is not None:
+            raise PermissionError("Refresh token revoked")
+        if as_utc(token.expires_at) < datetime.now(UTC):
+            raise PermissionError("Refresh token expired")
         if token.device_id != device_id:
-            # A valid token for a different device. Distinguished from an
-            # invalid token so the caller can tell a bug from a credential
-            # problem, without revealing whether the target device exists.
-            raise PermissionError("Access token is not valid for this device")
+            # A valid credential for a different device. Distinguished from an
+            # invalid one so a caller can tell a bug from a credential problem,
+            # without revealing whether the target device exists.
+            raise PermissionError("Refresh token is not valid for this device")
 
         device = self._session.get(Device, device_id)
         if device is None:
-            raise PermissionError("Access token is not valid for this device")
+            raise PermissionError("Refresh token is not valid for this device")
         if device.status != "active":
             return {"status": "InactiveDevice", "result": None}
 
@@ -349,39 +361,12 @@ class DeviceService:
                 setattr(device, field, value)
         device.last_seen = datetime.now(UTC)
 
-        raw_at, new_token = self._issue_access_token(device.id)
-
-        # Rotate rather than revoke. Deleting every token for the device, which
-        # is what this used to do, breaks any other in-flight request; expiring
-        # only the presented one after a short overlap lets a racing retry
-        # succeed. Explicit revocation and admin disablement still kill
-        # everything immediately, elsewhere.
-        #
-        # `min` because the overlap may only ever shorten a token's life: taking
-        # the new deadline unconditionally would *extend* one already due to
-        # expire sooner. The write is conditional on the token still being
-        # unrotated so that two concurrent refreshes cannot both mint a
-        # successor — the check above is a fast path, this is the guarantee.
-        overlap_deadline = datetime.now(UTC) + timedelta(seconds=_ROTATION_OVERLAP_SECONDS)
-        current_expiry = as_utc(token.expires_at) if token.expires_at else None
-        deadline = min(overlap_deadline, current_expiry) if current_expiry else overlap_deadline
-
-        rotated = (
-            self._session.query(AccessToken)
-            .filter(AccessToken.id == token.id, AccessToken.replaced_by_id.is_(None))
-            .update({"replaced_by_id": new_token.id, "expires_at": deadline}, synchronize_session=False)
-        )
-        if rotated == 0:
-            # A concurrent refresh with the same token won. Discard the token
-            # just issued rather than leaving a second live credential behind.
-            self._session.rollback()
-            raise PermissionError("Access token has already been rotated")
-
+        raw_at, _ = self._issue_access_token(device.id)
         self._session.commit()
         logger.info("Refreshed device %s", device.id)
         return self._success(device, raw_at)
 
-    def _success(self, device: Device, raw_at: str) -> dict[str, Any]:
+    def _success(self, device: Device, raw_at: str, raw_dr: str | None = None) -> dict[str, Any]:
         result: dict[str, Any] = {
             "status": "Success",
             "result": {
@@ -398,6 +383,13 @@ class DeviceService:
                 },
             },
         }
+        if raw_dr is not None:
+            # Issued at enrolment and at explicit reissue only. A refresh does
+            # NOT return a new one: it does not rotate.
+            result["result"]["refresh_token"] = {
+                "token": raw_dr,
+                "expires_in": int(REFRESH_TOKEN_TTL.total_seconds()),
+            }
         if device.confirmation_code is not None:
             # Returned to the ENROLLING client only, so it can display the code
             # for an administrator to match. Never included in any listing.
@@ -462,6 +454,10 @@ class DeviceService:
         device.status = status
         if status == "revoked":
             self._session.query(AccessToken).filter_by(device_id=device_id).delete()
+            # The refresh credential too. It outlives the access token by thirty
+            # days, so leaving it means a device that is later re-activated
+            # silently regains a credential issued before it was revoked.
+            self._session.query(DeviceRefreshToken).filter_by(device_id=device_id).delete()
         self._session.commit()
         logger.info("Updated device %s status to %s", device_id, status)
         return device
@@ -470,8 +466,9 @@ class DeviceService:
         device = self._session.get(Device, device_id)
         if device is None:
             raise ValueError(f"Device {device_id} not found")
-        # Cascade delete access tokens first (in case DB doesn't enforce it)
+        # Cascade delete credentials first (in case the DB doesn't enforce it)
         self._session.query(AccessToken).filter_by(device_id=device_id).delete()
+        self._session.query(DeviceRefreshToken).filter_by(device_id=device_id).delete()
         self._session.delete(device)
         self._session.commit()
         logger.info("Deleted device id=%s", device_id)
@@ -486,6 +483,36 @@ class DeviceService:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _issue_refresh_token(self, device_id: str) -> tuple[str, DeviceRefreshToken]:
+        """Create and persist a non-rotating refresh credential."""
+        raw_dr = generate_key(prefix="dr")
+        record = DeviceRefreshToken(
+            token_hash=hash_key(raw_dr),
+            device_id=device_id,
+            expires_at=datetime.now(UTC) + REFRESH_TOKEN_TTL,
+        )
+        self._session.add(record)
+        self._session.flush()
+        return raw_dr, record
+
+    def reissue_refresh_token(self, device_id: str) -> str:
+        """Issue a replacement, revoking the previous one in the same transaction.
+
+        Two statements, one commit. "Issue new" that does not revoke the old
+        simply leaves two usable credentials, which is the opposite of what an
+        administrator reaching for this is trying to achieve.
+        """
+        if self._session.get(Device, device_id) is None:
+            raise LookupError(f"Device {device_id} not found")
+        self._session.query(DeviceRefreshToken).filter(
+            DeviceRefreshToken.device_id == device_id,
+            DeviceRefreshToken.revoked_at.is_(None),
+        ).update({"revoked_at": datetime.now(UTC)}, synchronize_session=False)
+        raw_dr, _ = self._issue_refresh_token(device_id)
+        self._session.commit()
+        logger.info("Reissued refresh token for device %s", device_id)
+        return raw_dr
 
     def _issue_access_token(self, device_id: str) -> tuple[str, AccessToken]:
         """Create and persist a new access token for the given device."""

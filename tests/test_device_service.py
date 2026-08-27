@@ -17,7 +17,7 @@ import pytest
 
 from app.auth.key_utils import generate_key, hash_key, key_prefix
 from app.db.engine import get_engine, get_session_factory
-from app.db.models import AccessToken, Base, Device, Policy, RegistrationToken
+from app.db.models import AccessToken, Base, Device, DeviceRefreshToken, Policy, RegistrationToken
 from app.services.device_service import DeviceService
 
 
@@ -104,7 +104,7 @@ def test_refresh_requires_a_token_for_that_device(db_session):
     with pytest.raises(PermissionError, match="not valid for this device"):
         DeviceService(db_session).refresh_device(
             device_id=alice["result"]["device_id"],
-            access_token_hash=hash_key(mallory["result"]["access_token"]["token"]),
+            refresh_token_hash=hash_key(mallory["result"]["refresh_token"]["token"]),
         )
 
 
@@ -112,10 +112,10 @@ def test_refresh_rejects_an_unknown_token(db_session):
     raw_rt, _ = _reg_token(db_session)
     alice = _enrol(db_session, raw_rt, "inst-alice")
 
-    with pytest.raises(PermissionError, match="Invalid access token"):
+    with pytest.raises(PermissionError, match="Invalid refresh token"):
         DeviceService(db_session).refresh_device(
             device_id=alice["result"]["device_id"],
-            access_token_hash=hash_key("at_not_a_real_token"),
+            refresh_token_hash=hash_key("dr_not_a_real_token"),
         )
 
 
@@ -173,39 +173,13 @@ def test_enrol_rejects_an_invalid_registration_token(db_session):
 # ---------------------------------------------------------------------------
 
 
-def test_refresh_rotates_the_token_with_an_overlap(db_session):
-    """The old token stays briefly valid so an in-flight request survives.
-
-    Refresh used to delete every access token for the device, which failed any
-    request already running.
-    """
-    raw_rt, _ = _reg_token(db_session)
-    enrolled = _enrol(db_session, raw_rt, "inst-1")
-    old_raw = enrolled["result"]["access_token"]["token"]
-
-    refreshed = DeviceService(db_session).refresh_device(
-        device_id=enrolled["result"]["device_id"],
-        access_token_hash=hash_key(old_raw),
-    )
-
-    assert refreshed["status"] == "Success"
-    new_raw = refreshed["result"]["access_token"]["token"]
-    assert new_raw != old_raw
-
-    old = db_session.query(AccessToken).filter_by(token_hash=hash_key(old_raw)).one()
-    assert old.replaced_by_id is not None, "rotation must be traceable"
-    expires = old.expires_at.replace(tzinfo=UTC) if old.expires_at.tzinfo is None else old.expires_at
-    assert expires > datetime.now(UTC), "the replaced token must remain briefly valid"
-    assert expires < datetime.now(UTC) + timedelta(seconds=120)
-
-
 def test_refresh_updates_metadata(db_session):
     raw_rt, _ = _reg_token(db_session)
     enrolled = _enrol(db_session, raw_rt, "inst-1", device_name="Old")
 
     DeviceService(db_session).refresh_device(
         device_id=enrolled["result"]["device_id"],
-        access_token_hash=hash_key(enrolled["result"]["access_token"]["token"]),
+        refresh_token_hash=hash_key(enrolled["result"]["refresh_token"]["token"]),
         device_name="New",
     )
 
@@ -221,7 +195,7 @@ def test_refresh_of_an_inactive_device_is_refused(db_session):
 
     result = DeviceService(db_session).refresh_device(
         device_id=device.id,
-        access_token_hash=hash_key(enrolled["result"]["access_token"]["token"]),
+        refresh_token_hash=hash_key(enrolled["result"]["refresh_token"]["token"]),
     )
 
     assert result["status"] == "InactiveDevice"
@@ -242,144 +216,6 @@ def test_registration_token_model_round_trips(db_session):
 # ---------------------------------------------------------------------------
 # Rotation is one-time
 # ---------------------------------------------------------------------------
-
-
-def test_a_rotated_token_cannot_be_used_to_refresh_again(db_session):
-    """Rotation must be one-time, or the overlap becomes a minting oracle.
-
-    The first fix accepted any unexpired token. Because refresh also reset the
-    presented token's expiry to a fresh overlap, a client could replay the same
-    token indefinitely: each replay issued another hour-long token and pushed
-    the replayed token's own deadline out again, so it never expired.
-    """
-    raw_rt, _ = _reg_token(db_session)
-    enrolled = _enrol(db_session, raw_rt, "inst-1")
-    device_id = enrolled["result"]["device_id"]
-    first_raw = enrolled["result"]["access_token"]["token"]
-
-    svc = DeviceService(db_session)
-    svc.refresh_device(device_id=device_id, access_token_hash=hash_key(first_raw))
-
-    with pytest.raises(PermissionError, match="already been rotated"):
-        svc.refresh_device(device_id=device_id, access_token_hash=hash_key(first_raw))
-
-
-def test_the_guard_is_the_conditional_write_not_the_read(db_session, monkeypatch):
-    """Prove the check that actually holds under concurrency.
-
-    The early `replaced_by_id is not None` check is only a fast path: two
-    concurrent refreshes can both read the token as unrotated and pass it. What
-    makes double-minting impossible is that the rotation is written as an
-    UPDATE conditional on the token still being unrotated. This drives that
-    branch by rotating the row in the window between the read and the write —
-    without it the rollback path is never executed by any test.
-    """
-    raw_rt, _ = _reg_token(db_session)
-    enrolled = _enrol(db_session, raw_rt, "inst-race")
-    device_id = enrolled["result"]["device_id"]
-    raw = enrolled["result"]["access_token"]["token"]
-    tokens_before = db_session.query(AccessToken).count()
-
-    svc = DeviceService(db_session)
-    real_issue = svc._issue_access_token
-
-    def rotate_behind_our_back(arg):
-        result = real_issue(arg)
-        db_session.query(AccessToken).filter_by(token_hash=hash_key(raw)).update(
-            {"replaced_by_id": "a-successor-from-the-other-request"}, synchronize_session=False
-        )
-        return result
-
-    monkeypatch.setattr(svc, "_issue_access_token", rotate_behind_our_back)
-
-    with pytest.raises(PermissionError, match="already been rotated"):
-        svc.refresh_device(device_id=device_id, access_token_hash=hash_key(raw))
-
-    db_session.expire_all()
-    assert db_session.query(AccessToken).count() == tokens_before, (
-        "the successor issued before the losing write must be rolled back, "
-        "not left behind as a second live credential"
-    )
-
-
-def test_replaying_a_rotated_token_mints_nothing_and_extends_nothing(db_session):
-    """The replay must be inert, not merely refused.
-
-    Two separate guarantees: no additional live credential, and no renewal of
-    the replayed token's own overlap.
-    """
-    raw_rt, _ = _reg_token(db_session)
-    enrolled = _enrol(db_session, raw_rt, "inst-1")
-    device_id = enrolled["result"]["device_id"]
-    first_raw = enrolled["result"]["access_token"]["token"]
-
-    svc = DeviceService(db_session)
-    svc.refresh_device(device_id=device_id, access_token_hash=hash_key(first_raw))
-
-    first = db_session.query(AccessToken).filter_by(token_hash=hash_key(first_raw)).one()
-    deadline_before = first.expires_at
-    successor_before = first.replaced_by_id
-    count_before = db_session.query(AccessToken).count()
-
-    for _ in range(3):
-        with pytest.raises(PermissionError):
-            svc.refresh_device(device_id=device_id, access_token_hash=hash_key(first_raw))
-
-    db_session.expire_all()
-    first = db_session.query(AccessToken).filter_by(token_hash=hash_key(first_raw)).one()
-    assert db_session.query(AccessToken).count() == count_before, "replay minted a token"
-    assert first.expires_at == deadline_before, "replay renewed its own overlap"
-    assert first.replaced_by_id == successor_before, "replay rewrote the rotation chain"
-
-
-def test_the_overlap_can_only_shorten_a_token_never_lengthen_it(db_session):
-    """A token already due to expire sooner than the overlap keeps its deadline."""
-    raw_rt, _ = _reg_token(db_session)
-    enrolled = _enrol(db_session, raw_rt, "inst-1")
-    device_id = enrolled["result"]["device_id"]
-    raw = enrolled["result"]["access_token"]["token"]
-
-    token = db_session.query(AccessToken).filter_by(token_hash=hash_key(raw)).one()
-    nearly_expired = datetime.now(UTC) + timedelta(seconds=5)
-    token.expires_at = nearly_expired
-    db_session.commit()
-
-    DeviceService(db_session).refresh_device(device_id=device_id, access_token_hash=hash_key(raw))
-
-    db_session.expire_all()
-    token = db_session.query(AccessToken).filter_by(token_hash=hash_key(raw)).one()
-    expires = token.expires_at.replace(tzinfo=UTC) if token.expires_at.tzinfo is None else token.expires_at
-    assert expires <= nearly_expired + timedelta(seconds=1), "rotation extended a nearly-expired token"
-
-
-def test_the_rotation_overlap_is_about_a_minute(db_session):
-    """Assert the actual overlap, not merely 'under two minutes'."""
-    raw_rt, _ = _reg_token(db_session)
-    enrolled = _enrol(db_session, raw_rt, "inst-1")
-    raw = enrolled["result"]["access_token"]["token"]
-
-    DeviceService(db_session).refresh_device(device_id=enrolled["result"]["device_id"], access_token_hash=hash_key(raw))
-
-    token = db_session.query(AccessToken).filter_by(token_hash=hash_key(raw)).one()
-    expires = token.expires_at.replace(tzinfo=UTC) if token.expires_at.tzinfo is None else token.expires_at
-    remaining = (expires - datetime.now(UTC)).total_seconds()
-    assert 50 <= remaining <= 60, f"overlap was {remaining}s, expected ~60"
-
-
-def test_revoking_a_device_kills_the_overlapping_token_too(db_session):
-    """Rotation must not leave a credential that survives revocation."""
-    raw_rt, _ = _reg_token(db_session)
-    enrolled = _enrol(db_session, raw_rt, "inst-1")
-    device_id = enrolled["result"]["device_id"]
-    old_raw = enrolled["result"]["access_token"]["token"]
-
-    svc = DeviceService(db_session)
-    svc.refresh_device(device_id=device_id, access_token_hash=hash_key(old_raw))
-    assert db_session.query(AccessToken).filter_by(device_id=device_id).count() == 2
-
-    svc.update_device_status(device_id, "revoked")
-
-    assert db_session.query(AccessToken).filter_by(device_id=device_id).count() == 0
 
 
 # ---------------------------------------------------------------------------
@@ -742,3 +578,130 @@ def test_there_is_no_way_to_hard_delete_a_registration_token(db_session):
     Leaving such a method available is leaving the defect available.
     """
     assert not hasattr(DeviceService(db_session), "delete_registration_token")
+
+
+# ---------------------------------------------------------------------------
+# A per-device refresh credential that does not rotate
+#
+# The original problem: a device offline for an hour is locked out, because
+# refresh required an unexpired, unrotated access token with a 3600s TTL. After
+# approval-by-default, re-enrolment needs an admin, so the lockout is worse.
+#
+# It does not rotate. Rotation cannot both survive a lost response and detect
+# reuse: the client retrying after a committed-but-lost rotation is
+# indistinguishable from a thief. Under a non-hostile host, a credential that
+# cannot lock its owner out is worth more than one that pretends to catch a
+# thief it cannot catch. The cost, stated: a stolen refresh token is usable
+# until it expires or an admin revokes it.
+# ---------------------------------------------------------------------------
+
+
+def _active_device(session, label: str):
+    """An enrolled, active device. Returns (device_id, raw_refresh_token)."""
+    raw_rt, _rt = _reg_token(session, f"rt-{label}", policy_id=_seed_policy(session))
+    result = _enrol(session, raw_rt, f"inst-{label}")
+    assert result["status"] == "Success", result
+    return result["result"]["device_id"], result["result"]["refresh_token"]["token"]
+
+
+def test_refresh_works_after_the_access_token_has_expired(db_session):
+    """The whole point. An hour offline must not mean re-enrolment."""
+    device_id, raw_dr = _active_device(db_session, "offline")
+    db_session.query(AccessToken).filter_by(device_id=device_id).update(
+        {"expires_at": datetime.now(UTC) - timedelta(hours=2)}, synchronize_session=False
+    )
+    db_session.commit()
+
+    result = DeviceService(db_session).refresh_device(device_id=device_id, refresh_token_hash=hash_key(raw_dr))
+
+    assert result["status"] == "Success"
+    assert result["result"]["access_token"]["token"].startswith("at_")
+
+
+def test_the_refresh_token_does_not_rotate(db_session):
+    """Fixed for its life. A client that loses a response can simply retry."""
+    device_id, raw_dr = _active_device(db_session, "norotate")
+    service = DeviceService(db_session)
+
+    first = service.refresh_device(device_id=device_id, refresh_token_hash=hash_key(raw_dr))
+    second = service.refresh_device(device_id=device_id, refresh_token_hash=hash_key(raw_dr))
+
+    assert first["status"] == "Success" and second["status"] == "Success"
+    assert first["result"]["access_token"]["token"] != second["result"]["access_token"]["token"]
+    assert db_session.query(DeviceRefreshToken).filter_by(device_id=device_id).count() == 1
+
+
+def test_a_refresh_token_cannot_refresh_another_device(db_session):
+    mine, raw_mine = _active_device(db_session, "mine")
+    theirs, _raw_theirs = _active_device(db_session, "theirs")
+
+    with pytest.raises(PermissionError):
+        DeviceService(db_session).refresh_device(device_id=theirs, refresh_token_hash=hash_key(raw_mine))
+
+
+def test_an_expired_refresh_token_is_refused(db_session):
+    device_id, raw_dr = _active_device(db_session, "expired")
+    db_session.query(DeviceRefreshToken).filter_by(device_id=device_id).update(
+        {"expires_at": datetime.now(UTC) - timedelta(seconds=1)}, synchronize_session=False
+    )
+    db_session.commit()
+
+    with pytest.raises(PermissionError, match="expired"):
+        DeviceService(db_session).refresh_device(device_id=device_id, refresh_token_hash=hash_key(raw_dr))
+
+
+def test_reissuing_revokes_the_previous_refresh_token(db_session):
+    """Otherwise "issue new" simply leaves two usable credentials."""
+    device_id, old_raw = _active_device(db_session, "reissue")
+    service = DeviceService(db_session)
+
+    new_raw = service.reissue_refresh_token(device_id)
+
+    assert new_raw != old_raw
+    with pytest.raises(PermissionError):
+        service.refresh_device(device_id=device_id, refresh_token_hash=hash_key(old_raw))
+    assert service.refresh_device(device_id=device_id, refresh_token_hash=hash_key(new_raw))["status"] == "Success"
+
+
+def test_cascade_revocation_destroys_refresh_tokens_too(db_session):
+    """A 30-day credential outliving a cascade makes the revocation cosmetic."""
+    policy_id = _seed_policy(db_session)
+    service = DeviceService(db_session)
+    raw, rt = service.create_registration_token(
+        name="leaked", policy_id=policy_id, expires_at=_soon(), pre_authorized=True
+    )
+    service.enrol_device(rt_token_hash=hash_key(raw), installation_id="inst-dr-cascade", **_META)
+    assert db_session.query(DeviceRefreshToken).count() == 1
+
+    service.revoke_registration_token(rt.id, cascade=True)
+
+    db_session.expire_all()
+    assert db_session.query(DeviceRefreshToken).count() == 0
+
+
+def test_revoking_a_device_kills_every_credential_it_holds(db_session):
+    """Carried over from the rotation-era test that this replaces.
+
+    That test asserted revocation left no ACCESS token behind. A refresh
+    credential outlives an access token by thirty days, so revocation that
+    spares it means a device later re-activated silently regains a credential
+    issued before it was revoked.
+    """
+    device_id, _raw_dr = _active_device(db_session, "revoke-creds")
+    assert db_session.query(AccessToken).filter_by(device_id=device_id).count() == 1
+    assert db_session.query(DeviceRefreshToken).filter_by(device_id=device_id).count() == 1
+
+    DeviceService(db_session).update_device_status(device_id, "revoked")
+
+    db_session.expire_all()
+    assert db_session.query(AccessToken).filter_by(device_id=device_id).count() == 0
+    assert db_session.query(DeviceRefreshToken).filter_by(device_id=device_id).count() == 0
+
+
+def test_deleting_a_device_takes_its_refresh_credential_with_it(db_session):
+    device_id, _raw_dr = _active_device(db_session, "delete-creds")
+
+    DeviceService(db_session).delete_device(device_id)
+
+    db_session.expire_all()
+    assert db_session.query(DeviceRefreshToken).filter_by(device_id=device_id).count() == 0
