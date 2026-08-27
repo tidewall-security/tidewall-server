@@ -20,6 +20,9 @@ _ACCESS_TOKEN_TTL_SECONDS = 3600
 # already in flight when the refresh landed does not fail.
 _ROTATION_OVERLAP_SECONDS = 60
 
+# A key valid for longer than a quarter is one nobody will remember issuing.
+MAX_REGISTRATION_TOKEN_TTL = timedelta(days=90)
+
 
 # 37 sites with mode "block"
 # Site modes keyed by alias (must match extension's SITE_REGISTRY aliases)
@@ -80,6 +83,7 @@ class DeviceService:
         policy_id: str,
         created_by: str | None = None,
         expires_at: datetime | None = None,
+        max_uses: int | None = None,
     ) -> tuple[str, RegistrationToken]:
         """Create a new registration token. Returns (raw_token, record).
 
@@ -92,6 +96,12 @@ class DeviceService:
         """
         if self._session.get(Policy, policy_id) is None:
             raise ValueError(f"Policy {policy_id} not found")
+        if expires_at is None:
+            raise ValueError("Registration tokens require an expiry")
+        if as_utc(expires_at) > datetime.now(UTC) + MAX_REGISTRATION_TOKEN_TTL:
+            raise ValueError("Registration token expiry may not exceed 90 days")
+        if max_uses is not None and max_uses < 1:
+            raise ValueError("max_uses must be at least 1")
 
         raw = generate_key(prefix="rt")
         record = RegistrationToken(
@@ -100,6 +110,7 @@ class DeviceService:
             token_prefix=key_prefix(raw),
             created_by=created_by,
             expires_at=expires_at,
+            max_uses=max_uses,
             policy_id=policy_id,
         )
         self._session.add(record)
@@ -172,6 +183,27 @@ class DeviceService:
             # should refresh with its access token. Re-enrolling would be the
             # takeover path again, so it is refused rather than served.
             return {"status": "InstallationIdAlreadyEnrolled", "result": None}
+
+        if rt.max_uses is not None:
+            # Conditional DML, not SELECT ... FOR UPDATE: SQLite has no row
+            # locks. WAL admits a single writer, so an UPDATE guarded on the
+            # current value IS the concurrency control. rowcount == 0 means
+            # another enrolment took the last use between the read above and
+            # here -- the duplicate check before this is a fast path, this is
+            # the guarantee.
+            #
+            # Claimed before the insert and rolled back with it, so a racing
+            # duplicate that fails at flush returns the use rather than burning
+            # it. Otherwise anyone who knows an enrolled installation id could
+            # exhaust that key by replaying it.
+            claimed = (
+                self._session.query(RegistrationToken)
+                .filter(RegistrationToken.id == rt.id, RegistrationToken.uses < rt.max_uses)
+                .update({"uses": RegistrationToken.uses + 1}, synchronize_session=False)
+            )
+            if claimed == 0:
+                self._session.rollback()
+                return {"status": "RegistrationTokenExhausted", "result": None}
 
         device = Device(
             installation_id=installation_id,

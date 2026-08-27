@@ -19,7 +19,13 @@ class CreateRegistrationTokenRequest(BaseModel):
     # inheritance code at enrolment read NULL and every device fell back to the
     # default policy.
     policy_id: str
-    expires_at: datetime | None = None
+    # Required, and capped by the service. A key with no deadline is a
+    # permanent capability to create devices; the only containment for a leaked
+    # one is then that somebody eventually notices.
+    expires_at: datetime
+    # None means uncapped, which is legitimate for a fleet key whose expiry is
+    # doing the bounding.
+    max_uses: int | None = None
 
 
 def _to_dict(rt) -> dict:
@@ -30,7 +36,9 @@ def _to_dict(rt) -> dict:
         "policy_id": rt.policy_id,
         "created_by": rt.created_by,
         "created_at": str(rt.created_at),
-        "expires_at": str(rt.expires_at) if rt.expires_at else None,
+        "expires_at": str(rt.expires_at),
+        "max_uses": rt.max_uses,
+        "uses": rt.uses,
     }
 
 
@@ -46,6 +54,7 @@ async def create_registration_token(body: CreateRegistrationTokenRequest, reques
             policy_id=body.policy_id,
             created_by=getattr(request.state, "api_key_id", None),
             expires_at=body.expires_at,
+            max_uses=body.max_uses,
         )
         result = _to_dict(record)
         result["token"] = raw_token  # Returned ONCE, never stored

@@ -1,5 +1,7 @@
 """Tests for multi-prefix token generation and hashing."""
 
+from datetime import UTC, datetime, timedelta
+
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -128,6 +130,7 @@ def test_middleware_rt_prefix_routes_to_enrol_only():
         name="mw-rt",
         token_hash=hash_key(raw_rt),
         token_prefix=key_prefix(raw_rt),
+        expires_at=datetime.now(UTC) + timedelta(days=30),
     )
     session.add(rt)
     session.commit()

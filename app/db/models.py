@@ -535,7 +535,16 @@ class RegistrationToken(Base):
     token_prefix: Mapped[str] = mapped_column(String, nullable=False)
     created_by: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Mandatory. An enrolment key with no deadline is a permanent capability to
+    # create devices, and the containment story for a leak is then only
+    # "somebody eventually notices".
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # None means uncapped, which is legitimate for a fleet key whose expiry is
+    # doing the bounding. `uses` is incremented by a conditional UPDATE and
+    # never by a read-modify-write: SQLite has no row locks, so the guard has
+    # to live in the WHERE clause.
+    max_uses: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    uses: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     # Scope an enrolling device inherits. Without this a registration token
     # conferred no policy at all — the middleware set policy_id = None — so
     # enrolled devices had no binding to constrain them.

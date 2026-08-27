@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import builtins
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import FastAPI
@@ -240,7 +241,11 @@ def test_rt_token_cannot_call_guard(setup):
     # Create an rt_ token via the registration endpoint
     resp = client.post(
         "/v1/registration-tokens",
-        json={"name": "test-rt", "policy_id": policy_id},
+        json={
+            "name": "test-rt",
+            "policy_id": policy_id,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     assert resp.status_code == 201

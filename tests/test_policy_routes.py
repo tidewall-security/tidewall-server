@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 import yaml
 from fastapi import FastAPI
@@ -542,7 +544,11 @@ def test_deleting_a_policy_still_bound_to_a_device_returns_409(setup):
 
     rt = client.post(
         "/v1/registration-tokens",
-        json={"name": "engineering-onboarding", "policy_id": policy_id},
+        json={
+            "name": "engineering-onboarding",
+            "policy_id": policy_id,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
         headers=auth,
     )
     assert rt.status_code == 201

@@ -38,6 +38,9 @@ def _reg_token(session, name="onboarding", policy_id=None) -> tuple[str, Registr
         token_hash=hash_key(raw),
         token_prefix=key_prefix(raw),
         policy_id=policy_id,
+        # Required since keys became bounded. Constructed directly here rather
+        # than through the service, so the column has to be supplied.
+        expires_at=datetime.now(UTC) + timedelta(days=30),
     )
     session.add(rt)
     session.commit()
@@ -224,7 +227,10 @@ def test_registration_token_model_round_trips(db_session):
     stored = db_session.query(RegistrationToken).one()
     assert stored.name == "Q1 Onboarding"
     assert stored.token_hash == hash_key(raw)
-    assert stored.expires_at is None
+    # Was `is None`: an unbounded key is no longer expressible. This assertion
+    # is what kept the expiring path out of the suite entirely, and with it the
+    # timezone defect in the middleware that made expiring keys unusable.
+    assert stored.expires_at is not None
 
 
 # ---------------------------------------------------------------------------
@@ -394,10 +400,151 @@ def test_a_token_created_through_the_service_carries_its_policy_to_enrolment(db_
     db_session.commit()
 
     raw_rt, record = DeviceService(db_session).create_registration_token(
-        name="engineering-onboarding", policy_id=policy.id
+        name="engineering-onboarding", policy_id=policy.id, expires_at=_soon(30)
     )
     assert record.policy_id == policy.id
 
     result = _enrol(db_session, raw_rt, "inst-scoped")
 
     assert db_session.get(Device, result["result"]["device_id"]).policy_id == policy.id
+
+
+# ---------------------------------------------------------------------------
+# Bounded registration keys
+#
+# An enrolment key with no deadline is a permanent capability to create
+# devices, and one with no ceiling enrols a fleet inside its window. Both
+# bounds land together because either alone still leaves the key unbounded in
+# the other dimension.
+# ---------------------------------------------------------------------------
+
+_META = {
+    "device_name": "Laptop",
+    "user_name": "Alice",
+    "user_email": "alice@example.com",
+    "browser": "chrome",
+    "os": "macos",
+    "ext_version": "1.0.0",
+}
+
+
+def _soon(days: int = 1) -> datetime:
+    return datetime.now(UTC) + timedelta(days=days)
+
+
+def _seed_policy(session, policy_id: str = "test-policy") -> str:
+    if session.get(Policy, policy_id) is None:
+        session.add(Policy(id=policy_id, name=policy_id, type="application"))
+        session.commit()
+    return policy_id
+
+
+def test_registration_token_requires_an_expiry(db_session):
+    """A key with no deadline is a permanent enrolment capability."""
+    policy_id = _seed_policy(db_session)
+    with pytest.raises(ValueError, match="expiry"):
+        DeviceService(db_session).create_registration_token(name="unbounded", policy_id=policy_id, expires_at=None)
+
+
+def test_registration_token_expiry_is_capped(db_session):
+    """Mandatory but unlimited is the same permanent capability, spelled longer."""
+    policy_id = _seed_policy(db_session)
+    with pytest.raises(ValueError, match="90 days"):
+        DeviceService(db_session).create_registration_token(
+            name="too-far", policy_id=policy_id, expires_at=datetime.now(UTC) + timedelta(days=91)
+        )
+
+
+def test_max_uses_is_enforced_across_enrolments(db_session):
+    """The ceiling bounds devices created, not requests made."""
+    policy_id = _seed_policy(db_session)
+    service = DeviceService(db_session)
+    raw, _rt = service.create_registration_token(name="two-only", policy_id=policy_id, expires_at=_soon(), max_uses=2)
+
+    for n in range(2):
+        assert _enrol(db_session, raw, f"inst-cap-{n}")["status"] == "Success", f"enrolment {n}"
+
+    third = _enrol(db_session, raw, "inst-cap-over")
+
+    assert third["status"] == "RegistrationTokenExhausted"
+    assert db_session.query(Device).count() == 2, "a device row survived the refusal"
+
+
+def test_a_refused_enrolment_does_not_consume_a_use(db_session):
+    """A duplicate installation id must not burn the ceiling.
+
+    The use is claimed before the insert. If the claim does not roll back with
+    the insert, anyone who knows an installation id already enrolled can
+    exhaust that key by replaying it.
+    """
+    policy_id = _seed_policy(db_session)
+    service = DeviceService(db_session)
+    raw, rt = service.create_registration_token(name="k", policy_id=policy_id, expires_at=_soon(), max_uses=2)
+    rt_id = rt.id
+
+    assert _enrol(db_session, raw, "inst-dup")["status"] == "Success"
+    assert _enrol(db_session, raw, "inst-dup")["status"] == "InstallationIdAlreadyEnrolled"
+
+    # expire_all() first. The counter is claimed with synchronize_session=False
+    # and the factory sets expire_on_commit=False, so the instance in the
+    # identity map still reports the value it was loaded with -- reading it
+    # directly would assert against a stale copy and report a failure the
+    # database does not have.
+    db_session.expire_all()
+    assert db_session.get(RegistrationToken, rt_id).uses == 1, "the rejected duplicate consumed a use"
+
+
+def test_two_concurrent_enrolments_cannot_share_the_last_use(tmp_path):
+    """The conditional write is the guarantee; the pre-check is a fast path.
+
+    A FILE-backed database, not :memory:. An in-memory SQLite with a shared
+    connection would let both sessions see one another's uncommitted state, so
+    the threads never actually contend and this passes against the very
+    read-modify-write it exists to catch.
+    """
+    import threading
+
+    engine = get_engine(f"sqlite:///{tmp_path}/race.db")
+    Base.metadata.create_all(engine)
+    SessionLocal = get_session_factory(engine)
+
+    setup = SessionLocal()
+    policy_id = _seed_policy(setup)
+    raw, _rt = DeviceService(setup).create_registration_token(
+        name="one-left", policy_id=policy_id, expires_at=_soon(), max_uses=1
+    )
+    setup.close()
+
+    barrier = threading.Barrier(2)
+    results: list[str] = []
+    lock = threading.Lock()
+
+    def enrol(label: str) -> None:
+        session = SessionLocal()
+        try:
+            service = DeviceService(session)
+            service.lookup_registration_token(hash_key(raw))  # both read before either claims
+            barrier.wait(timeout=10)
+            outcome = service.enrol_device(rt_token_hash=hash_key(raw), installation_id=f"inst-{label}", **_META)[
+                "status"
+            ]
+        except Exception as exc:  # a lock timeout is a legitimate third outcome
+            outcome = type(exc).__name__
+        finally:
+            session.close()
+        with lock:
+            results.append(outcome)
+
+    threads = [threading.Thread(target=enrol, args=(f"racer{n}",)) for n in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=20)
+
+    verify = SessionLocal()
+    try:
+        assert results.count("Success") == 1, f"exactly one enrolment may win: {results}"
+        assert verify.query(Device).count() == 1
+        assert verify.query(RegistrationToken).one().uses == 1
+    finally:
+        verify.close()

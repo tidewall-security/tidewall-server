@@ -107,6 +107,11 @@ async def enrol_device(body: DeviceEnrolRequest, request: Request) -> dict:
             ext_version=body.extension_version,
             fingerprint=body.fingerprint,
         )
+        if result["status"] == "RegistrationTokenExhausted":
+            # 403, not 401: the credential is valid and the caller is simply
+            # not owed a device. Re-presenting it will never help, and 401
+            # invites a client to go looking for a fresher token.
+            raise HTTPException(status_code=403, detail="Registration token has no uses remaining")
         if result["status"] == "InstallationIdAlreadyEnrolled":
             # 409, not a 201 carrying a failure in the body: nothing was
             # created. The client already holds credentials for this

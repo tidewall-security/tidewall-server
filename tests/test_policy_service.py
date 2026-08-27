@@ -1,5 +1,7 @@
 """Tests for PolicyService — CRUD and engine cache."""
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from app.db.engine import get_engine, get_session_factory
@@ -193,7 +195,13 @@ def test_deleting_a_policy_bound_to_a_registration_token_is_refused(seeded_sessi
     svc = PolicyService(seeded_session)
     scoped = svc.create_policy(name="contractors", type="application")
     seeded_session.add(
-        RegistrationToken(name="onboarding", token_hash="h", token_prefix="rt_ab...", policy_id=scoped.id)
+        RegistrationToken(
+            name="onboarding",
+            token_hash="h",
+            token_prefix="rt_ab...",
+            policy_id=scoped.id,
+            expires_at=datetime.now(UTC) + timedelta(days=30),
+        )
     )
     seeded_session.commit()
 

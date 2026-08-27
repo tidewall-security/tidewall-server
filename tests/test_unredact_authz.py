@@ -31,9 +31,7 @@ from app.db.models import AccessToken, APIKey, Base, Device, Policy
 
 @pytest.fixture
 def env():
-    engine = create_engine(
-        "sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool
-    )
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
 
