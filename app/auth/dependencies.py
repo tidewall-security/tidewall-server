@@ -52,3 +52,25 @@ def require_role(minimum_role: str):
         return str(role)
 
     return _check
+
+
+def deny_device_credentials(request: Request) -> None:
+    """Refuse a route to credentials issued to an enrolled device.
+
+    The ``api`` role is not a fine enough boundary. Every enrolled device holds
+    it, because it is what lets an extension call the guard -- so a route that
+    asks only for ``api`` is reachable by every laptop in the fleet.
+
+    That is right for the guard and wrong for anything that discloses what a
+    redaction concealed. A device credential should be able to ask whether a
+    prompt is allowed; it should not be able to ask what was removed from one.
+
+    Denial happens as a DEPENDENCY, before the body is parsed and before any
+    lookup, so the route cannot become an existence oracle for identifiers the
+    caller is guessing.
+    """
+    if getattr(request.state, "device_id", None) is not None:
+        raise HTTPException(
+            status_code=403,
+            detail="Device credentials may not reverse redactions",
+        )
