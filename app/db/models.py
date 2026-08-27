@@ -551,6 +551,10 @@ class RegistrationToken(Base):
     # and never globally -- and why a pre-authorized key is worth protecting
     # more carefully than an ordinary one.
     pre_authorized: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    # Soft revocation. Hard deletion takes the lineage with it -- reg_token_id
+    # is SET NULL on delete -- and a revoked key is precisely when knowing which
+    # devices came from it matters most.
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Scope an enrolling device inherits. Without this a registration token
     # conferred no policy at all — the middleware set policy_id = None — so
     # enrolled devices had no binding to constrain them.
@@ -586,6 +590,12 @@ class Device(Base):
     reg_token_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("registration_tokens.id", ondelete="SET NULL"), nullable=True
     )
+    # A SNAPSHOT, not a foreign key. The FK above is SET NULL on delete, so
+    # deleting a leaked key silently makes every device it created
+    # unattributable -- and deleting the key is an administrator's first
+    # instinct on discovering the leak. Written once at enrolment and never
+    # updated: it records which key this device came from, which cannot change.
+    reg_token_prefix: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     # RESTRICT for the same reason as the registration token's: a device's scope
     # is fixed at enrolment, and deleting its policy must not quietly reassign
     # it to the default one.
