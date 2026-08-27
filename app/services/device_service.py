@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.key_utils import generate_key, hash_key, key_prefix
 from app.db.models import AccessToken, Device, Policy, RegistrationToken
+from app.utils import as_utc
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +19,6 @@ _ACCESS_TOKEN_TTL_SECONDS = 3600
 # How long a rotated token stays valid after being replaced, so a request
 # already in flight when the refresh landed does not fail.
 _ROTATION_OVERLAP_SECONDS = 60
-
-
-def _as_utc(value: datetime) -> datetime:
-    """SQLite returns naive datetimes; compare them as UTC."""
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
 
 
 # 37 sites with mode "block"
@@ -226,7 +222,7 @@ class DeviceService:
         token = self._session.query(AccessToken).filter_by(token_hash=access_token_hash).first()
         if token is None:
             raise PermissionError("Invalid access token")
-        if token.expires_at and _as_utc(token.expires_at) < datetime.now(UTC):
+        if token.expires_at and as_utc(token.expires_at) < datetime.now(UTC):
             raise PermissionError("Access token expired")
         if token.replaced_by_id is not None:
             # Rotation is one-time. The overlap exists so requests already in
@@ -274,7 +270,7 @@ class DeviceService:
         # unrotated so that two concurrent refreshes cannot both mint a
         # successor — the check above is a fast path, this is the guarantee.
         overlap_deadline = datetime.now(UTC) + timedelta(seconds=_ROTATION_OVERLAP_SECONDS)
-        current_expiry = _as_utc(token.expires_at) if token.expires_at else None
+        current_expiry = as_utc(token.expires_at) if token.expires_at else None
         deadline = min(overlap_deadline, current_expiry) if current_expiry else overlap_deadline
 
         rotated = (

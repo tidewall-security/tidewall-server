@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import FastAPI
@@ -13,7 +14,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.auth.key_utils import generate_key, hash_key, key_prefix
 from app.auth.middleware import AuthMiddleware
-from app.db.models import APIKey, Base, Policy
+from app.db.models import APIKey, Base, Policy, RegistrationToken
 
 
 def _iid(label: str) -> str:
@@ -533,3 +534,73 @@ def test_refreshing_a_revoked_device_is_forbidden(setup):
         headers={"Authorization": f"Bearer {at_token}"},
     )
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Registration token expiry
+#
+# The rt_ branch of the middleware read expires_at straight off the row and
+# compared it to an aware now(). SQLite has no timezone type, so the column
+# comes back naive and the comparison raises instead of returning a verdict.
+#
+# No existing test set an expiry -- test_device_service asserts it is None --
+# so the whole path was unexercised while the suite stayed green.
+# ---------------------------------------------------------------------------
+
+
+def _enrol(client, raw_token: str, label: str):
+    return client.post(
+        "/v1/devices/enrol",
+        headers={"Authorization": f"Bearer {raw_token}"},
+        json={
+            "installation_id": _iid(label),
+            "device_name": "d",
+            "user_name": "u",
+            "user_email": "u@example.com",
+            "browser": "b",
+            "os": "o",
+            "extension_version": "1",
+        },
+    )
+
+
+def _seed_token(session_factory, *, expires_at) -> str:
+    raw = generate_key(prefix="rt")
+    session = session_factory()
+    session.add(
+        RegistrationToken(
+            name="expiry-fixture",
+            token_hash=hash_key(raw),
+            token_prefix=key_prefix(raw),
+            policy_id=TEST_POLICY_ID,
+            expires_at=expires_at,
+        )
+    )
+    session.commit()
+    session.close()
+    return raw
+
+
+def test_registration_token_with_an_expiry_can_enrol(setup):
+    """A token with a future expiry must work.
+
+    A time-limited onboarding key is the security-conscious choice, and it was
+    the one that did not function.
+    """
+    client, _admin_key, session_factory = setup
+    raw = _seed_token(session_factory, expires_at=datetime.now(UTC) + timedelta(days=1))
+
+    response = _enrol(client, raw, "expiring-token")
+
+    assert response.status_code == 201
+
+
+def test_expired_registration_token_is_refused_not_crashed(setup):
+    """An expired token is a 401. A 500 is not a verdict."""
+    client, _admin_key, session_factory = setup
+    raw = _seed_token(session_factory, expires_at=datetime.now(UTC) - timedelta(seconds=1))
+
+    response = _enrol(client, raw, "expired-token")
+
+    assert response.status_code == 401
+    assert "expired" in response.json()["detail"].lower()
