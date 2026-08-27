@@ -14,7 +14,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.auth.key_utils import generate_key, hash_key, key_prefix
 from app.auth.middleware import AuthMiddleware
-from app.db.models import APIKey, Base, Policy, RegistrationToken
+from app.db.models import AccessToken, APIKey, Base, Policy, RegistrationToken
 
 
 def _iid(label: str) -> str:
@@ -603,4 +603,40 @@ def test_expired_registration_token_is_refused_not_crashed(setup):
     response = _enrol(client, raw, "expired-token")
 
     assert response.status_code == 401
+    assert "expired" in response.json()["detail"].lower()
+
+
+def test_an_expired_access_token_is_rejected_by_the_middleware(setup):
+    """The middleware must refuse an expired at_ token, not merely the service.
+
+    Found by mutation: deleting the expiry check in _handle_at_token entirely
+    left all 1496 tests passing. The check was correct and nothing proved it,
+    which is exactly how the sibling rt_ comparison six lines above came to be
+    broken without the suite noticing.
+
+    Asserting 401 rather than "some rejection" is the point. refresh_device
+    checks expiry again for itself and answers 403, so a test that accepted any
+    4xx would pass with the middleware guard removed -- and every OTHER route a
+    device token reaches has no second check at all.
+    """
+    client, admin_key, session_factory = setup
+    rt_token = _create_rt_token(client, admin_key)
+    enrolled = _enrol_device(client, rt_token, installation_id=_iid("inst-expired-at")).json()["result"]
+    at_token = enrolled["access_token"]["token"]
+    device_id = enrolled["device_id"]
+
+    session = session_factory()
+    session.query(AccessToken).filter_by(token_hash=hash_key(at_token)).update(
+        {"expires_at": datetime.now(UTC) - timedelta(seconds=1)}
+    )
+    session.commit()
+    session.close()
+
+    response = client.post(
+        f"/v1/devices/{device_id}/refresh",
+        json={},
+        headers={"Authorization": f"Bearer {at_token}"},
+    )
+
+    assert response.status_code == 401, "the middleware let an expired credential through"
     assert "expired" in response.json()["detail"].lower()
