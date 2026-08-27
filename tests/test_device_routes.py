@@ -89,7 +89,11 @@ def test_create_registration_token_admin(setup):
     client, admin_key, _ = setup
     resp = client.post(
         "/v1/registration-tokens",
-        json={"name": "test-rt", "policy_id": TEST_POLICY_ID},
+        json={
+            "name": "test-rt",
+            "policy_id": TEST_POLICY_ID,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     assert resp.status_code == 201
@@ -117,7 +121,11 @@ def test_create_registration_token_viewer_forbidden(setup):
 
     resp = client.post(
         "/v1/registration-tokens",
-        json={"name": "nope", "policy_id": TEST_POLICY_ID},
+        json={
+            "name": "nope",
+            "policy_id": TEST_POLICY_ID,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
         headers={"Authorization": f"Bearer {raw_viewer}"},
     )
     assert resp.status_code == 403
@@ -128,12 +136,20 @@ def test_list_registration_tokens(setup):
     # Create two tokens
     client.post(
         "/v1/registration-tokens",
-        json={"name": "rt-1", "policy_id": TEST_POLICY_ID},
+        json={
+            "name": "rt-1",
+            "policy_id": TEST_POLICY_ID,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     client.post(
         "/v1/registration-tokens",
-        json={"name": "rt-2", "policy_id": TEST_POLICY_ID},
+        json={
+            "name": "rt-2",
+            "policy_id": TEST_POLICY_ID,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     resp = client.get(
@@ -148,7 +164,11 @@ def test_delete_registration_token(setup):
     client, admin_key, _ = setup
     create_resp = client.post(
         "/v1/registration-tokens",
-        json={"name": "to-delete", "policy_id": TEST_POLICY_ID},
+        json={
+            "name": "to-delete",
+            "policy_id": TEST_POLICY_ID,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     token_id = create_resp.json()["id"]
@@ -168,7 +188,12 @@ def _create_rt_token(client, admin_key):
     """Helper: create an rt_ token and return the raw token string."""
     resp = client.post(
         "/v1/registration-tokens",
-        json={"name": "device-rt", "policy_id": TEST_POLICY_ID},
+        json={
+            "name": "device-rt",
+            "policy_id": TEST_POLICY_ID,
+            # Required since keys became bounded.
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     return resp.json()["token"]
@@ -357,7 +382,11 @@ def test_at_token_rejected_for_admin_only_paths(setup):
     # Try to create a registration token (admin only)
     resp2 = client.post(
         "/v1/registration-tokens",
-        json={"name": "nope", "policy_id": TEST_POLICY_ID},
+        json={
+            "name": "nope",
+            "policy_id": TEST_POLICY_ID,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
         headers={"Authorization": f"Bearer {at_token}"},
     )
     assert resp2.status_code == 403
@@ -431,7 +460,11 @@ def test_a_registration_token_policy_must_exist(setup):
     client, admin_key, _ = setup
     resp = client.post(
         "/v1/registration-tokens",
-        json={"name": "bad-policy", "policy_id": "no-such-policy"},
+        json={
+            "name": "bad-policy",
+            "policy_id": "no-such-policy",
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     assert resp.status_code == 400
@@ -441,7 +474,11 @@ def test_the_created_token_reports_its_policy(setup):
     client, admin_key, _ = setup
     resp = client.post(
         "/v1/registration-tokens",
-        json={"name": "scoped", "policy_id": TEST_POLICY_ID},
+        json={
+            "name": "scoped",
+            "policy_id": TEST_POLICY_ID,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     assert resp.json()["policy_id"] == TEST_POLICY_ID
