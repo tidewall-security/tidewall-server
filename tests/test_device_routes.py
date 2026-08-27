@@ -193,6 +193,10 @@ def _create_rt_token(client, admin_key):
             "policy_id": TEST_POLICY_ID,
             # Required since keys became bounded.
             "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+            # Pre-authorized: these tests are about refresh, revocation and
+            # listing, not about approval. The pending default is pinned by the
+            # approval tests, which omit this field.
+            "pre_authorized": True,
         },
         headers={"Authorization": f"Bearer {admin_key}"},
     )
@@ -677,3 +681,36 @@ def test_an_expired_access_token_is_rejected_by_the_middleware(setup):
 
     assert response.status_code == 401, "the middleware let an expired credential through"
     assert "expired" in response.json()["detail"].lower()
+
+
+def test_the_device_listing_never_publishes_the_confirmation_code(setup):
+    """The code is the one field an approver holds that a claimant cannot supply.
+
+    The listing is readable by `viewer`. Publishing the code there would collapse
+    approval back to "device id alone", which is the thing the code exists to
+    prevent -- and it would do so without changing a single line of the approval
+    check, so nothing else in this suite would notice.
+    """
+    client, admin_key, session_factory = setup
+    # Its own token, NOT the shared pre-authorized helper: a pre-authorized
+    # device has no code, so this test would assert nothing.
+    rt = client.post(
+        "/v1/registration-tokens",
+        json={
+            "name": "needs-approval",
+            "policy_id": TEST_POLICY_ID,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
+        headers={"Authorization": f"Bearer {admin_key}"},
+    )
+    enrolled = _enrol_device(client, rt.json()["token"], installation_id=_iid("inst-no-leak")).json()["result"]
+    code = enrolled["confirmation_code"]
+    assert code, "fixture produced no code; the test would pass vacuously"
+
+    listing = client.get("/v1/devices", headers={"Authorization": f"Bearer {admin_key}"})
+
+    assert listing.status_code == 200
+    body = listing.text
+    assert code not in body, "the confirmation code was published in the device listing"
+    for device in listing.json():
+        assert "confirmation_code" not in device

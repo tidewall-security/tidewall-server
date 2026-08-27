@@ -57,6 +57,10 @@ class DeviceRefreshRequest(BaseModel):
     fingerprint: str | None = None
 
 
+class ApproveDeviceRequest(BaseModel):
+    confirmation_code: str
+
+
 class UpdateDeviceStatusRequest(BaseModel):
     status: str
 
@@ -75,6 +79,9 @@ def _device_to_dict(device) -> dict:
         "reg_token_id": device.reg_token_id,
         "policy_id": device.policy_id,
         "status": device.status,
+        # NO confirmation_code. This listing is readable by `viewer`, and the
+        # code is the one field an approver holds that a claimant cannot supply.
+        # Publishing it here collapses approval back to "device id alone".
         "last_seen": str(device.last_seen),
         "created_at": str(device.created_at),
     }
@@ -152,6 +159,25 @@ async def refresh_device(device_id: str, body: DeviceRefreshRequest, request: Re
     except PermissionError as e:
         # 403, not 401: the caller authenticated, but this credential does not
         # authorise this device.
+        raise HTTPException(status_code=403, detail=str(e)) from None
+    finally:
+        session.close()
+
+
+@router.post("/{device_id}/approve", dependencies=[Depends(require_role("admin"))])
+async def approve_device(device_id: str, body: ApproveDeviceRequest, request: Request) -> dict:
+    """Activate a pending device by matching the code it displayed."""
+    session = request.app.state.session_factory()
+    try:
+        from app.services.device_service import DeviceService
+
+        device = DeviceService(session).approve_device(device_id=device_id, confirmation_code=body.confirmation_code)
+        return _device_to_dict(device)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Device not found") from None
+    except PermissionError as e:
+        # 403: the caller authenticated and is an admin; the code did not match,
+        # or the device was not awaiting approval.
         raise HTTPException(status_code=403, detail=str(e)) from None
     finally:
         session.close()

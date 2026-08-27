@@ -26,6 +26,10 @@ class CreateRegistrationTokenRequest(BaseModel):
     # None means uncapped, which is legitimate for a fleet key whose expiry is
     # doing the bounding.
     max_uses: int | None = None
+    # False by default. True makes the key sufficient on its own to produce a
+    # working device, which is what fleet deployment needs and what makes a leak
+    # of such a key immediately material.
+    pre_authorized: bool = False
 
 
 def _to_dict(rt) -> dict:
@@ -39,6 +43,7 @@ def _to_dict(rt) -> dict:
         "expires_at": str(rt.expires_at),
         "max_uses": rt.max_uses,
         "uses": rt.uses,
+        "pre_authorized": rt.pre_authorized,
     }
 
 
@@ -55,6 +60,7 @@ async def create_registration_token(body: CreateRegistrationTokenRequest, reques
             created_by=getattr(request.state, "api_key_id", None),
             expires_at=body.expires_at,
             max_uses=body.max_uses,
+            pre_authorized=body.pre_authorized,
         )
         result = _to_dict(record)
         result["token"] = raw_token  # Returned ONCE, never stored

@@ -48,7 +48,7 @@ does not recompute rows that already exist.
 
 ```bash
 DB=/path/to/tidewall.db
-REV=c7d3e91f4a20
+REV=e2f8a4b71c53
 
 out=$(sqlite3 "$DB" -cmd ".param set :rev '$REV'" <<'SQL' 2>&1
 .bail on
