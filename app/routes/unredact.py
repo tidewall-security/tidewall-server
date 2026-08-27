@@ -13,7 +13,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.auth.dependencies import require_role
+from app.auth.dependencies import deny_device_credentials, require_role
 from app.models import UnredactRequest, UnredactResponse, UnredactResult
 from app.utils import now_iso as _now_iso
 
@@ -23,7 +23,12 @@ router = APIRouter()
 @router.post(
     "/v1/unredact",
     response_model=UnredactResponse,
-    dependencies=[Depends(require_role("api"))],
+    # `api` alone is not enough here: every enrolled device holds that role,
+    # so this endpoint was reachable by any laptop in the fleet — and it
+    # resolves a caller-supplied vault id with no ownership check, because
+    # `Vault` has no owner column to check against. Reversing a redaction is
+    # denied to device credentials until vaults are owned.
+    dependencies=[Depends(require_role("api")), Depends(deny_device_credentials)],
 )
 async def unredact(body: UnredactRequest, request: Request) -> UnredactResponse:
     # Decode fpe_context to determine type
