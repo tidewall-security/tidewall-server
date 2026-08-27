@@ -55,8 +55,18 @@ jobs:
       - run: uv run mypy app/
 
   backend-tests:
-    name: Backend Tests
+    name: Backend Tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      # Both ends of requires-python (>=3.12,<3.14). Testing only the floor let
+      # a test pass for everyone developing on 3.13 while CI stayed red on
+      # 3.12 -- 3.13 dedents docstrings at compile time and 3.12 does not, so a
+      # raw __doc__ comparison disagreed between the two supported versions.
+      # A version the project claims to support and never runs is a version
+      # nobody is checking.
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -64,12 +74,12 @@ jobs:
           version: "latest"
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - uses: actions/cache@v4
         with:
           path: ~/.cache/uv
-          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
-          restore-keys: uv-${{ runner.os }}-
+          key: uv-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-${{ runner.os }}-py${{ matrix.python-version }}-
       - run: uv sync --group dev
       - run: uv run pytest tests/ --cov=app --cov-report=term-missing -q --ignore=tests/e2e
 
