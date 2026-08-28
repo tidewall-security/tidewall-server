@@ -11,7 +11,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.key_utils import generate_key, hash_key, key_prefix
-from app.db.models import AccessToken, Device, DeviceRefreshToken, Policy, RegistrationToken
+from app.db.models import (
+    AccessToken,
+    Device,
+    DeviceRefreshToken,
+    DeviceTombstone,
+    Policy,
+    RegistrationToken,
+)
 from app.utils import as_utc
 
 logger = logging.getLogger(__name__)
@@ -159,6 +166,7 @@ class DeviceService:
         if cascade:
             devices = self._session.query(Device).filter_by(reg_token_id=rt.id).all()
             for device in devices:
+                self._entomb(device, reason="enrolment key revoked")
                 # Pending devices too: a pending device from a leaked key is one
                 # admin mistake from being active, and the approval console
                 # gives no sign the key behind it was revoked.
@@ -220,6 +228,7 @@ class DeviceService:
         os: str,
         ext_version: str,
         fingerprint: str | None = None,
+        recovery_secret: str | None = None,
     ) -> dict[str, Any]:
         """Enrol a NEW device against a registration token.
 
@@ -239,6 +248,45 @@ class DeviceService:
         rt = self.lookup_registration_token(rt_token_hash)
         if rt is None:
             raise ValueError("Invalid registration token")
+
+        tombstone = (
+            self._session.query(DeviceTombstone).filter_by(installation_id=installation_id, consumed_at=None).first()
+        )
+        if tombstone is not None:
+            # A wrong secret answers exactly as no secret does. Any other
+            # arrangement reports whether recovery has been authorised, which
+            # tells the revoked party when to try.
+            if (
+                recovery_secret is None
+                or tombstone.recovery_secret_hash is None
+                or not secrets.compare_digest(tombstone.recovery_secret_hash, hash_key(recovery_secret))
+            ):
+                return {"status": "InstallationTombstoned", "result": None}
+            # Consumed by a CONDITIONAL update in this transaction, so two
+            # enrolments cannot share one grant. Single-use decides who wins a
+            # race; the secret decides who was entitled to be in it.
+            claimed = (
+                self._session.query(DeviceTombstone)
+                .filter(
+                    DeviceTombstone.device_id == tombstone.device_id,
+                    DeviceTombstone.consumed_at.is_(None),
+                )
+                .update({"consumed_at": datetime.now(UTC)}, synchronize_session=False)
+            )
+            if claimed == 0:
+                return {"status": "InstallationTombstoned", "result": None}
+
+            # The revoked row still holds this installation_id, and that column
+            # is unique, so recovery cannot create its replacement beside it.
+            # Removing it is what "recover" means: a new device, same
+            # installation, and the tombstone stays as the record that the old
+            # one was stopped. Its credentials went at revocation.
+            superseded = self._session.query(Device).filter_by(installation_id=installation_id).first()
+            if superseded is not None:
+                self._session.query(AccessToken).filter_by(device_id=superseded.id).delete()
+                self._session.query(DeviceRefreshToken).filter_by(device_id=superseded.id).delete()
+                self._session.delete(superseded)
+                self._session.flush()
 
         existing = self._session.query(Device).filter_by(installation_id=installation_id).first()
         if existing is not None:
@@ -351,6 +399,12 @@ class DeviceService:
         # this ordering exists to close.
         device = self._session.get(Device, device_id)
         if device is not None and device.status == "revoked":
+            return {"status": "device_revoked", "result": None}
+        # The tombstone answers for a device whose row is gone. Without it the
+        # credentials went with the device, so the client would be told its
+        # credential is unknown and would re-enrol -- the recovery path, taken
+        # by a device that was told to stop.
+        if self._session.get(DeviceTombstone, device_id) is not None:
             return {"status": "device_revoked", "result": None}
 
         token = self._session.query(DeviceRefreshToken).filter_by(token_hash=refresh_token_hash).first()
@@ -470,12 +524,53 @@ class DeviceService:
     def get_device(self, device_id: str) -> Device | None:
         return self._session.get(Device, device_id)
 
+    def authorise_recovery(self, device_id: str) -> str:
+        """Grant one recovery for a tombstoned device. Returns the secret once.
+
+        Re-enable authorises a CONSUMER, not merely a race. A bare "this
+        installation may enrol again" flag is claimable by whoever asks first,
+        including the party the revocation was aimed at. The secret is
+        delivered out of band and consumed atomically with the new device row.
+        """
+        tombstone = self._session.get(DeviceTombstone, device_id)
+        if tombstone is None:
+            raise LookupError(f"No tombstone for device {device_id}")
+        if tombstone.consumed_at is not None:
+            raise PermissionError("That recovery has already been used")
+
+        raw = generate_key(prefix="rec")
+        tombstone.recovery_secret_hash = hash_key(raw)
+        self._session.commit()
+        logger.info("Authorised recovery for device %s", device_id)
+        return raw
+
+    def _entomb(self, device: Device, reason: str) -> None:
+        """Record that this device is finished, durably.
+
+        Called from every terminal transition. A path that removes a device
+        without one reopens the hole: the credentials go with the device, so a
+        client that returns later presents something unknown, is told to
+        re-enrol, and does.
+
+        Idempotent -- re-revoking a device must not raise on the primary key.
+        """
+        if self._session.get(DeviceTombstone, device.id) is not None:
+            return
+        self._session.add(
+            DeviceTombstone(
+                device_id=device.id,
+                installation_id=device.installation_id,
+                reason=reason,
+            )
+        )
+
     def update_device_status(self, device_id: str, status: str) -> Device:
         device = self._session.get(Device, device_id)
         if device is None:
             raise ValueError(f"Device {device_id} not found")
         device.status = status
         if status == "revoked":
+            self._entomb(device, reason="revoked by administrator")
             self._session.query(AccessToken).filter_by(device_id=device_id).delete()
             # The refresh credential too. It outlives the access token by thirty
             # days, so leaving it means a device that is later re-activated
@@ -489,6 +584,7 @@ class DeviceService:
         device = self._session.get(Device, device_id)
         if device is None:
             raise ValueError(f"Device {device_id} not found")
+        self._entomb(device, reason="deleted by administrator")
         # Cascade delete credentials first (in case the DB doesn't enforce it)
         self._session.query(AccessToken).filter_by(device_id=device_id).delete()
         self._session.query(DeviceRefreshToken).filter_by(device_id=device_id).delete()

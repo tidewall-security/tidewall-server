@@ -846,3 +846,36 @@ def test_refresh_precedence_over_http(setup, make_state, expected_status, expect
 
     assert resp.status_code == expected_status
     assert resp.json()["reason"] == expected_reason
+
+
+def test_the_recovery_secret_is_returned_once_and_only_to_an_admin(setup):
+    """It is a credential: minted once, never listed, admin only."""
+    client, admin_key, session_factory = setup
+    rt_token = _create_rt_token(client, admin_key)
+    device_id = _enrol_device(client, rt_token, installation_id=_iid("inst-recov-http")).json()["result"]["device_id"]
+    client.patch(
+        f"/v1/devices/{device_id}",
+        json={"status": "revoked"},
+        headers={"Authorization": f"Bearer {admin_key}"},
+    )
+
+    granted = client.post(
+        f"/v1/devices/{device_id}/authorise-recovery",
+        headers={"Authorization": f"Bearer {admin_key}"},
+    )
+
+    assert granted.status_code == 200
+    secret = granted.json()["recovery_secret"]
+    assert secret.startswith("rec_")
+
+    # Not in the listing, which a viewer can read.
+    listing = client.get("/v1/devices", headers={"Authorization": f"Bearer {admin_key}"})
+    assert secret not in listing.text
+    assert "recovery_secret" not in listing.text
+
+    # And not grantable twice.
+    again = client.post(
+        f"/v1/devices/{device_id}/authorise-recovery",
+        headers={"Authorization": f"Bearer {admin_key}"},
+    )
+    assert again.status_code == 200, "re-issuing before use is fine; using it twice is not"

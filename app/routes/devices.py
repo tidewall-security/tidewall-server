@@ -46,6 +46,10 @@ class DeviceEnrolRequest(BaseModel):
             raise ValueError("installation_id must not be the nil UUID")
         return value
 
+    # Supplied only when recovering a tombstoned installation. Delivered out of
+    # band by an administrator; a wrong value answers exactly as none does.
+    recovery_secret: str | None = None
+
 
 class DeviceRefreshRequest(BaseModel):
     device_name: str | None = None
@@ -126,6 +130,7 @@ async def enrol_device(body: DeviceEnrolRequest, request: Request) -> dict:
             os=body.os,
             ext_version=body.extension_version,
             fingerprint=body.fingerprint,
+            recovery_secret=body.recovery_secret,
         )
         if result["status"] == "RegistrationTokenExhausted":
             # 403, not 401: the credential is valid and the caller is simply
@@ -203,6 +208,32 @@ async def approve_device(device_id: str, body: ApproveDeviceRequest, request: Re
         # 403: the caller authenticated and is an admin; the code did not match,
         # or the device was not awaiting approval.
         raise HTTPException(status_code=403, detail=str(e)) from None
+    finally:
+        session.close()
+
+
+@router.post("/{device_id}/authorise-recovery", dependencies=[Depends(require_role("admin"))])
+async def authorise_device_recovery(device_id: str, request: Request) -> dict:
+    """Grant one recovery for a tombstoned device. Returns the secret ONCE.
+
+    The secret is delivered out of band to the person who should get the device
+    back, and consumed atomically with the replacement enrolment. Re-enable
+    authorises a consumer, not merely a race: a bare "this installation may
+    enrol again" flag is claimable by whoever asks first, including the party
+    the revocation was aimed at.
+    """
+    session = request.app.state.session_factory()
+    try:
+        from app.services.device_service import DeviceService
+
+        secret = DeviceService(session).authorise_recovery(device_id)
+        # Returned once and never stored in the clear, like every other
+        # credential this service mints.
+        return {"device_id": device_id, "recovery_secret": secret}
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from None
+    except PermissionError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
     finally:
         session.close()
 
