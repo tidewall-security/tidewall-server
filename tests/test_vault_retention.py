@@ -126,6 +126,22 @@ def _declaration() -> str:
     return f"k1:{_material()}"
 
 
+def _keyring(declaration: str) -> Keyring:
+    ring = Keyring.from_settings(Settings(VAULT_ENCRYPTION_KEYS=declaration, VAULT_ENCRYPTION_CURRENT="k1"))
+    assert ring is not None
+    return ring
+
+
+def _wait_until(predicate, *, timeout: float = 5.0) -> bool:
+    """Poll from the test thread while the server's own loop runs in its own."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return predicate()
+
+
 def _env(tmp_path, name: str, declaration: str) -> dict[str, str]:
     return {
         "DB_URL": f"sqlite:///{tmp_path / f'{name}.db'}",
@@ -215,9 +231,63 @@ def test_a_started_scheduler_stores_a_row_a_cold_reader_opens(tmp_path):
         assert token, "a redaction was returned with no way to reverse it"
         assert _rows(app.state.session_factory) != [], "the token names a vault that was never written"
 
-        ring = Keyring.from_settings(Settings(VAULT_ENCRYPTION_KEYS=declaration, VAULT_ENCRYPTION_CURRENT="k1"))
-        cold = VaultManager(get_session_factory(get_engine(os.environ["DB_URL"])), keyring=ring)
+        cold = VaultManager(get_session_factory(get_engine(os.environ["DB_URL"])), keyring=_keyring(declaration))
         recovered = cold.get_vault(cold.decode_fpe_context(token))
 
         assert recovered is not None, "the row is there and a cold reader could not open it"
         assert recovered.unredact(_redacted_text(body)) == CONTENT
+
+
+def test_a_scheduler_that_raises_partway_through_start_also_disables_reversibility(tmp_path):
+    """``scheduler is not None`` is a different question, and a comment saying so
+    is not a test.
+
+    The reference is deliberately kept after a partial start, so shutdown can
+    stop the tasks that were already created. What startup cannot know is how
+    far ``start()` got -- which jobs exist and which do not -- so an exception
+    from it leaves the sweep's status unknown, and unknown is not good enough
+    to begin collecting the mapping.
+    """
+    real_start = scheduler_module.Scheduler.start
+
+    def _start_then_fail(self, jobs):
+        real_start(self, jobs)  # the tasks now exist
+        raise RuntimeError("reporting blew up after the tasks were created")
+
+    with patch.object(scheduler_module.Scheduler, "start", _start_then_fail):
+        with _running_server(tmp_path, "partial", _declaration()) as (app, client):
+            assert app.state.scheduler is not None, "the test did not produce a partial start"
+
+            body = _post(client).json()
+
+            assert body["result"]["transformed"] is True, "the request was not redacted at all"
+            assert body["result"]["fpe_context"] is None, "a reversal was promised on an unknown schedule"
+            assert _rows(app.state.session_factory) == [], "PII was written on an unknown schedule"
+
+
+def test_startup_schedules_the_vault_sweep(tmp_path):
+    """Whether the lifespan asks for the sweep, which nothing else here would notice.
+
+    The sweep tests above build the job themselves and the gate tests turn on
+    whether the scheduler started at all, so a startup that simply omitted this
+    job would pass every one of them -- and would collect the mapping and never
+    reclaim it, which is the failure the gate exists to prevent, reached from
+    the other side.
+
+    Two boots, because the job runs the moment the scheduler starts: the first
+    creates the schema, the row is written between them, and the second must
+    find it gone. The reader is a separate engine on the same file, so nothing
+    is being answered out of the server's own cache.
+    """
+    declaration = _declaration()
+    with _running_server(tmp_path, "scheduled", declaration):
+        pass
+
+    factory = get_session_factory(get_engine(f"sqlite:///{tmp_path / 'scheduled.db'}"))
+    expired, _ = _populated(VaultManager(factory, keyring=_keyring(declaration)), expires_at=_ago(hours=1))
+    assert _rows(factory) == [expired], "the test did not write the row it means to sweep"
+
+    with _running_server(tmp_path, "scheduled", declaration):
+        _wait_until(lambda: _rows(factory) == [])
+
+    assert _rows(factory) == [], "startup never scheduled the vault sweep"
