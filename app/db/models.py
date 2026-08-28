@@ -611,6 +611,34 @@ class Device(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
+class DeviceTombstone(Base):
+    """Durable evidence that a device was revoked.
+
+    Outlives the device row and every credential it held. "Stop permanently" is
+    only true for as long as the evidence lasts: revocation deletes the
+    credentials, so a client that comes back later presents something unknown
+    and is told to re-enrol -- which is the recovery path, and undoes the
+    revocation by itself.
+
+    No foreign key to devices. It must survive that row's deletion, which is
+    the case it exists for.
+    """
+
+    __tablename__ = "device_tombstones"
+
+    device_id: Mapped[str] = mapped_column(String, primary_key=True)
+    installation_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    reason: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # Set by an explicit administrator action. Hashed: it is a credential.
+    #
+    # Single-use decides who WINS a race; it does not decide who is ENTITLED.
+    # A bare "this installation may enrol again" flag is claimable by whoever
+    # asks first, including the party the revocation was aimed at.
+    recovery_secret_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class DeviceRefreshToken(Base):
     """Long-lived, non-rotating, single-purpose credential for one device.
 

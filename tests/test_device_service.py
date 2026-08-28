@@ -17,7 +17,15 @@ import pytest
 
 from app.auth.key_utils import generate_key, hash_key, key_prefix
 from app.db.engine import get_engine, get_session_factory
-from app.db.models import AccessToken, Base, Device, DeviceRefreshToken, Policy, RegistrationToken
+from app.db.models import (
+    AccessToken,
+    Base,
+    Device,
+    DeviceRefreshToken,
+    DeviceTombstone,
+    Policy,
+    RegistrationToken,
+)
 from app.services.device_service import DeviceService
 
 
@@ -806,3 +814,128 @@ def test_a_revoked_device_is_never_told_to_re_enrol(db_session):
     result = DeviceService(db_session).refresh_device(device_id=device_id, refresh_token_hash=hash_key(raw_dr))
 
     assert result["status"] == "device_revoked"
+
+
+# ---------------------------------------------------------------------------
+# Tombstones, and a recovery that authorises a consumer
+#
+# device_revoked means "stop permanently", and that is only true for as long as
+# the evidence lasts. Revocation deletes the credentials, so a device that comes
+# back later presents something unknown, is told to re-enrol, and does.
+# ---------------------------------------------------------------------------
+
+
+def _tombstoned(session, label: str):
+    """A revoked, tombstoned device. Returns (device_id, installation_id, raw_key)."""
+    policy_id = _seed_policy(session)
+    service = DeviceService(session)
+    raw, _rt = service.create_registration_token(
+        name=f"k-{label}", policy_id=policy_id, expires_at=_soon(), pre_authorized=True
+    )
+    installation_id = f"inst-{label}"
+    device_id = service.enrol_device(rt_token_hash=hash_key(raw), installation_id=installation_id, **_META)["result"][
+        "device_id"
+    ]
+    service.update_device_status(device_id, "revoked")
+    return device_id, installation_id, raw
+
+
+def test_a_deleted_device_still_answers_revoked(db_session):
+    """Deletion must not become amnesia.
+
+    Without the tombstone the device row and its credentials are both gone, so
+    refresh answers credential_unknown and a compliant client re-enrols.
+    """
+    device_id, raw_dr = _active_device(db_session, "deleted-tomb")
+    service = DeviceService(db_session)
+    service.delete_device(device_id)
+
+    result = service.refresh_device(device_id=device_id, refresh_token_hash=hash_key(raw_dr))
+
+    assert result["status"] == "device_revoked"
+
+
+def test_a_revoked_device_answers_revoked_even_with_no_credential_left(db_session):
+    """Revocation deletes the credentials, so this is the ordinary case."""
+    device_id, _installation_id, _raw = _tombstoned(db_session, "revoked-nocred")
+
+    result = DeviceService(db_session).refresh_device(
+        device_id=device_id, refresh_token_hash=hash_key("dr_whatever_it_still_holds")
+    )
+
+    assert result["status"] == "device_revoked"
+
+
+def test_a_tombstoned_installation_cannot_re_enrol(db_session):
+    """Otherwise revocation is a delay, not a decision."""
+    _device_id, installation_id, raw = _tombstoned(db_session, "reenrol")
+
+    again = DeviceService(db_session).enrol_device(
+        rt_token_hash=hash_key(raw), installation_id=installation_id, **_META
+    )
+
+    assert again["status"] == "InstallationTombstoned"
+
+
+def test_recovery_requires_the_secret_the_admin_issued(db_session):
+    device_id, installation_id, raw = _tombstoned(db_session, "recovery")
+    service = DeviceService(db_session)
+
+    without = service.enrol_device(rt_token_hash=hash_key(raw), installation_id=installation_id, **_META)
+    assert without["status"] == "InstallationTombstoned"
+
+    guessed = service.enrol_device(
+        rt_token_hash=hash_key(raw),
+        installation_id=installation_id,
+        recovery_secret="not-the-secret",
+        **_META,
+    )
+    assert guessed["status"] == "InstallationTombstoned", "a wrong secret must be indistinguishable from no secret"
+
+    secret = service.authorise_recovery(device_id)
+    ok = service.enrol_device(
+        rt_token_hash=hash_key(raw),
+        installation_id=installation_id,
+        recovery_secret=secret,
+        **_META,
+    )
+    assert ok["status"] == "Success"
+
+
+def test_a_recovery_secret_is_single_use(db_session):
+    """Consumed with the insert, or two devices recover on one grant."""
+    device_id, installation_id, raw = _tombstoned(db_session, "singleuse")
+    service = DeviceService(db_session)
+    secret = service.authorise_recovery(device_id)
+
+    first = service.enrol_device(
+        rt_token_hash=hash_key(raw), installation_id=installation_id, recovery_secret=secret, **_META
+    )
+    assert first["status"] == "Success"
+
+    replay = service.enrol_device(
+        rt_token_hash=hash_key(raw), installation_id="inst-someone-else", recovery_secret=secret, **_META
+    )
+    assert replay["status"] == "Success", "an unrelated installation was never blocked"
+
+    # The grant itself is spent: the tombstoned installation cannot use it twice.
+    service.update_device_status(first["result"]["device_id"], "revoked")
+    again = service.enrol_device(
+        rt_token_hash=hash_key(raw), installation_id=installation_id, recovery_secret=secret, **_META
+    )
+    assert again["status"] == "InstallationTombstoned"
+
+
+def test_every_terminal_transition_leaves_a_tombstone(db_session):
+    """A path that removes a device without one reopens the hole."""
+    service = DeviceService(db_session)
+
+    revoked_id, _dr = _active_device(db_session, "term-revoke")
+    service.update_device_status(revoked_id, "revoked")
+
+    deleted_id, _dr2 = _active_device(db_session, "term-delete")
+    service.delete_device(deleted_id)
+
+    stones = {t.device_id for t in db_session.query(DeviceTombstone).all()}
+    assert revoked_id in stones, "update_device_status(revoked) left no tombstone"
+    assert deleted_id in stones, "delete_device left no tombstone"
