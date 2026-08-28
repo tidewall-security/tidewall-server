@@ -31,6 +31,7 @@ works and the test that it can be withheld are two halves of one change.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
 import time
@@ -329,3 +330,50 @@ def test_startup_schedules_the_vault_sweep(tmp_path):
         _wait_until(lambda: _rows(factory) == [])
 
     assert _rows(factory) == [], "startup never scheduled the vault sweep"
+
+
+def test_the_withheld_case_does_not_claim_no_key_is_configured(tmp_path):
+    """The per-request decline must name the real reason.
+
+    In the degraded state a key IS configured; it was withheld because retention
+    could not be scheduled. Saying "no vault encryption key is configured" sends
+    an operator to check a configuration that turns out to be fine -- and the
+    startup line one screen earlier says the opposite, so the two contradict
+    each other in the same boot.
+    """
+    from app.vault import TidewallVault
+    from app.vault_manager import VaultManager
+
+    engine = get_engine(f"sqlite:///{tmp_path}/withheld.db")
+    Base.metadata.create_all(engine)
+    reason = "a vault encryption key is configured but was withheld, because vault retention could not be scheduled"
+    manager = VaultManager(get_session_factory(engine), keyring=None, no_keyring_reason=reason)
+
+    vault = TidewallVault()
+    vault.store("EMAIL", "ada@example.com")
+
+    errors: list[str] = []
+    with patch.object(
+        logging.getLogger("app.vault_manager"), "error", side_effect=lambda msg, *a, **k: errors.append(msg % a)
+    ):
+        assert manager.save("v1", vault, None) is False
+
+    assert errors, "the decline was silent"
+    assert reason in errors[0]
+    assert "no vault encryption key is configured" not in errors[0]
+
+
+def test_an_unusable_keyring_declaration_stops_startup(monkeypatch):
+    """A CURRENT naming a key nobody declared must not boot quietly.
+
+    Before this branch it did: the server started, reversible redaction was
+    silently off, and the only symptom was a per-request log line. The point of
+    raising is to stop in front of the operator who wrote the mistake.
+    """
+    from app.vault_crypto import Keyring
+
+    monkeypatch.setenv("VAULT_ENCRYPTION_KEYS", f"k1:{base64.b64encode(os.urandom(32)).decode()}")
+    monkeypatch.setenv("VAULT_ENCRYPTION_CURRENT", "k9-never-declared")
+
+    with pytest.raises(ValueError):
+        Keyring.from_settings(Settings.from_env())

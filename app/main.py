@@ -280,7 +280,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "still runs, and is irreversible",
         )
         keyring = None
-    app.state.vault_manager = VaultManager(SessionLocal, keyring=keyring)
+        # Not "no key is configured": one IS, and an operator grepping that
+        # line would go and check a configuration that turns out to be fine.
+        no_keyring_reason = (
+            "a vault encryption key is configured but was withheld, because " "vault retention could not be scheduled"
+        )
+    else:
+        no_keyring_reason = None
+    app.state.vault_manager = VaultManager(SessionLocal, keyring=keyring, no_keyring_reason=no_keyring_reason)
 
     # Settlement tasks this process started. A bare create_task is owned by
     # nothing: the handler holds a strong reference only while it runs, and at

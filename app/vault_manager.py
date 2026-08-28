@@ -116,9 +116,21 @@ class VaultManager:
     delete is the TTL quietly false.
     """
 
-    def __init__(self, session_factory: sessionmaker[Session], keyring: Keyring | None = None) -> None:
+    #: Said when there is no keyring and nobody told us why. The withheld case
+    #: passes its own reason, because "no key is configured" sends an operator
+    #: to check a configuration that is in fact fine.
+    _DEFAULT_NO_KEYRING_REASON = "no vault encryption key is configured"
+
+    def __init__(
+        self,
+        session_factory: sessionmaker[Session],
+        keyring: Keyring | None = None,
+        *,
+        no_keyring_reason: str | None = None,
+    ) -> None:
         self._session_factory = session_factory
         self._keyring = keyring
+        self._no_keyring_reason = no_keyring_reason or self._DEFAULT_NO_KEYRING_REASON
         # Most recently used last, so the eviction end is the front.
         self._cache: OrderedDict[str, _Cached] = OrderedDict()
 
@@ -148,8 +160,9 @@ class VaultManager:
             return False
         if self._keyring is None:
             logger.error(
-                "vault %s was not stored: no vault encryption key is configured, so redaction is irreversible",
+                "vault %s was not stored: %s, so redaction is irreversible",
                 vault_id,
+                self._no_keyring_reason,
             )
             return False
 
@@ -191,8 +204,9 @@ class VaultManager:
             # an attacker can select: it turns on the deployment's own
             # configuration, not on any field in the row.
             logger.error(
-                "vault %s was requested but no vault encryption key is configured, so no vault can be opened",
+                "vault %s was requested but %s, so no vault can be opened",
                 vault_id,
+                self._no_keyring_reason,
             )
             return None
 
