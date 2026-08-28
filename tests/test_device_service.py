@@ -884,15 +884,20 @@ def test_recovery_requires_the_secret_the_admin_issued(db_session):
     without = service.enrol_device(rt_token_hash=hash_key(raw), installation_id=installation_id, **_META)
     assert without["status"] == "InstallationTombstoned"
 
+    secret = service.authorise_recovery(device_id)
+
+    # AFTER the grant exists, so the comparison is actually reached. Before it,
+    # recovery_secret_hash is None and the check short-circuits there instead --
+    # which made an earlier version of this test pass against a service that
+    # accepted any secret at all.
     guessed = service.enrol_device(
         rt_token_hash=hash_key(raw),
         installation_id=installation_id,
-        recovery_secret="not-the-secret",
+        recovery_secret="rec_not_the_real_secret_at_all",
         **_META,
     )
     assert guessed["status"] == "InstallationTombstoned", "a wrong secret must be indistinguishable from no secret"
 
-    secret = service.authorise_recovery(device_id)
     ok = service.enrol_device(
         rt_token_hash=hash_key(raw),
         installation_id=installation_id,
@@ -903,7 +908,13 @@ def test_recovery_requires_the_secret_the_admin_issued(db_session):
 
 
 def test_a_recovery_secret_is_single_use(db_session):
-    """Consumed with the insert, or two devices recover on one grant."""
+    """Consumed by conditional update in the inserting transaction.
+
+    Asserted on the GRANT, not by revoking again: a second revocation creates a
+    NEW tombstone whose secret hash is None, so a replay would be refused for
+    that reason instead -- and the test would pass against a grant that was
+    never consumed at all.
+    """
     device_id, installation_id, raw = _tombstoned(db_session, "singleuse")
     service = DeviceService(db_session)
     secret = service.authorise_recovery(device_id)
@@ -913,17 +924,12 @@ def test_a_recovery_secret_is_single_use(db_session):
     )
     assert first["status"] == "Success"
 
-    replay = service.enrol_device(
-        rt_token_hash=hash_key(raw), installation_id="inst-someone-else", recovery_secret=secret, **_META
-    )
-    assert replay["status"] == "Success", "an unrelated installation was never blocked"
+    db_session.expire_all()
+    spent = db_session.get(DeviceTombstone, device_id)
+    assert spent.consumed_at is not None, "the grant was not consumed"
 
-    # The grant itself is spent: the tombstoned installation cannot use it twice.
-    service.update_device_status(first["result"]["device_id"], "revoked")
-    again = service.enrol_device(
-        rt_token_hash=hash_key(raw), installation_id=installation_id, recovery_secret=secret, **_META
-    )
-    assert again["status"] == "InstallationTombstoned"
+    with pytest.raises(PermissionError, match="already been used"):
+        service.authorise_recovery(device_id)
 
 
 def test_every_terminal_transition_leaves_a_tombstone(db_session):
@@ -939,3 +945,98 @@ def test_every_terminal_transition_leaves_a_tombstone(db_session):
     stones = {t.device_id for t in db_session.query(DeviceTombstone).all()}
     assert revoked_id in stones, "update_device_status(revoked) left no tombstone"
     assert deleted_id in stones, "delete_device left no tombstone"
+
+
+def test_cascade_revocation_entombs_every_device_it_takes(db_session):
+    """Cascade is a terminal transition like any other.
+
+    Without a tombstone each device it revokes can re-enrol on a fresh key, so
+    containing a leaked enrolment key would stop the fleet only until the
+    clients retried.
+    """
+    policy_id = _seed_policy(db_session)
+    service = DeviceService(db_session)
+    raw, rt = service.create_registration_token(
+        name="leaked-entomb", policy_id=policy_id, expires_at=_soon(), pre_authorized=True
+    )
+    ids = [
+        service.enrol_device(rt_token_hash=hash_key(raw), installation_id=f"inst-casc-{n}", **_META)["result"][
+            "device_id"
+        ]
+        for n in range(3)
+    ]
+
+    service.revoke_registration_token(rt.id, cascade=True)
+
+    db_session.expire_all()
+    stones = {t.device_id for t in db_session.query(DeviceTombstone).all()}
+    assert set(ids) <= stones, "a cascade-revoked device was left able to re-enrol"
+
+
+def test_two_concurrent_recoveries_cannot_share_one_grant(tmp_path):
+    """The conditional consume is the guarantee; the lookup is a fast path.
+
+    Sequentially this branch is unreachable: once the grant is consumed the
+    tombstone no longer matches `consumed_at is None`, so a later enrolment
+    never reaches the claim at all. Only two readers past the lookup before
+    either writes can drive it -- so only a real race can prove it, exactly as
+    with the enrolment-key use counter.
+
+    A FILE-backed database: an in-memory one with a shared connection never
+    contends, and this would pass against no guard at all.
+    """
+    import threading
+
+    engine = get_engine(f"sqlite:///{tmp_path}/recovery-race.db")
+    Base.metadata.create_all(engine)
+    Session = get_session_factory(engine)
+
+    setup = Session()
+    policy_id = _seed_policy(setup)
+    service = DeviceService(setup)
+    raw, _rt = service.create_registration_token(
+        name="k", policy_id=policy_id, expires_at=_soon(), pre_authorized=True, max_uses=None
+    )
+    device_id = service.enrol_device(rt_token_hash=hash_key(raw), installation_id="inst-race-recover", **_META)[
+        "result"
+    ]["device_id"]
+    service.update_device_status(device_id, "revoked")
+    secret = service.authorise_recovery(device_id)
+    setup.close()
+
+    barrier = threading.Barrier(2)
+    results: list[str] = []
+    lock = threading.Lock()
+
+    def recover(label: str) -> None:
+        session = Session()
+        try:
+            svc = DeviceService(session)
+            # Both read the tombstone as unconsumed before either claims it.
+            session.query(DeviceTombstone).filter_by(consumed_at=None).all()
+            barrier.wait(timeout=10)
+            outcome = svc.enrol_device(
+                rt_token_hash=hash_key(raw),
+                installation_id="inst-race-recover",
+                recovery_secret=secret,
+                **_META,
+            )["status"]
+        except Exception as exc:
+            outcome = type(exc).__name__
+        finally:
+            session.close()
+        with lock:
+            results.append(outcome)
+
+    threads = [threading.Thread(target=recover, args=(f"r{n}",)) for n in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=20)
+
+    verify = Session()
+    try:
+        assert results.count("Success") == 1, f"exactly one recovery may win: {results}"
+        assert verify.query(Device).filter_by(installation_id="inst-race-recover").count() == 1
+    finally:
+        verify.close()
