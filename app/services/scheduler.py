@@ -9,8 +9,16 @@ quiet would hold it indefinitely.
 
 This is deliberately small. It is an asyncio task loop tied to the application
 lifespan, not a job queue: there is no durable state, no retries across
-restarts, and no distribution. That matches what the work actually is —
-idempotent housekeeping that is harmless to skip and harmless to repeat.
+restarts, and no distribution. Every job here is idempotent and harmless to
+repeat.
+
+Harmless to *skip* is no longer true of all of them, and the difference is
+worth stating. Skipping the content purge leaves expired content on disk that
+the read gate still refuses to disclose. Skipping ``vault_retention_job``
+would leave the plaintext-mapping rows on disk with nothing to reclaim them,
+so startup does not let that happen quietly: if this scheduler does not
+start, ``app/main.py`` withholds the keyring and reversible redaction is off,
+which means no such row is written in the first place.
 
 **Single process only**, and now enforced rather than assumed. The launcher
 starts one uvicorn worker, and since the process lock landed a second worker
@@ -264,3 +272,41 @@ def retention_job(
             report(logger, "info", f"Retention purged {purged} expired content row(s)")
 
     return Job(name="content-retention", interval_seconds=interval_seconds, run=_run)
+
+
+def vault_retention_job(
+    session_factory: Callable[[], object],
+    *,
+    interval_seconds: float = DEFAULT_INTERVAL_SECONDS,
+    scheduler: Scheduler | None = None,
+) -> Job:
+    """Delete vaults past their expiry, as a scheduled job.
+
+    A vault holds the placeholder-to-original mapping that makes redaction
+    reversible, which is to say it holds exactly the values the product exists
+    to protect. Unlike captured content, this is not housekeeping that is
+    merely nice to have: reversible redaction refuses to store a mapping at all
+    unless this job is running, because a product that cannot promise to delete
+    the plaintext mapping should not collect it. See ``app/main.py``.
+
+    That is also why it is a separate job from ``retention_job`` rather than
+    another query inside it. They answer to different callers -- one purges
+    captured content and one purges vaults -- and folding them together would
+    make a failure in either look like a failure in both.
+    """
+
+    async def _run() -> None:
+        from app.vault_manager import purge_expired_vaults
+
+        def _purge() -> int:
+            with session_factory() as session:  # type: ignore[attr-defined]
+                return purge_expired_vaults(session)
+
+        # Off the event loop, and through the scheduler, for the same reasons
+        # the content purge is: this is synchronous database work, and shutdown
+        # has to be able to wait for the thread rather than only the task.
+        purged = await (scheduler.run_in_worker(_purge) if scheduler else asyncio.to_thread(_purge))
+        if purged:
+            report(logger, "info", f"Retention purged {purged} expired vault row(s)")
+
+    return Job(name="vault-retention", interval_seconds=interval_seconds, run=_run)
