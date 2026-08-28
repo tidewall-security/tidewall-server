@@ -101,22 +101,24 @@ def test_refresh_requires_a_token_for_that_device(db_session):
     alice = _enrol(db_session, raw_rt, "inst-alice")
     mallory = _enrol(db_session, raw_rt, "inst-mallory")
 
-    with pytest.raises(PermissionError, match="not valid for this device"):
-        DeviceService(db_session).refresh_device(
-            device_id=alice["result"]["device_id"],
-            refresh_token_hash=hash_key(mallory["result"]["refresh_token"]["token"]),
-        )
+    result = DeviceService(db_session).refresh_device(
+        device_id=alice["result"]["device_id"],
+        refresh_token_hash=hash_key(mallory["result"]["refresh_token"]["token"]),
+    )
+    # Not distinguished from an unknown credential: telling them apart tells a
+    # caller whether the target device exists.
+    assert result["status"] == "credential_unknown"
 
 
 def test_refresh_rejects_an_unknown_token(db_session):
     raw_rt, _ = _reg_token(db_session)
     alice = _enrol(db_session, raw_rt, "inst-alice")
 
-    with pytest.raises(PermissionError, match="Invalid refresh token"):
-        DeviceService(db_session).refresh_device(
-            device_id=alice["result"]["device_id"],
-            refresh_token_hash=hash_key("dr_not_a_real_token"),
-        )
+    result = DeviceService(db_session).refresh_device(
+        device_id=alice["result"]["device_id"],
+        refresh_token_hash=hash_key("dr_not_a_real_token"),
+    )
+    assert result["status"] == "credential_unknown"
 
 
 def test_fingerprint_no_longer_selects_a_device(db_session):
@@ -198,7 +200,7 @@ def test_refresh_of_an_inactive_device_is_refused(db_session):
         refresh_token_hash=hash_key(enrolled["result"]["refresh_token"]["token"]),
     )
 
-    assert result["status"] == "InactiveDevice"
+    assert result["status"] == "device_revoked"
 
 
 def test_registration_token_model_round_trips(db_session):
@@ -614,7 +616,7 @@ def test_refresh_works_after_the_access_token_has_expired(db_session):
 
     result = DeviceService(db_session).refresh_device(device_id=device_id, refresh_token_hash=hash_key(raw_dr))
 
-    assert result["status"] == "Success"
+    assert result["status"] == "ok"
     assert result["result"]["access_token"]["token"].startswith("at_")
 
 
@@ -626,7 +628,7 @@ def test_the_refresh_token_does_not_rotate(db_session):
     first = service.refresh_device(device_id=device_id, refresh_token_hash=hash_key(raw_dr))
     second = service.refresh_device(device_id=device_id, refresh_token_hash=hash_key(raw_dr))
 
-    assert first["status"] == "Success" and second["status"] == "Success"
+    assert first["status"] == "ok" and second["status"] == "ok"
     assert first["result"]["access_token"]["token"] != second["result"]["access_token"]["token"]
     assert db_session.query(DeviceRefreshToken).filter_by(device_id=device_id).count() == 1
 
@@ -635,8 +637,8 @@ def test_a_refresh_token_cannot_refresh_another_device(db_session):
     mine, raw_mine = _active_device(db_session, "mine")
     theirs, _raw_theirs = _active_device(db_session, "theirs")
 
-    with pytest.raises(PermissionError):
-        DeviceService(db_session).refresh_device(device_id=theirs, refresh_token_hash=hash_key(raw_mine))
+    result = DeviceService(db_session).refresh_device(device_id=theirs, refresh_token_hash=hash_key(raw_mine))
+    assert result["status"] == "credential_unknown"
 
 
 def test_an_expired_refresh_token_is_refused(db_session):
@@ -646,8 +648,8 @@ def test_an_expired_refresh_token_is_refused(db_session):
     )
     db_session.commit()
 
-    with pytest.raises(PermissionError, match="expired"):
-        DeviceService(db_session).refresh_device(device_id=device_id, refresh_token_hash=hash_key(raw_dr))
+    result = DeviceService(db_session).refresh_device(device_id=device_id, refresh_token_hash=hash_key(raw_dr))
+    assert result["status"] == "credential_expired"
 
 
 def test_reissuing_revokes_the_previous_refresh_token(db_session):
@@ -658,9 +660,11 @@ def test_reissuing_revokes_the_previous_refresh_token(db_session):
     new_raw = service.reissue_refresh_token(device_id)
 
     assert new_raw != old_raw
-    with pytest.raises(PermissionError):
-        service.refresh_device(device_id=device_id, refresh_token_hash=hash_key(old_raw))
-    assert service.refresh_device(device_id=device_id, refresh_token_hash=hash_key(new_raw))["status"] == "Success"
+    assert (
+        service.refresh_device(device_id=device_id, refresh_token_hash=hash_key(old_raw))["status"]
+        == "credential_expired"
+    )
+    assert service.refresh_device(device_id=device_id, refresh_token_hash=hash_key(new_raw))["status"] == "ok"
 
 
 def test_cascade_revocation_destroys_refresh_tokens_too(db_session):
@@ -705,3 +709,100 @@ def test_deleting_a_device_takes_its_refresh_credential_with_it(db_session):
 
     db_session.expire_all()
     assert db_session.query(DeviceRefreshToken).filter_by(device_id=device_id).count() == 0
+
+
+# ---------------------------------------------------------------------------
+# The refresh failure taxonomy, and its precedence
+#
+# Refresh answered with whatever check failed first, and the order was wrong in
+# a way that matters: credential state was resolved before device state, so a
+# REVOKED device whose credential had also lapsed was told to re-enrol -- and a
+# compliant client did exactly that, undoing its own revocation. Reachable by
+# waiting.
+#
+# Device state now dominates. The cases below each construct TWO simultaneously
+# true conditions and assert the dominant one wins; a test with only one
+# condition true cannot detect an ordering defect at all.
+# ---------------------------------------------------------------------------
+
+
+def _revoked_device_with_expired_credential(session):
+    device_id, raw_dr = _active_device(session, "rev-exp")
+    session.query(DeviceRefreshToken).filter_by(device_id=device_id).update(
+        {"expires_at": datetime.now(UTC) - timedelta(days=1)}, synchronize_session=False
+    )
+    session.get(Device, device_id).status = "revoked"
+    session.commit()
+    return device_id, raw_dr
+
+
+def _revoked_device_with_valid_credential(session):
+    device_id, raw_dr = _active_device(session, "rev-ok")
+    session.get(Device, device_id).status = "revoked"
+    session.commit()
+    return device_id, raw_dr
+
+
+def _pending_device_with_expired_credential(session):
+    device_id, raw_dr = _active_device(session, "pend-exp")
+    session.query(DeviceRefreshToken).filter_by(device_id=device_id).update(
+        {"expires_at": datetime.now(UTC) - timedelta(days=1)}, synchronize_session=False
+    )
+    session.get(Device, device_id).status = "pending"
+    session.commit()
+    return device_id, raw_dr
+
+
+def _pending_device_with_valid_credential(session):
+    device_id, raw_dr = _active_device(session, "pend-ok")
+    session.get(Device, device_id).status = "pending"
+    session.commit()
+    return device_id, raw_dr
+
+
+def _unknown_credential(session):
+    device_id, _raw = _active_device(session, "unknown-cred")
+    return device_id, "dr_not_a_real_token_at_all"
+
+
+def _credential_for_another_device(session):
+    _mine, raw_mine = _active_device(session, "other-mine")
+    theirs, _raw = _active_device(session, "other-theirs")
+    return theirs, raw_mine
+
+
+@pytest.mark.parametrize(
+    "make_state, expected",
+    [
+        # Both conditions true; device state must win.
+        (_revoked_device_with_expired_credential, "device_revoked"),
+        (_revoked_device_with_valid_credential, "device_revoked"),
+        (_unknown_credential, "credential_unknown"),
+        (_credential_for_another_device, "credential_unknown"),
+        # Expiry above pending: a pending device with a dead credential must be
+        # told to re-enrol, not to poll for an approval it can never use.
+        (_pending_device_with_expired_credential, "credential_expired"),
+        (_pending_device_with_valid_credential, "device_pending"),
+    ],
+)
+def test_refresh_failure_precedence(db_session, make_state, expected):
+    device_id, raw_dr = make_state(db_session)
+
+    result = DeviceService(db_session).refresh_device(device_id=device_id, refresh_token_hash=hash_key(raw_dr))
+
+    assert result["status"] == expected
+
+
+def test_a_revoked_device_is_never_told_to_re_enrol(db_session):
+    """The bypass, named.
+
+    Revoked AND expired must answer device_revoked. credential_expired sends a
+    compliant client to enrol again, which is precisely what revocation was
+    meant to stop -- and the client does it by itself, without the attacker
+    doing anything but wait.
+    """
+    device_id, raw_dr = _revoked_device_with_expired_credential(db_session)
+
+    result = DeviceService(db_session).refresh_device(device_id=device_id, refresh_token_hash=hash_key(raw_dr))
+
+    assert result["status"] == "device_revoked"
