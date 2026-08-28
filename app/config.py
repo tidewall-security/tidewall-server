@@ -41,6 +41,19 @@ class Settings(BaseModel):
     # export refuses rather than assume this network has no translation. See
     # app/services/nat64.py and the finding it names.
     PREF64: str | None = None
+    # Bounds on the two device endpoints a stranger can reach. Enrolment is
+    # unauthenticated but for the key; refresh is reachable with a credential
+    # that does not exist, because its middleware deliberately leaves
+    # adjudication to the service.
+    ENROLMENT_RATE_PER_MINUTE: int = 10
+    #: Pending devices one registration key may have awaiting approval.
+    MAX_PENDING_PER_TOKEN: int = 50
+    #: How long an unapproved device survives before it is reaped.
+    PENDING_DEVICE_TTL_HOURS: int = 72
+    #: X-Forwarded-For entries to believe, counted from the right. Zero means
+    #: the ASGI peer and nothing else -- the header is caller-supplied, and
+    #: trusting it unconditionally lets every request claim a fresh identity.
+    TRUSTED_PROXY_HOPS: int = 0
 
     @classmethod
     def from_env(cls) -> Settings:
