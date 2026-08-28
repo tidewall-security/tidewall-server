@@ -195,8 +195,15 @@ def test_a_cached_vault_past_its_expiry_is_refused(session_factory):
     mgr = _manager(session_factory)
     vault_id, _ = _populated(mgr, expires_at=_ago(minutes=1))
     assert vault_id in mgr._cache, "the save did not cache, so this says nothing about cache hits"
+    assert _rows(session_factory) == [vault_id], "the row must exist, or the deletion below proves nothing"
 
     assert mgr.get_vault(vault_id) is None
+
+    # The expired hit must FALL THROUGH to the row rather than returning early,
+    # because falling through is how the row gets deleted. Returning None from
+    # the cache branch passes every other assertion here and leaves the row --
+    # a sealed PII mapping on disk that nothing will ever reclaim.
+    assert _rows(session_factory) == [], "the expired cache hit short-circuited and left the row behind"
 
 
 def test_a_live_row_is_still_served(session_factory):

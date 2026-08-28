@@ -22,13 +22,23 @@ written from.
 **An empty vault is not written.** No mapping means nothing to retrieve, and a
 row written anyway is one that later reads as data loss.
 
-**Expiry deletes.** Refusing an expired row bounds what the API discloses and
-bounds nothing on disk, so a compromised key would expose every row ever
-written under it rather than the hour the TTL claims. A row found past its
-expiry is deleted by the read that found it. That is also what makes an unknown
-key id loud rather than quiet: a key stays in the ring for at least the TTL and
-no live row can outlast it, so a row naming an id nobody configured is an
-anomaly. Retention is what makes loud key removal correct.
+**A read deletes what it finds expired.** Refusing an expired row bounds what
+the API discloses and bounds nothing on disk, so a compromised key exposes every
+row still present rather than the hour the TTL suggests. A row found past its
+expiry is therefore deleted by the read that found it, cache hit included -- the
+expired hit falls through to the row rather than short-circuiting, which is the
+only reason that deletion happens at all.
+
+**That is not yet a retention guarantee, and nothing here should be read as
+one.** The ordinary request redacts and never calls ``/v1/unredact``, so its row
+is never read and never reclaimed. Nothing sweeps them: the scheduler's
+retention job purges captured content and does not touch this table. Until a
+sweep exists, a sealed mapping written today is still on disk indefinitely.
+
+The unknown-key-is-loud rule does **not** depend on that sweep, though an
+earlier draft of this docstring said it did. The expiry gate runs *before* the
+key lookup, so a stale row naming a withdrawn key answers as expired rather than
+raising -- the ordering does the work, not the retention.
 
 **The cache is by use, and bounded wherever it grows.** It was documented as
 LRU while evicting in insertion order, and :meth:`~VaultManager.get_vault`
