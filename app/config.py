@@ -55,6 +55,27 @@ class Settings(BaseModel):
     #: trusting it unconditionally lets every request claim a fresh identity.
     TRUSTED_PROXY_HOPS: int = 0
 
+    # The vault keyring. A vault holds the placeholder-to-original mapping that
+    # makes redaction reversible, which is to say it holds exactly the values
+    # the product exists to protect. It is encrypted at rest under a key the
+    # operator supplies; unset means no key, and reversible redaction has
+    # nothing to store its mapping in.
+    #
+    # Both are held here as the operator wrote them and parsed by
+    # `app.vault_crypto.Keyring.from_settings`, which runs once at startup: a
+    # malformed declaration stops the server there, in front of whoever
+    # deployed it, rather than on some later request.
+    #
+    #: ``id:base64-material`` entries, comma separated. Ids are operator-chosen
+    #: labels and must stay stable, because every row names the id it was
+    #: sealed under. Material is 32 raw bytes (AES-256), base64 encoded.
+    VAULT_ENCRYPTION_KEYS: str | None = None
+    #: Which id in VAULT_ENCRYPTION_KEYS new vaults are sealed under. To rotate,
+    #: add the new key, repoint this at it, and keep the previous key in KEYS
+    #: for at least the vault TTL -- rows naming it are still live until then,
+    #: and nothing is re-encrypted.
+    VAULT_ENCRYPTION_CURRENT: str | None = None
+
     @classmethod
     def from_env(cls) -> Settings:
         """Build a Settings instance from the current environment."""
