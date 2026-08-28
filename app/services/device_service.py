@@ -329,24 +329,45 @@ class DeviceService:
         the same credential, which is the property the access-token rotation
         could not offer.
         """
-        token = self._session.query(DeviceRefreshToken).filter_by(token_hash=refresh_token_hash).first()
-        if token is None:
-            raise PermissionError("Invalid refresh token")
-        if token.revoked_at is not None:
-            raise PermissionError("Refresh token revoked")
-        if as_utc(token.expires_at) < datetime.now(UTC):
-            raise PermissionError("Refresh token expired")
-        if token.device_id != device_id:
-            # A valid credential for a different device. Distinguished from an
-            # invalid one so a caller can tell a bug from a credential problem,
-            # without revealing whether the target device exists.
-            raise PermissionError("Refresh token is not valid for this device")
-
+        # THE PRECEDENCE IS THE SPECIFICATION. Written once, in order, with the
+        # reason each step sits where it does.
+        #
+        # 1. Device revoked. Dominates everything below: a revoked device told
+        #    anything else re-enrols ITSELF, undoing its own revocation without
+        #    the attacker doing more than waiting.
+        # 2. Credential unknown, or bound to another device. One answer for
+        #    both: distinguishing them tells a caller whether a device exists.
+        # 3. Credential expired or revoked.
+        # 4. Device pending. Below expiry, so a pending device holding a dead
+        #    credential is told to re-enrol rather than polling for an approval
+        #    it could never use.
+        # 5. Otherwise issue.
+        #
+        # Step 1 resolves a caller-supplied device id before authenticating, so
+        # it does reveal whether a given id names a revoked device. Accepted:
+        # ids are UUIDs, the caller is normally the device itself, and the
+        # alternative -- authenticate first -- cannot answer device_revoked at
+        # all once revocation has deleted the credential, which is the bypass
+        # this ordering exists to close.
         device = self._session.get(Device, device_id)
+        if device is not None and device.status == "revoked":
+            return {"status": "device_revoked", "result": None}
+
+        token = self._session.query(DeviceRefreshToken).filter_by(token_hash=refresh_token_hash).first()
+        if token is None or token.device_id != device_id:
+            return {"status": "credential_unknown", "result": None}
+
+        if token.revoked_at is not None or as_utc(token.expires_at) < datetime.now(UTC):
+            return {"status": "credential_expired", "result": None}
+
         if device is None:
-            raise PermissionError("Refresh token is not valid for this device")
-        if device.status != "active":
-            return {"status": "InactiveDevice", "result": None}
+            # The credential names a device that no longer exists. Task 7's
+            # tombstones turn this into device_revoked; until then the client is
+            # told its credential is unknown and re-enrols.
+            return {"status": "credential_unknown", "result": None}
+
+        if device.status == "pending":
+            return {"status": "device_pending", "result": None}
 
         for field, value in (
             ("device_name", device_name),
@@ -364,7 +385,9 @@ class DeviceService:
         raw_at, _ = self._issue_access_token(device.id)
         self._session.commit()
         logger.info("Refreshed device %s", device.id)
-        return self._success(device, raw_at)
+        result = self._success(device, raw_at)
+        result["status"] = "ok"
+        return result
 
     def _success(self, device: Device, raw_at: str, raw_dr: str | None = None) -> dict[str, Any]:
         result: dict[str, Any] = {

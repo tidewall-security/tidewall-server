@@ -14,7 +14,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.auth.key_utils import generate_key, hash_key, key_prefix
 from app.auth.middleware import AuthMiddleware
-from app.db.models import AccessToken, APIKey, Base, Policy, RegistrationToken
+from app.db.models import AccessToken, APIKey, Base, Device, DeviceRefreshToken, Policy, RegistrationToken
 
 
 def _iid(label: str) -> str:
@@ -279,7 +279,10 @@ def test_another_devices_token_cannot_refresh(setup):
         headers={"Authorization": f"Bearer {attacker['refresh_token']['token']}"},
     )
 
-    assert resp.status_code == 403
+    # The takeover is still refused; the answer is now credential_unknown so it
+    # is indistinguishable from presenting a credential that does not exist.
+    assert resp.status_code == 401
+    assert resp.json()["reason"] == "credential_unknown"
 
 
 def test_at_token_works_for_guard_like_call(setup):
@@ -762,4 +765,84 @@ def test_a_refresh_token_cannot_refresh_a_different_device_over_http(setup):
         headers={"Authorization": f"Bearer {mine['refresh_token']['token']}"},
     )
 
-    assert resp.status_code == 403
+    # credential_unknown, NOT a distinct "wrong device" answer. Distinguishing
+    # the two would tell a caller whether the target device exists.
+    assert resp.status_code == 401
+    assert resp.json()["reason"] == "credential_unknown"
+
+
+# ---------------------------------------------------------------------------
+# The same precedence, over HTTP
+#
+# The service-level table is not enough. Until the dr_ middleware was corrected
+# it answered three of these five outcomes itself, before the route ran -- and
+# every service test still passed while the HTTP path, the only one a client
+# takes, returned the wrong answer. A service-only suite cannot detect an
+# authority that short-circuits it.
+# ---------------------------------------------------------------------------
+
+
+def _http_revoked_with_expired_credential(client, admin_key, session_factory, label):
+    rt = _create_rt_token(client, admin_key)
+    d = _enrol_device(client, rt, installation_id=_iid(label)).json()["result"]
+    session = session_factory()
+    session.query(DeviceRefreshToken).filter_by(device_id=d["device_id"]).update(
+        {"expires_at": datetime.now(UTC) - timedelta(days=1)}, synchronize_session=False
+    )
+    session.get(Device, d["device_id"]).status = "revoked"
+    session.commit()
+    session.close()
+    return d["device_id"], d["refresh_token"]["token"]
+
+
+def _http_pending_with_expired_credential(client, admin_key, session_factory, label):
+    rt = _create_rt_token(client, admin_key)
+    d = _enrol_device(client, rt, installation_id=_iid(label)).json()["result"]
+    session = session_factory()
+    session.query(DeviceRefreshToken).filter_by(device_id=d["device_id"]).update(
+        {"expires_at": datetime.now(UTC) - timedelta(days=1)}, synchronize_session=False
+    )
+    session.get(Device, d["device_id"]).status = "pending"
+    session.commit()
+    session.close()
+    return d["device_id"], d["refresh_token"]["token"]
+
+
+def _http_pending_with_valid_credential(client, admin_key, session_factory, label):
+    rt = _create_rt_token(client, admin_key)
+    d = _enrol_device(client, rt, installation_id=_iid(label)).json()["result"]
+    session = session_factory()
+    session.get(Device, d["device_id"]).status = "pending"
+    session.commit()
+    session.close()
+    return d["device_id"], d["refresh_token"]["token"]
+
+
+def _http_unknown_credential(client, admin_key, session_factory, label):
+    rt = _create_rt_token(client, admin_key)
+    d = _enrol_device(client, rt, installation_id=_iid(label)).json()["result"]
+    return d["device_id"], "dr_not_a_real_token_at_all"
+
+
+@pytest.mark.parametrize(
+    "make_state, expected_status, expected_reason",
+    [
+        # Both conditions dead; the DEVICE must decide the answer.
+        (_http_revoked_with_expired_credential, 403, "device_revoked"),
+        (_http_unknown_credential, 401, "credential_unknown"),
+        (_http_pending_with_expired_credential, 401, "credential_expired"),
+        (_http_pending_with_valid_credential, 202, "device_pending"),
+    ],
+)
+def test_refresh_precedence_over_http(setup, make_state, expected_status, expected_reason):
+    client, admin_key, session_factory = setup
+    device_id, raw_dr = make_state(client, admin_key, session_factory, f"inst-http-{expected_reason}")
+
+    resp = client.post(
+        f"/v1/devices/{device_id}/refresh",
+        json={},
+        headers={"Authorization": f"Bearer {raw_dr}"},
+    )
+
+    assert resp.status_code == expected_status
+    assert resp.json()["reason"] == expected_reason

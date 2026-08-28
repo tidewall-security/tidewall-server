@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, field_validator
 
 from app.auth.dependencies import require_role
@@ -63,6 +63,19 @@ class ApproveDeviceRequest(BaseModel):
 
 class UpdateDeviceStatusRequest(BaseModel):
     status: str
+
+
+#: The taxonomy's HTTP projection. device_pending is 202, not an error: the
+#: request was understood and the client should poll with backoff. Everything
+#: else is a refusal, and device_revoked is 403 because re-presenting the
+#: credential will never help.
+_REFRESH_FAILURE_STATUS = {
+    "device_revoked": 403,
+    "credential_unknown": 401,
+    "credential_expired": 401,
+    "device_pending": 202,
+    "InactiveDevice": 403,
+}
 
 
 def _device_to_dict(device) -> dict:
@@ -132,7 +145,7 @@ async def enrol_device(body: DeviceEnrolRequest, request: Request) -> dict:
 
 
 @router.post("/{device_id}/refresh")
-async def refresh_device(device_id: str, body: DeviceRefreshRequest, request: Request) -> dict:
+async def refresh_device(device_id: str, body: DeviceRefreshRequest, request: Request, response: Response) -> dict:
     """Refresh a device, proving ownership with its own dr_ refresh token.
 
     A clean cut: the at_ access token was the credential here and is now
@@ -159,13 +172,18 @@ async def refresh_device(device_id: str, body: DeviceRefreshRequest, request: Re
             ext_version=body.extension_version,
             fingerprint=body.fingerprint,
         )
-        if result["status"] == "InactiveDevice":
-            raise HTTPException(status_code=403, detail="Device is not active")
-        return result
-    except PermissionError as e:
-        # 403, not 401: the caller authenticated, but this credential does not
-        # authorise this device.
-        raise HTTPException(status_code=403, detail=str(e)) from None
+        if result["status"] == "ok":
+            return result
+
+        # The body always carries the machine-readable reason. A client keys on
+        # THAT, never on the status code alone: 401 covers two outcomes that
+        # call for different behaviour, and 202 is not an error at all.
+        # Set on the injected Response rather than returning a JSONResponse: a
+        # `dict | JSONResponse` return annotation makes FastAPI try to build a
+        # Pydantic response model from the union and fail at import time,
+        # taking every route in this module with it.
+        response.status_code = _REFRESH_FAILURE_STATUS[result["status"]]
+        return {"status": result["status"], "reason": result["status"], "result": None}
     finally:
         session.close()
 
