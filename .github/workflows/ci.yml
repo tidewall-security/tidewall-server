@@ -83,6 +83,96 @@ jobs:
       - run: uv sync --group dev
       - run: uv run pytest tests/ --cov=app --cov-report=term-missing -q --ignore=tests/e2e
 
+  contract:
+    name: Contract (extension against this server)
+    runs-on: ubuntu-latest
+    # Here rather than in the extension's CI, for two reasons.
+    #
+    # Cost: this job already installs the server's Python dependencies, seven of
+    # which are heavy ML packages. The extension side is a 1s build. Running it
+    # the other way round pays that install on a job that otherwise takes
+    # seconds.
+    #
+    # Attribution: the break this exists to catch happens when the SERVER
+    # changes. The extension called an endpoint deleted here and was
+    # non-functional for eleven days while its own 288 tests passed -- no
+    # extension PR was at fault, so nothing in that repo would have been on the
+    # hook. A server PR that removes a route should fail on that PR.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: server
+      - uses: actions/checkout@v4
+        with:
+          repository: tidewall-security/tidewall-browser-extension
+          path: extension
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-py3.12-${{ hashFiles('server/uv.lock') }}
+          restore-keys: uv-${{ runner.os }}-py3.12-
+
+      - name: Install server
+        working-directory: server
+        run: uv sync --group dev
+
+      - name: Install and build extension
+        working-directory: extension
+        run: |
+          npm ci
+          npm run build
+
+      - name: Start the server
+        working-directory: server
+        env:
+          # PREWARM=false because the contract tests never invoke a detector --
+          # loading the models would add minutes to prove nothing.
+          DB_URL: sqlite:////tmp/contract.db
+          BOOTSTRAP_KEY: ak_ci_contract_bootstrap_key_00000001
+          PREWARM: "false"
+        run: |
+          uv run uvicorn app.main:app --port 8099 > /tmp/server.log 2>&1 &
+          for i in $(seq 1 90); do
+            curl -sf http://localhost:8099/health > /dev/null && break
+            if [ "$i" = "90" ]; then echo "server did not start"; cat /tmp/server.log; exit 1; fi
+            sleep 1
+          done
+
+      - name: Seed a policy and a registration token
+        working-directory: server
+        run: uv run python ../extension/tests/integration/seed.py
+
+      - name: Client HTTP layer against the running server
+        working-directory: extension
+        env:
+          TIDEWALL_INTEGRATION: "1"
+          TIDEWALL_ADMIN_KEY: ak_ci_contract_bootstrap_key_00000001
+        run: npx vitest run tests/integration/live-server.test.ts
+
+      - name: The extension itself, in a real browser
+        working-directory: extension
+        env:
+          TIDEWALL_INTEGRATION: "1"
+          TIDEWALL_ADMIN_KEY: ak_ci_contract_bootstrap_key_00000001
+        run: |
+          npx playwright install chromium --with-deps
+          xvfb-run --auto-servernum npx playwright test tests/e2e/live-enrolment.spec.ts
+
+      - name: Server log on failure
+        if: failure()
+        run: cat /tmp/server.log
+
   frontend-tests:
     name: Frontend Tests
     runs-on: ubuntu-latest
