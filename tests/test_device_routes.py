@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -879,3 +880,100 @@ def test_the_recovery_secret_is_returned_once_and_only_to_an_admin(setup):
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     assert again.status_code == 200, "re-issuing before use is fine; using it twice is not"
+
+
+# ---------------------------------------------------------------------------
+# Enrolment failures must not answer 201
+# ---------------------------------------------------------------------------
+
+
+def test_a_tombstoned_installation_is_refused_not_created(setup):
+    """201 for an enrolment that created nothing wedges the client.
+
+    A client keying on the status code stores an empty credential tuple and has
+    no credentials and no error. Both of these statuses were added after the
+    route's mapping was written and simply never got an entry.
+    """
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+    first = _enrol_device(client, rt_token, installation_id=_iid("inst-tomb-http")).json()["result"]
+    client.patch(
+        f"/v1/devices/{first['device_id']}",
+        json={"status": "revoked"},
+        headers={"Authorization": f"Bearer {admin_key}"},
+    )
+
+    again = _enrol_device(client, rt_token, installation_id=_iid("inst-tomb-http"))
+
+    assert again.status_code == 403
+    assert again.json()["reason"] == "InstallationTombstoned"
+    assert again.json()["result"] is None
+
+
+def test_an_exhausted_pending_quota_is_refused_not_created(setup):
+    """Capacity, not misbehaviour: 429 tells the client to come back."""
+    from app.services.device_service import MAX_PENDING_PER_TOKEN
+
+    client, admin_key, session_factory = setup
+    rt = client.post(
+        "/v1/registration-tokens",
+        json={
+            "name": "quota",
+            "policy_id": TEST_POLICY_ID,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
+        headers={"Authorization": f"Bearer {admin_key}"},
+    ).json()["token"]
+
+    for n in range(MAX_PENDING_PER_TOKEN):
+        assert _enrol_device(client, rt, installation_id=_iid(f"q{n}")).status_code == 201
+
+    over = _enrol_device(client, rt, installation_id=_iid("q-over"))
+
+    assert over.status_code == 429
+    assert over.json()["reason"] == "PendingQuotaExceeded"
+
+
+def test_every_enrolment_outcome_the_service_can_return_is_mapped(setup):
+    """A new status with no entry must fail loudly, not answer 201.
+
+    The two statuses above reached production answering "Created" precisely
+    because the route grew a chain of ifs and nobody extended it. This pins the
+    table against the service instead.
+    """
+    import inspect
+
+    from app.routes.devices import _ENROL_FAILURE_STATUS
+    from app.services import device_service
+
+    source = inspect.getsource(device_service.DeviceService.enrol_device)
+    returned = set(re.findall(r'"status": "(\w+)"', source))
+    unmapped = returned - set(_ENROL_FAILURE_STATUS) - {"Success"}
+
+    assert not unmapped, f"enrolment can return {unmapped}, which the route does not map"
+
+
+def test_an_unmapped_enrolment_outcome_answers_500_not_201(setup, monkeypatch):
+    """The guard for the NEXT status someone adds without a table entry.
+
+    Unreachable while the table is complete, so it needs a status the table has
+    never heard of. Without this the branch is only exercised by deleting an
+    entry, which proves the entry exists and not that the fallback is safe --
+    and the fallback is the whole point: 201 for an unrecognised outcome is how
+    the two real statuses came to be silently successful.
+    """
+    from app.services.device_service import DeviceService
+
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+
+    monkeypatch.setattr(
+        DeviceService,
+        "enrol_device",
+        lambda self, **kwargs: {"status": "SomethingNobodyMapped", "result": None},
+    )
+
+    resp = _enrol_device(client, rt_token, installation_id=_iid("inst-unmapped"))
+
+    assert resp.status_code == 500, "an unrecognised outcome answered as if it had created a device"
+    assert resp.json()["detail"] == "Unhandled enrolment outcome"

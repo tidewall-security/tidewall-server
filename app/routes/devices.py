@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, field_validator
 
 from app.auth.dependencies import require_role
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/devices", tags=["devices"])
 
@@ -73,6 +77,24 @@ class UpdateDeviceStatusRequest(BaseModel):
 #: request was understood and the client should poll with backoff. Everything
 #: else is a refusal, and device_revoked is 403 because re-presenting the
 #: credential will never help.
+#: Enrolment outcomes that created nothing. Every one of these used to fall
+#: through the 201 route and answer "Created" with a null result, so a client
+#: keying on the status code would store an empty credential tuple and wedge.
+#: Two of them were added later than the route's mapping and simply never got
+#: an entry -- which is why this is a table rather than a chain of ifs: a status
+#: with no entry now fails loudly instead of silently succeeding.
+_ENROL_FAILURE_STATUS = {
+    "RegistrationTokenExhausted": 403,
+    "InstallationIdAlreadyEnrolled": 409,
+    # Valid credential, but this installation may not enrol. Re-presenting it
+    # will not help; an administrator must authorise recovery out of band.
+    "InstallationTombstoned": 403,
+    # Capacity, not misbehaviour: the quota frees as devices are approved or
+    # reaped. 429 tells the client to come back rather than to give up.
+    "PendingQuotaExceeded": 429,
+}
+
+
 _REFRESH_FAILURE_STATUS = {
     "device_revoked": 403,
     "credential_unknown": 401,
@@ -105,7 +127,7 @@ def _device_to_dict(device) -> dict:
 
 
 @router.post("/enrol", status_code=201)
-async def enrol_device(body: DeviceEnrolRequest, request: Request) -> dict:
+async def enrol_device(body: DeviceEnrolRequest, request: Request, response: Response) -> dict:
     """Enrol a new device. Requires an rt_ registration token.
 
     Split from refresh deliberately. The combined endpoint took a registration
@@ -132,16 +154,17 @@ async def enrol_device(body: DeviceEnrolRequest, request: Request) -> dict:
             fingerprint=body.fingerprint,
             recovery_secret=body.recovery_secret,
         )
-        if result["status"] == "RegistrationTokenExhausted":
-            # 403, not 401: the credential is valid and the caller is simply
-            # not owed a device. Re-presenting it will never help, and 401
-            # invites a client to go looking for a fresher token.
-            raise HTTPException(status_code=403, detail="Registration token has no uses remaining")
-        if result["status"] == "InstallationIdAlreadyEnrolled":
-            # 409, not a 201 carrying a failure in the body: nothing was
-            # created. The client already holds credentials for this
-            # installation and should refresh, or enrol as a new one.
-            raise HTTPException(status_code=409, detail="Installation ID is already enrolled")
+        if result["status"] != "Success":
+            status_code = _ENROL_FAILURE_STATUS.get(result["status"])
+            if status_code is None:
+                # An outcome nobody mapped. 500 rather than 201: answering
+                # "Created" for something we do not understand is exactly how
+                # the two statuses above came to be silently successful.
+                logger.error("Unmapped enrolment outcome %r", result["status"])
+                raise HTTPException(status_code=500, detail="Unhandled enrolment outcome")
+            response.status_code = status_code
+            return {"status": result["status"], "reason": result["status"], "result": None}
+
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
