@@ -31,6 +31,7 @@ works and the test that it can be withheld are two halves of one change.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 from contextlib import ExitStack, contextmanager
@@ -164,6 +165,25 @@ def _unstartable(*_args, **_kwargs):
     raise RuntimeError("scheduler unavailable")
 
 
+@contextmanager
+def _recorded_errors():
+    """Every ``logger.error`` call made while this is open.
+
+    Captured at the call rather than at a handler, because Alembic runs
+    ``fileConfig`` during the startup migrations and that replaces the root
+    handlers -- so ``caplog``, and anything attached beforehand, sees nothing.
+    """
+    records: list[str] = []
+    real_error = logging.Logger.error
+
+    def _record(self, msg, *args, **kwargs):
+        records.append(str(msg))
+        return real_error(self, msg, *args, **kwargs)
+
+    with patch.object(logging.Logger, "error", _record):
+        yield records
+
+
 def _install_the_redactor(app, client) -> None:
     """Leave the live engine holding one detector, which redacts into the vault.
 
@@ -212,15 +232,24 @@ def test_a_lifespan_whose_scheduler_fails_to_start_redacts_irreversibly(tmp_path
     A key is configured, so every other part of the system is willing to store
     the mapping. What withholds it is that nothing would ever delete it.
     """
-    with _running_server(tmp_path, "no-sweep", _declaration(), break_the_scheduler=True) as (app, client):
-        assert app.state.scheduler is None, "the test did not actually stop the scheduler starting"
+    with _recorded_errors() as errors:
+        with _running_server(tmp_path, "no-sweep", _declaration(), break_the_scheduler=True) as (app, client):
+            assert app.state.scheduler is None, "the test did not actually stop the scheduler starting"
 
-        body = _post(client).json()
+            body = _post(client).json()
 
-        assert body["result"]["transformed"] is True, "the request was not redacted at all"
-        assert SECRET not in _redacted_text(body), "the original survived into the response"
-        assert body["result"]["fpe_context"] is None, "a reversal was promised by a deployment that cannot delete"
-        assert _rows(app.state.session_factory) == [], "PII was written where nothing would ever sweep it"
+            assert body["result"]["transformed"] is True, "the request was not redacted at all"
+            assert SECRET not in _redacted_text(body), "the original survived into the response"
+            assert body["result"]["fpe_context"] is None, "a reversal was promised by a deployment that cannot delete"
+            assert _rows(app.state.session_factory) == [], "PII was written where nothing would ever sweep it"
+
+    # A feature switching itself off is the operator's business. This log line
+    # is the only place the deployment says so: /health stays green, the
+    # requests keep succeeding, and the missing token is visible only to a
+    # caller who was looking for one.
+    assert any(
+        "reversible redaction is DISABLED" in message for message in errors
+    ), f"reversible redaction switched itself off without saying so; errors were {errors}"
 
 
 def test_a_started_scheduler_stores_a_row_a_cold_reader_opens(tmp_path):
