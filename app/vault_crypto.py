@@ -21,12 +21,16 @@ whatever the quiet branch gives them. So there is no quiet branch. In the ring
 and authentic is a decrypt; **everything else raises**. `open` never returns a
 value that is not a successfully authenticated plaintext.
 
-That is only correct because expired rows are deleted rather than merely
-refused. A key stays in the ring for at least the vault TTL and retention
-removes rows before it leaves, so a live row naming an id nobody configured is
-an anomaly -- a key withdrawn too early, a database restored from an old
-backup, or tampering -- and all three deserve to be loud. Retention is what
-makes loud key removal correct.
+A live row naming an id nobody configured is an anomaly -- a key withdrawn too
+early, a database restored from an old backup, or tampering -- and all three
+deserve to be loud.
+
+An earlier draft said this was "only correct because expired rows are deleted".
+It is not: :class:`~app.vault_manager.VaultManager` checks expiry *before* it
+looks the key up, so a stale row naming a withdrawn key answers as expired and
+never reaches this code. The ordering is what makes the rule safe. Retention
+still matters, for how long a sealed mapping sits on disk -- but it is not the
+premise of this one.
 
 **GCM authenticates the ciphertext, not where it lives.** Without the row's
 identity bound as associated data, a valid blob copied from one row onto

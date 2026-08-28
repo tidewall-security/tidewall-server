@@ -17,13 +17,11 @@ carry.
 
 .. warning::
 
-   :meth:`to_bytes` emits **plaintext** PII. Choosing JSON over pickle was the
-   right call, but it is a separate decision from choosing plaintext over
-   ciphertext, and only the first was made. This is currently latent rather
-   than live: :class:`~app.vault_manager.VaultManager` only ever persists an
-   *empty* vault (see its module docstring), so no PII reaches the database
-   today. Any change that makes persistence work must encrypt this payload in
-   the same commit, or it creates the disclosure it was meant to fix.
+   :meth:`to_bytes` emits **plaintext** PII, and nothing may write its output
+   to disk as it stands. :class:`~app.vault_manager.VaultManager` seals it
+   through :mod:`app.vault_crypto` on the way to the ``vaults`` table and is
+   the only thing that persists a vault at all. Choosing JSON over pickle
+   answered the code-execution question; it never answered the disclosure one.
 """
 
 from __future__ import annotations
