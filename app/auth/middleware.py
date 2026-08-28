@@ -106,7 +106,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if api_key is None:
                 return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
 
-            if api_key.expires_at and api_key.expires_at < datetime.now(UTC):
+            if api_key.expires_at and as_utc(api_key.expires_at) < datetime.now(UTC):
                 return JSONResponse(status_code=401, content={"detail": "API key expired"})
 
             # Validated on every request, not only at creation. A row can be
