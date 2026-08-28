@@ -951,3 +951,29 @@ def test_every_enrolment_outcome_the_service_can_return_is_mapped(setup):
     unmapped = returned - set(_ENROL_FAILURE_STATUS) - {"Success"}
 
     assert not unmapped, f"enrolment can return {unmapped}, which the route does not map"
+
+
+def test_an_unmapped_enrolment_outcome_answers_500_not_201(setup, monkeypatch):
+    """The guard for the NEXT status someone adds without a table entry.
+
+    Unreachable while the table is complete, so it needs a status the table has
+    never heard of. Without this the branch is only exercised by deleting an
+    entry, which proves the entry exists and not that the fallback is safe --
+    and the fallback is the whole point: 201 for an unrecognised outcome is how
+    the two real statuses came to be silently successful.
+    """
+    from app.services.device_service import DeviceService
+
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+
+    monkeypatch.setattr(
+        DeviceService,
+        "enrol_device",
+        lambda self, **kwargs: {"status": "SomethingNobodyMapped", "result": None},
+    )
+
+    resp = _enrol_device(client, rt_token, installation_id=_iid("inst-unmapped"))
+
+    assert resp.status_code == 500, "an unrecognised outcome answered as if it had created a device"
+    assert resp.json()["detail"] == "Unhandled enrolment outcome"
