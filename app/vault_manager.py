@@ -130,7 +130,7 @@ class VaultManager:
             return False
         if self._keyring is None:
             logger.error(
-                "vault %s was not stored: no vault encryption key is configured, " "so redaction is irreversible",
+                "vault %s was not stored: no vault encryption key is configured, so redaction is irreversible",
                 vault_id,
             )
             return False
@@ -173,7 +173,7 @@ class VaultManager:
             # an attacker can select: it turns on the deployment's own
             # configuration, not on any field in the row.
             logger.error(
-                "vault %s was requested but no vault encryption key is configured, " "so no vault can be opened",
+                "vault %s was requested but no vault encryption key is configured, so no vault can be opened",
                 vault_id,
             )
             return None
