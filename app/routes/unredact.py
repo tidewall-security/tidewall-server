@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -16,6 +17,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from app.auth.dependencies import deny_device_credentials, require_role
 from app.models import UnredactRequest, UnredactResponse, UnredactResult
 from app.utils import now_iso as _now_iso
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -53,6 +56,26 @@ async def unredact(body: UnredactRequest, request: Request) -> UnredactResponse:
     vault = vault_mgr.get_vault(vault_id)
     if not vault:
         raise HTTPException(status_code=404, detail="Vault expired or not found")
+
+    if vault.is_empty:
+        # The row exists and holds no mapping, so unredact() would replace
+        # nothing and hand the caller back the text it sent -- previously with
+        # status="Success" and summary="Unredacted via vault". A vault id only
+        # exists because a redaction produced one, so this is lost data, not an
+        # empty result.
+        #
+        # 500 rather than 404: the vault was found. This is the server failing
+        # to keep what it promised to keep, and it should be loud. Persistence
+        # currently writes the vault before the detector populates it, so on a
+        # cache miss this is the ordinary outcome, not a rare one.
+        logger.error(
+            "vault %s holds no mapping; refusing to report a reversal that did not happen",
+            vault_id,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Vault holds no redaction mapping; the original data cannot be recovered",
+        )
 
     restored = vault.unredact(str(body.redacted_data))
     return UnredactResponse(

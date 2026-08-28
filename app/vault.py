@@ -47,6 +47,18 @@ class TidewallVault:
         # next index per entity type
         self._counters: defaultdict[str, int] = defaultdict(int)
 
+    @property
+    def is_empty(self) -> bool:
+        """True when this vault holds no placeholder mapping at all.
+
+        A vault id only exists because a redaction produced one, so an empty
+        vault does not mean "nothing was redacted" -- it means the mapping was
+        lost between the request that created it and the request reading it.
+        Callers use this to refuse rather than return the redacted text as
+        though it were the original.
+        """
+        return not self._placeholder_to_original
+
     def store(self, entity_type: str, original: str) -> str:
         """Record an original value, returning the placeholder to swap into the text.
 
