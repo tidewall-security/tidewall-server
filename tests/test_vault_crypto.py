@@ -301,13 +301,22 @@ def test_an_empty_key_id_is_loud():
         ring.open("vault-1", EXPIRY, _with_key_id(blob, b""))
 
 
-@pytest.mark.parametrize("cut", [1, 2, 3, 14, 20])
-def test_a_truncated_blob_is_loud(cut):
+def test_every_truncation_of_a_row_is_loud():
+    """Every cut point, not a sample of them.
+
+    An earlier version of this test tried five, and all five happened to land
+    where the header was still self-consistent enough to reach GCM and be
+    refused there -- so it passed with the length check taken out, and said
+    nothing about the cuts in between, which hand GCM a nonce too short to use
+    and get a ValueError straight through `open` instead of one of the three
+    failures this module promises.
+    """
     ring = _ring({"k1": _key()}, current="k1")
     blob = ring.seal("vault-1", EXPIRY, b"secret")
 
-    with pytest.raises((UnknownKey, AuthenticationFailed)):
-        ring.open("vault-1", EXPIRY, blob[:cut])
+    for cut in range(len(blob)):
+        with pytest.raises((UnknownKey, AuthenticationFailed)):
+            ring.open("vault-1", EXPIRY, blob[:cut])
 
 
 def test_an_empty_row_is_loud():
@@ -367,7 +376,11 @@ def test_a_current_key_without_any_keys_is_a_startup_error():
 
 
 def test_keys_without_a_current_is_a_startup_error():
-    with pytest.raises(ValueError, match="VAULT_ENCRYPTION_CURRENT"):
+    # Matching the whole phrase, not just the setting name: the operator has to
+    # be told this one is *missing*. Fall through to the is-it-in-the-ring check
+    # below and they are told VAULT_ENCRYPTION_CURRENT "names None", which is
+    # both true and useless.
+    with pytest.raises(ValueError, match="VAULT_ENCRYPTION_CURRENT is not"):
         Keyring.from_settings(_settings({"k1": _key()}))
 
 
@@ -391,8 +404,19 @@ def test_a_ring_whose_current_is_absent_is_refused():
 
 
 def test_an_empty_ring_is_refused():
-    with pytest.raises(ValueError):
+    # Again the phrase, not the type: without its own check this lands on the
+    # current-key check and reports a missing current key for a ring that has
+    # no keys at all.
+    with pytest.raises(ValueError, match="no keys"):
         Keyring({}, current="k1")
+
+
+#: Well-formed material, so that every case below fails for its own reason and
+#: not because the bytes were never valid. An earlier version wrote "AAAA"
+#: here, which decodes to three bytes: every case was already invalid, and the
+#: whitespace and key-id rules were being asserted by a test that would have
+#: passed without them.
+_GOOD = base64.b64encode(bytes(range(32))).decode()
 
 
 @pytest.mark.parametrize(
@@ -400,18 +424,22 @@ def test_an_empty_ring_is_refused():
     [
         "k1",  # no material
         "k1:",  # empty material
-        ":AAAA",  # no id
-        "k1:not base64!",
+        f":{_GOOD}",  # no id
+        f"k1:{_GOOD[:10]}!{_GOOD[10:]}",  # a stray character inside the material
         "k1:a:b",  # an id carrying the separator would shift this parse
-        " k1:AAAA",  # whitespace is an error, not something to strip
-        "k1:AAAA ",
-        "k1:AAAA, k2:AAAA",
-        "k 1:AAAA",  # ids are labels, not arbitrary text
-        "k\n1:AAAA",
+        f" k1:{_GOOD}",  # whitespace is an error, not something to strip
+        f"k1:{_GOOD} ",
+        f"k1:{_GOOD}, k2:{_GOOD}",
+        f"k 1:{_GOOD}",  # ids are labels, not arbitrary text
+        f"k\n1:{_GOOD}",
     ],
 )
 def test_a_malformed_keys_declaration_is_a_startup_error(declaration):
-    with pytest.raises(ValueError, match="VAULT_ENCRYPTION_KEYS"):
+    # Anchored: "VAULT_ENCRYPTION_KEYS" on its own also appears in the message
+    # for a CURRENT that names nothing in the ring, so an unanchored match
+    # passes when a bad declaration is quietly accepted and the failure lands
+    # one check later, on a different setting, for a different reason.
+    with pytest.raises(ValueError, match=r"\AVAULT_ENCRYPTION_KEYS"):
         Keyring.from_settings(Settings(VAULT_ENCRYPTION_KEYS=declaration, VAULT_ENCRYPTION_CURRENT="k1"))
 
 
