@@ -178,7 +178,14 @@ def _recorded_errors():
     real_error = logging.Logger.error
 
     def _record(self, msg, *args, **kwargs):
-        records.append(str(msg))
+        # INTERPOLATED, not the format string. Recording str(msg) alone captures
+        # "vault %s was not stored: %s" and silently drops every value the
+        # message is about -- so any assertion on what was logged can never
+        # match, and reads as the code being wrong rather than the capture.
+        try:
+            records.append(str(msg) % args if args else str(msg))
+        except (TypeError, ValueError):
+            records.append(f"{msg} {args}")
         return real_error(self, msg, *args, **kwargs)
 
     with patch.object(logging.Logger, "error", _record):
@@ -251,6 +258,18 @@ def test_a_lifespan_whose_scheduler_fails_to_start_redacts_irreversibly(tmp_path
     assert any(
         "reversible redaction is DISABLED" in message for message in errors
     ), f"reversible redaction switched itself off without saying so; errors were {errors}"
+
+    # And the per-request line must agree with it. A key IS configured here; it
+    # was withheld. Saying "no vault encryption key is configured" contradicts
+    # the startup line one screen earlier and sends an operator to check a
+    # configuration that is fine. This asserts the wiring in main, not just the
+    # manager's willingness to carry a reason -- without it, main can stop
+    # passing one and nothing fails.
+    declines = [m for m in errors if "was not stored" in m]
+    assert declines, f"the withheld save was silent; errors were {errors}"
+    assert "was withheld" in declines[0], (
+        f"the decline blamed a missing key when one is configured: {declines[0]!r}"
+    )
 
 
 def test_a_started_scheduler_stores_a_row_a_cold_reader_opens(tmp_path):
