@@ -104,13 +104,25 @@ def test_the_limit_covers_refresh_as_well_as_enrolment():
     Its middleware branch deliberately leaves adjudication to the service so
     device state can dominate credential state, which means an unknown token
     still reaches the route. Unbounded, that is an unmetered oracle.
-    """
-    limits = EnrolmentLimits(per_minute=2)
-    limits.check("1.2.3.4", "/v1/devices/abc/refresh")
-    limits.check("1.2.3.4", "/v1/devices/abc/refresh")
 
-    with pytest.raises(RateLimited):
-        limits.check("1.2.3.4", "/v1/devices/abc/refresh")
+    Driven THROUGH the middleware, not by calling check() directly: a direct
+    call bypasses the path predicate, so removing refresh from the bounded set
+    left this green when it was written that way.
+    """
+    app = FastAPI()
+    app.state.enrolment_limits = EnrolmentLimits(2)
+    app.state.trusted_proxy_hops = 0
+    app.add_middleware(EnrolmentRateLimitMiddleware)
+
+    @app.post("/v1/devices/{device_id}/refresh")
+    async def refresh(device_id: str):
+        return {"ok": True}
+
+    client = TestClient(app)
+    statuses = [client.post("/v1/devices/abc/refresh", json={}).status_code for _ in range(5)]
+
+    assert 429 in statuses, "refresh is not bounded by the limiter"
+    assert statuses[-1] == 429
 
 
 def test_enrolment_and_refresh_have_separate_allowances():
