@@ -611,6 +611,34 @@ class Device(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
+class DeviceRefreshToken(Base):
+    """Long-lived, non-rotating, single-purpose credential for one device.
+
+    Its own table rather than a column on AccessToken: the two have different
+    lifetimes, different reach and different revocation rules, and sharing a
+    table invites a query that forgets which kind it is holding.
+
+    It does not rotate. Rotation cannot both survive a lost response and detect
+    reuse -- a client retrying after a committed-but-lost rotation is
+    indistinguishable from a thief -- so every variant either locks out real
+    clients or fails to catch real theft. Under a non-hostile host a credential
+    that cannot lock its owner out is worth more than one that pretends to
+    catch a thief it cannot catch.
+
+    The cost, stated: a stolen refresh token is usable until it expires or an
+    administrator revokes it.
+    """
+
+    __tablename__ = "device_refresh_tokens"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    token_hash: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    device_id: Mapped[str] = mapped_column(String, ForeignKey("devices.id", ondelete="CASCADE"), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class AccessToken(Base):
     __tablename__ = "access_tokens"
 

@@ -674,3 +674,26 @@ def test_a_pre_authorized_device_can_call_guard_without_approval(setup):
     )
 
     assert resp.status_code == 200, resp.text
+
+
+def test_a_refresh_token_cannot_call_guard(setup):
+    """The credential with the longest life must have the smallest reach."""
+    client, admin_key, _api_key, _viewer_key, session_factory = setup
+    enrolled = _enrol_via_http(client, admin_key, session_factory, pre_authorized=True, label="dr-guard")
+
+    resp = client.post(
+        "/v1/guard_chat_completions",
+        json=_guard_payload(),
+        headers={"Authorization": f"Bearer {enrolled['refresh_token']['token']}"},
+    )
+
+    assert resp.status_code == 403
+
+    # Positive control: the ACCESS token from the same enrolment does work, so
+    # the refusal is the credential type and not a broken fixture.
+    ok = client.post(
+        "/v1/guard_chat_completions",
+        json=_guard_payload(),
+        headers={"Authorization": f"Bearer {enrolled['access_token']['token']}"},
+    )
+    assert ok.status_code == 200

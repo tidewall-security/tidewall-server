@@ -237,16 +237,19 @@ def test_refresh_with_the_devices_own_token_returns_a_new_one(setup):
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
     enrolled = _enrol_device(client, rt_token, installation_id=_iid("inst-refresh-1")).json()["result"]
+    dr1 = enrolled["refresh_token"]["token"]
     at1 = enrolled["access_token"]["token"]
 
     resp = client.post(
         f"/v1/devices/{enrolled['device_id']}/refresh",
         json={"device_name": "Renamed"},
-        headers={"Authorization": f"Bearer {at1}"},
+        headers={"Authorization": f"Bearer {dr1}"},
     )
 
     assert resp.status_code == 200
+    # A NEW access token, and the SAME refresh token: nothing rotates.
     assert resp.json()["result"]["access_token"]["token"] != at1
+    assert "refresh_token" not in resp.json()["result"]
 
 
 def test_a_registration_token_cannot_refresh(setup):
@@ -273,7 +276,7 @@ def test_another_devices_token_cannot_refresh(setup):
     resp = client.post(
         f"/v1/devices/{victim['device_id']}/refresh",
         json={},
-        headers={"Authorization": f"Bearer {attacker['access_token']['token']}"},
+        headers={"Authorization": f"Bearer {attacker['refresh_token']['token']}"},
     )
 
     assert resp.status_code == 403
@@ -542,21 +545,6 @@ def test_a_non_uuid_installation_id_is_rejected(setup, bad):
     assert resp.status_code == 422
 
 
-def test_a_rotated_token_cannot_refresh_again_over_http(setup):
-    """The replay defect, at the route."""
-    client, admin_key, _ = setup
-    rt_token = _create_rt_token(client, admin_key)
-    enrolled = _enrol_device(client, rt_token, installation_id=_iid("inst-replay")).json()["result"]
-    first = enrolled["access_token"]["token"]
-    device_id = enrolled["device_id"]
-
-    ok = client.post(f"/v1/devices/{device_id}/refresh", json={}, headers={"Authorization": f"Bearer {first}"})
-    assert ok.status_code == 200
-
-    replay = client.post(f"/v1/devices/{device_id}/refresh", json={}, headers={"Authorization": f"Bearer {first}"})
-    assert replay.status_code == 403
-
-
 def test_refreshing_a_revoked_device_is_forbidden(setup):
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
@@ -714,3 +702,64 @@ def test_the_device_listing_never_publishes_the_confirmation_code(setup):
     assert code not in body, "the confirmation code was published in the device listing"
     for device in listing.json():
         assert "confirmation_code" not in device
+
+
+def test_an_access_token_is_refused_at_refresh(setup):
+    """The clean cut. at_ was the credential here and must now fail.
+
+    Not a deprecation. Accepting both would leave the one-hour lockout in place
+    for any client that kept using the old credential, which is the entire
+    problem the refresh token exists to solve.
+    """
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+    enrolled = _enrol_device(client, rt_token, installation_id=_iid("inst-cleancut")).json()["result"]
+
+    resp = client.post(
+        f"/v1/devices/{enrolled['device_id']}/refresh",
+        json={},
+        headers={"Authorization": f"Bearer {enrolled['access_token']['token']}"},
+    )
+
+    assert resp.status_code == 401
+
+
+def test_a_refresh_token_reaches_nothing_but_its_own_refresh_route(setup):
+    """It grants no role at all.
+
+    If it did, it would be a thirty-day api credential -- far longer-lived than
+    the one-hour token it exists to renew, and reaching everything that one
+    reaches.
+    """
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+    enrolled = _enrol_device(client, rt_token, installation_id=_iid("inst-reach")).json()["result"]
+    dr = enrolled["refresh_token"]["token"]
+    auth = {"Authorization": f"Bearer {dr}"}
+
+    assert client.get("/v1/devices", headers=auth).status_code == 403
+    assert client.get("/v1/registration-tokens", headers=auth).status_code == 403
+    assert client.post("/v1/devices/enrol", json={}, headers=auth).status_code == 403
+    assert (
+        client.post(
+            f"/v1/devices/{enrolled['device_id']}/approve", json={"confirmation_code": "X"}, headers=auth
+        ).status_code
+        == 403
+    )
+    # Its own route is the one thing it reaches.
+    assert client.post(f"/v1/devices/{enrolled['device_id']}/refresh", json={}, headers=auth).status_code == 200
+
+
+def test_a_refresh_token_cannot_refresh_a_different_device_over_http(setup):
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+    mine = _enrol_device(client, rt_token, installation_id=_iid("inst-mine-http")).json()["result"]
+    theirs = _enrol_device(client, rt_token, installation_id=_iid("inst-theirs-http")).json()["result"]
+
+    resp = client.post(
+        f"/v1/devices/{theirs['device_id']}/refresh",
+        json={},
+        headers={"Authorization": f"Bearer {mine['refresh_token']['token']}"},
+    )
+
+    assert resp.status_code == 403

@@ -158,3 +158,44 @@ def test_middleware_rt_prefix_routes_to_enrol_only():
     )
     # Should reach the route handler (200) not be blocked by middleware
     assert resp2.status_code == 201  # enrolment creates
+
+
+def test_a_dr_token_is_granted_no_role_at_all():
+    """Pins the role assignment independently of the path restriction.
+
+    A dr_ credential is blocked from other routes by _REFRESH_PATH, so a reach
+    test cannot tell whether the role assignment does anything: granting it
+    role="api" leaves every reach test green because the path check fires first.
+
+    Two independent controls, and only one of them was pinned. This probes AT a
+    refresh-shaped path -- past the path check -- so what it observes is the
+    role and nothing else. It matters because if a second dr_-reachable route
+    is ever added, this assignment becomes the only thing standing between a
+    thirty-day credential and the api role.
+    """
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine)
+
+    app = FastAPI()
+    app.add_middleware(AuthMiddleware)
+    app.state.session_factory = SessionLocal
+
+    # Matches ^/v1/devices/[^/]+/refresh$, so the credential gets past the path
+    # restriction and the handler can report what the middleware assigned.
+    @app.get("/v1/devices/probe/refresh")
+    async def probe(request: Request):
+        return {
+            "role": request.state.role,
+            "device_id": getattr(request.state, "device_id", None),
+            "policy_id": getattr(request.state, "policy_id", None),
+            "dr_token_hash_set": getattr(request.state, "dr_token_hash", None) is not None,
+        }
+
+    raw_dr = generate_key(prefix="dr")
+    body = TestClient(app).get("/v1/devices/probe/refresh", headers={"Authorization": f"Bearer {raw_dr}"}).json()
+
+    assert body["role"] is None, "a refresh token was granted a role"
+    assert body["device_id"] is None, "device_id marks an access credential; a dr_ must not carry it"
+    assert body["policy_id"] is None
+    assert body["dr_token_hash_set"] is True, "the middleware did not identify the credential"
