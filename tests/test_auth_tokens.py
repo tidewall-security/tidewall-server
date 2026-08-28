@@ -1,5 +1,6 @@
 """Tests for multi-prefix token generation and hashing."""
 
+import inspect
 from datetime import UTC, datetime, timedelta
 
 from fastapi import FastAPI, Request
@@ -199,3 +200,80 @@ def test_a_dr_token_is_granted_no_role_at_all():
     assert body["device_id"] is None, "device_id marks an access credential; a dr_ must not carry it"
     assert body["policy_id"] is None
     assert body["dr_token_hash_set"] is True, "the middleware did not identify the credential"
+
+
+def test_an_api_key_with_an_expiry_can_authenticate():
+    """The third instance of one bug, in the third branch of one file.
+
+    The registration-token branch compared a naive column against an aware
+    now() and raised instead of answering. This branch did the same, and was
+    missed when that one was fixed -- the sweep for it covered the access-token
+    branch and stopped there.
+
+    It is worse here: API keys are the primary administrative credential, so an
+    administrator who sets an expiry locks themselves out with a 500 on every
+    request.
+    """
+    app, SessionLocal = _make_test_app()
+    session = SessionLocal()
+    raw = generate_key(prefix="ak")
+    session.add(
+        APIKey(
+            name="expiring",
+            key_hash=hash_key(raw),
+            key_prefix=key_prefix(raw),
+            role="admin",
+            expires_at=datetime.now(UTC) + timedelta(days=30),
+        )
+    )
+    session.commit()
+    session.close()
+
+    resp = TestClient(app).get("/v1/test", headers={"Authorization": f"Bearer {raw}"})
+
+    assert resp.status_code == 200
+    assert resp.json()["role"] == "admin"
+
+
+def test_an_expired_api_key_is_refused_not_crashed():
+    app, SessionLocal = _make_test_app()
+    session = SessionLocal()
+    raw = generate_key(prefix="ak")
+    session.add(
+        APIKey(
+            name="expired",
+            key_hash=hash_key(raw),
+            key_prefix=key_prefix(raw),
+            role="admin",
+            expires_at=datetime.now(UTC) - timedelta(seconds=1),
+        )
+    )
+    session.commit()
+    session.close()
+
+    resp = TestClient(app).get("/v1/test", headers={"Authorization": f"Bearer {raw}"})
+
+    assert resp.status_code == 401
+    assert "expired" in resp.json()["detail"].lower()
+
+
+def test_every_expiry_comparison_in_the_middleware_normalises_first():
+    """Pins the whole file, so there is no fourth instance.
+
+    Three credential branches each compare a stored expiry against an aware
+    now(). Two of them were written correctly and one was not, twice, because
+    the fix was applied per-branch rather than to the file. This fails on the
+    next branch that forgets, at the moment it is written.
+    """
+    import re
+
+    from app.auth import middleware
+
+    source = inspect.getsource(middleware)
+    comparisons = [
+        line.strip() for line in source.splitlines() if re.search(r"expires_at.*<.*datetime\.now\(UTC\)", line)
+    ]
+
+    assert comparisons, "no expiry comparisons found; this guard has lost its target"
+    unguarded = [line for line in comparisons if "as_utc(" not in line]
+    assert not unguarded, f"expiry comparisons that do not normalise first: {unguarded}"
