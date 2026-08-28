@@ -50,6 +50,12 @@ dependencies = [
     # release into a plain `pip install .` even while uv.lock stays pinned.
     "google-re2>=1.1,<2",
     "spacy>=3.7",
+    # AES-256-GCM for the vault at rest (app/vault_crypto.py). Already present
+    # transitively through presidio-anonymizer, which is not a contract the
+    # thing encrypting the PII mapping may rest on: a Presidio release that
+    # drops it would take the vault's encryption with it.
+    # Bounded deliberately, like google-re2 above.
+    "cryptography>=44,<46",
     # Presidio's NER backbone — pinned to a wheel URL because spaCy models
     # are distributed as Python packages, not via PyPI. Without this, fresh
     # `uv sync` produces a broken install (Presidio falls back silently on
