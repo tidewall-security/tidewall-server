@@ -18,6 +18,12 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
+          # This workflow manages ~/.cache/uv with actions/cache, so letting
+          # setup-uv prune the same directory at teardown is duplicated work
+          # whose failure fails the job AFTER every real step has passed. The
+          # contract job went red exactly that way, with all thirteen of its
+          # steps green.
+          prune-cache: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -43,6 +49,12 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
+          # This workflow manages ~/.cache/uv with actions/cache, so letting
+          # setup-uv prune the same directory at teardown is duplicated work
+          # whose failure fails the job AFTER every real step has passed. The
+          # contract job went red exactly that way, with all thirteen of its
+          # steps green.
+          prune-cache: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -72,6 +84,12 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
+          # This workflow manages ~/.cache/uv with actions/cache, so letting
+          # setup-uv prune the same directory at teardown is duplicated work
+          # whose failure fails the job AFTER every real step has passed. The
+          # contract job went red exactly that way, with all thirteen of its
+          # steps green.
+          prune-cache: false
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -109,6 +127,12 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
+          # This workflow manages ~/.cache/uv with actions/cache, so letting
+          # setup-uv prune the same directory at teardown is duplicated work
+          # whose failure fails the job AFTER every real step has passed. The
+          # contract job went red exactly that way, with all thirteen of its
+          # steps green.
+          prune-cache: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
