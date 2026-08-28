@@ -207,9 +207,14 @@ class VaultManager:
         return vault
 
     def _remember(self, vault_id: str, vault: TidewallVault, expires_at: datetime) -> None:
-        """Hold a vault in memory as the most recently used, within the bound."""
+        """Hold a vault in memory as the most recently used, within the bound.
+
+        A vault_id is new every time this is reached -- `save` mints one per
+        request and `get_vault` only lands here on a miss -- and a new key goes
+        to the end of an OrderedDict on its own. Reordering is the read's job,
+        in `get_vault`, where a hit moves the entry it just used.
+        """
         self._cache[vault_id] = _Cached(vault, expires_at)
-        self._cache.move_to_end(vault_id)
         while len(self._cache) > _MAX_CACHE:
             # The least recently *used*, which is the point: evicting in
             # insertion order dropped a vault being read every second to keep
