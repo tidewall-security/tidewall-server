@@ -302,15 +302,16 @@ class ContentAccessAudit(Base):
 class Vault(Base):
     """Persisted PII vault for reversible redaction.
 
-    ``data`` is a JSON-encoded :class:`~app.vault.TidewallVault` payload
-    containing the original PII values keyed by their placeholder tokens.
-    The /v1/unredact endpoint loads the vault by ID (encoded in the
-    fpe_context token) to recover original text.
+    ``data`` is a :class:`~app.vault.TidewallVault` payload sealed by
+    :mod:`app.vault_crypto`: AES-256-GCM, with the row's own id and expiry
+    authenticated alongside the ciphertext so a blob cannot be moved to another
+    row or given a longer life. The /v1/unredact endpoint loads the vault by ID
+    (encoded in the fpe_context token) to recover original text.
 
-    Note that in practice this column currently holds only *empty* vaults, and
-    the payload format is plaintext. See :mod:`app.vault_manager` for why, and
-    for the constraint that encryption must land in the same change as the
-    persistence fix.
+    Rows written before that format are unversioned plaintext JSON and are
+    recognised on read rather than crashed on. Every one of them holds an empty
+    mapping, because the code that wrote them persisted the vault before
+    anything populated it.
     """
 
     __tablename__ = "vaults"

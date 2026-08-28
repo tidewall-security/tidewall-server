@@ -433,6 +433,37 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
         else:
             status = "allowed"
 
+    # --- Write the vault back ---
+    #
+    # Here, and nowhere earlier, because here is the first point at which the
+    # response's disposition is settled. `fpe_context` is created above after a
+    # successful reconstruction and cleared again twice — by the detector
+    # failure block and by report_only — so a save placed after the scan would
+    # store the placeholder-to-original mapping, which is the PII itself, for
+    # requests that end up carrying no way to retrieve it.
+    #
+    # Both `engine.scan` and every `engine.scan_single` were awaited above, so
+    # the worker thread has finished populating the vault and this does not
+    # race it.
+    if fpe_context is not None:
+        try:
+            saved = vault_mgr.save(vault_id, vault)
+        except Exception as exc:
+            # Reported through the wrapper, like every other report in this
+            # route that is not itself the security decision: an operator's
+            # broken log filter raises straight through Logger.handle, and a
+            # request whose disposition is already settled must not become a
+            # 500 because it could not be written about.
+            report(logger, "error", f"vault {vault_id} could not be saved", exc)
+            saved = False
+        if not saved:
+            # A token whose vault was never written promises a reversal that
+            # cannot happen — the same silent failure this endpoint keeps
+            # producing, one layer up. The redaction itself stands and the
+            # caller still gets it; it is only irreversible.
+            report(logger, "warning", f"vault {vault_id} was not stored; no reversal is offered")
+            fpe_context = None
+
     # Degradation is recorded as a reserved entry in the detectors payload,
     # which the interaction row and every export format already carry verbatim.
     # Without this, OCSF/AIDR/raw consumers would have to infer degradation by

@@ -1,27 +1,50 @@
-"""Manages per-request TidewallVault instances with DB persistence.
+"""Per-request vaults, and the rows they are written to.
 
-Vaults are JSON-encoded into the ``vaults`` table. Rows with an unrecognized
-format fail to deserialize and are treated as expired.
+A vault holds the placeholder-to-original mapping that makes redaction
+reversible, which is to say it holds exactly the values the product exists to
+protect. This module decides when one is written, when one may be read back,
+and what happens to a row whose time is up. The bytes themselves are sealed by
+:mod:`app.vault_crypto`, and there is no path here that writes or reads them
+any other way.
 
-.. warning::
+Four rules, and each one replaces something this module used to get wrong.
 
-   **Persistence does not currently work, and reversible redaction is
-   therefore broken.** :meth:`VaultManager.create_vault` writes the vault to
-   the database while it is still *empty*, and nothing writes it back after
-   :mod:`app.detectors.pii` populates the in-memory instance —
-   :meth:`~app.vault.TidewallVault.to_bytes` has one production call site.
+**Only :meth:`VaultManager.save` writes.** :meth:`~VaultManager.create_vault`
+used to persist the vault while it was still empty, and nothing ever wrote it
+back -- :meth:`~app.vault.TidewallVault.to_bytes` had one production call site,
+inside that method. So every stored row was
+``{"placeholders": {}, "counters": {}}`` and reversible redaction worked only
+when the unredacting request happened to land on the process that had created
+the vault. Creation is now purely in memory: it costs no write for the guard
+calls that redact nothing, and it leaves exactly one place a mapping can be
+written from.
 
-   So every persisted row is ``{"placeholders": {}, "counters": {}}``, and
-   ``/v1/unredact`` succeeds only on an in-process cache hit. On a miss it
-   loads the empty vault and returns the *redacted* text unchanged, with
-   ``status="Success"`` — a silent data-integrity failure reported as success.
-   Across multiple workers the populating and unredacting requests are usually
-   different processes, so this is the common case rather than the edge case.
+**An empty vault is not written.** No mapping means nothing to retrieve, and a
+row written anyway is one that later reads as data loss.
 
-   Known related defects, all tracked for the vault workstream: expiry is not
-   checked on cache hits; the cache is FIFO rather than LRU despite its name,
-   and :meth:`VaultManager.get_vault` never evicts, so the read path is
-   unbounded; and the payload is plaintext (see :mod:`app.vault`).
+**Expiry deletes.** Refusing an expired row bounds what the API discloses and
+bounds nothing on disk, so a compromised key would expose every row ever
+written under it rather than the hour the TTL claims. A row found past its
+expiry is deleted by the read that found it. That is also what makes an unknown
+key id loud rather than quiet: a key stays in the ring for at least the TTL and
+no live row can outlast it, so a row naming an id nobody configured is an
+anomaly. Retention is what makes loud key removal correct.
+
+**The cache is by use, and bounded wherever it grows.** It was documented as
+LRU while evicting in insertion order, and :meth:`~VaultManager.get_vault`
+never evicted at all, so reads grew it without limit. It also answered hits
+without checking expiry, which let a cached vault outlive its row.
+
+On the read path, :class:`~app.vault_crypto.LegacyRow` is caught and the other
+two are not. A legacy row is one written before the sealed format, and every
+one of them is known to hold an empty mapping, so there is nothing in it to
+recover and nothing to shout about. :class:`~app.vault_crypto.UnknownKey` and
+:class:`~app.vault_crypto.AuthenticationFailed` mean the deployment holds the
+wrong key or the bytes on disk are not the bytes that were written, and
+reporting either as a missing vault is the benign label on a systemic failure
+-- a server started with the wrong key would look exactly like one whose data
+had merely aged out. Catching their shared base class would collapse the
+distinction :mod:`app.vault_crypto` exists to draw.
 """
 
 from __future__ import annotations
@@ -30,79 +53,168 @@ import base64
 import json
 import logging
 import uuid
+from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
+from typing import NamedTuple
 
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Vault as VaultModel
+from app.utils import as_utc
 from app.vault import TidewallVault
+from app.vault_crypto import Keyring, LegacyRow
 
 logger = logging.getLogger(__name__)
 
+#: How long a saved vault stays readable. Also the floor on how long a key must
+#: stay in the ring after a rotation: shorter, and live rows would name an id
+#: nobody configured, which is a loud failure by design.
 _TTL = timedelta(hours=1)
+
+#: How many vaults are held in memory. Read at eviction time rather than bound
+#: into the class, so a test can shrink it instead of writing five hundred rows
+#: to prove the bound exists.
 _MAX_CACHE = 500
 
 
-class VaultManager:
-    """DB-backed vault manager with a bounded in-memory cache.
+class _Cached(NamedTuple):
+    """A vault held in memory, with the expiry of the row it came from.
 
-    The cache is FIFO, not LRU: :meth:`create_vault` evicts in insertion order
-    and :meth:`get_vault` never reorders or evicts. See the module docstring.
+    The expiry travels with it because a cache hit has to answer the same
+    question the row would have: a vault whose row has died must die with it.
     """
 
-    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+    vault: TidewallVault
+    expires_at: datetime
+
+
+class VaultManager:
+    """Creates vaults, writes the populated ones, and reads them back.
+
+    ``keyring`` is what a deployment configured. ``None`` means no key, so
+    there is nowhere safe to put a mapping: redaction still works and is
+    irreversible, no row is written and no row can be opened. Persistence and
+    encryption are one change -- a vault written in the clear would turn a
+    broken feature into a disclosure.
+    """
+
+    def __init__(self, session_factory: sessionmaker[Session], keyring: Keyring | None = None) -> None:
         self._session_factory = session_factory
-        # vault_id → TidewallVault instance
-        self._cache: dict[str, TidewallVault] = {}
+        self._keyring = keyring
+        # Most recently used last, so the eviction end is the front.
+        self._cache: OrderedDict[str, _Cached] = OrderedDict()
 
     def create_vault(self) -> tuple[str, TidewallVault]:
-        """Create a new TidewallVault, persist to DB, return (vault_id, vault)."""
-        vault_id = str(uuid.uuid4())
-        vault = TidewallVault()
-        now = datetime.now(UTC)
+        """A fresh id and an empty in-memory vault. Nothing is written.
 
-        # Persist serialized vault to DB.
-        with self._session_factory() as session:
-            row = VaultModel(
-                id=vault_id,
-                data=vault.to_bytes(),
-                created_at=now,
-                expires_at=now + _TTL,
+        The detectors populate the returned instance during the scan; whether
+        it is ever stored is settled later, by the response's disposition.
+        """
+        return str(uuid.uuid4()), TidewallVault()
+
+    def save(self, vault_id: str, vault: TidewallVault, expires_at: datetime | None = None) -> bool:
+        """Seal the mapping and write the row. ``True`` if one was written.
+
+        Declines rather than raising when there is nothing worth writing or
+        nowhere safe to write it: an empty vault, or no keyring. A caller that
+        has already promised a reversal must treat a decline exactly as it
+        treats a failure, because the outcome for the caller is the same.
+
+        Raises whatever the database raises. The expiry is anchored here rather
+        than at creation, so the TTL runs from the moment the mapping actually
+        existed.
+        """
+        if vault.is_empty:
+            # Nothing was recorded, so there is nothing to recover and no
+            # reason for a row that will later look like a lost mapping.
+            return False
+        if self._keyring is None:
+            logger.error(
+                "vault %s was not stored: no vault encryption key is configured, " "so redaction is irreversible",
+                vault_id,
             )
-            session.add(row)
+            return False
+
+        when = as_utc(expires_at) if expires_at is not None else datetime.now(UTC) + _TTL
+
+        # Sealed before the session opens. The row's own identity is bound as
+        # associated data, so this blob cannot be moved to another row or have
+        # its expiry extended without the authentication failing.
+        blob = self._keyring.seal(vault_id, when, vault.to_bytes())
+
+        with self._session_factory() as session:
+            session.add(VaultModel(id=vault_id, data=blob, created_at=datetime.now(UTC), expires_at=when))
             session.commit()
 
-        # Cache in memory; evict the oldest entry once we exceed the cap.
-        self._cache[vault_id] = vault
-        if len(self._cache) > _MAX_CACHE:
-            oldest_key = next(iter(self._cache))
-            del self._cache[oldest_key]
-
-        return vault_id, vault
+        self._remember(vault_id, vault, when)
+        return True
 
     def get_vault(self, vault_id: str) -> TidewallVault | None:
-        """Retrieve a vault by ID. Returns None if not found, expired, or corrupt."""
-        if vault_id in self._cache:
-            return self._cache[vault_id]
+        """The vault behind ``vault_id``, or ``None`` if there is genuinely none.
+
+        ``None`` means absent, expired, or written before the sealed format.
+        Every other failure raises: see the module docstring for why a wrong
+        key must not read as a missing vault.
+        """
+        now = datetime.now(UTC)
+
+        cached = self._cache.get(vault_id)
+        if cached is not None:
+            if cached.expires_at > now:
+                self._cache.move_to_end(vault_id)
+                return cached.vault
+            # Past its expiry, so it is not answered from memory and the read
+            # continues to the row -- which is how the row gets deleted rather
+            # than left behind by a cache hit that short-circuited it.
+            del self._cache[vault_id]
+
+        if self._keyring is None:
+            # Nothing was sealed and nothing can be opened. Not a quiet branch
+            # an attacker can select: it turns on the deployment's own
+            # configuration, not on any field in the row.
+            logger.error(
+                "vault %s was requested but no vault encryption key is configured, " "so no vault can be opened",
+                vault_id,
+            )
+            return None
 
         with self._session_factory() as session:
             row = session.get(VaultModel, vault_id)
             if row is None:
                 return None
-            expires = row.expires_at
-            if isinstance(expires, datetime) and expires.tzinfo is None:
-                # SQLite returns naive datetimes; treat as UTC for comparison.
-                expires = expires.replace(tzinfo=UTC)
-            if isinstance(expires, datetime) and expires < datetime.now(UTC):
+            expires_at = as_utc(row.expires_at)
+            if expires_at <= now:
+                # Deleted, not merely refused. The TTL is a claim about what is
+                # on disk as well as what is served.
+                session.delete(row)
+                session.commit()
                 return None
-            try:
-                vault = TidewallVault.from_bytes(row.data)
-                self._cache[vault_id] = vault
-                return vault
-            except Exception:
-                # Old pickled rows or corrupt JSON land here — treat as missing.
-                logger.warning("Failed to deserialize vault %s", vault_id)
-                return None
+            blob = bytes(row.data)
+
+        try:
+            plaintext = self._keyring.open(vault_id, expires_at, blob)
+        except LegacyRow:
+            # Caught by its own type. UnknownKey and AuthenticationFailed share
+            # a base class with this one and must travel on.
+            logger.info("vault %s predates the sealed format and holds no mapping", vault_id)
+            return None
+
+        # The plaintext authenticated, so anything wrong with it now is
+        # something this server wrote. Left to raise: it is a defect here, not
+        # a missing vault.
+        vault = TidewallVault.from_bytes(plaintext)
+        self._remember(vault_id, vault, expires_at)
+        return vault
+
+    def _remember(self, vault_id: str, vault: TidewallVault, expires_at: datetime) -> None:
+        """Hold a vault in memory as the most recently used, within the bound."""
+        self._cache[vault_id] = _Cached(vault, expires_at)
+        self._cache.move_to_end(vault_id)
+        while len(self._cache) > _MAX_CACHE:
+            # The least recently *used*, which is the point: evicting in
+            # insertion order dropped a vault being read every second to keep
+            # one nobody had touched since it was written.
+            self._cache.popitem(last=False)
 
     def encode_fpe_context(self, vault_id: str) -> str:
         """Encode vault_id as a base64 ``fpe_context`` string."""

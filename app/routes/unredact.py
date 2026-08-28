@@ -65,9 +65,10 @@ async def unredact(body: UnredactRequest, request: Request) -> UnredactResponse:
         # empty result.
         #
         # 500 rather than 404: the vault was found. This is the server failing
-        # to keep what it promised to keep, and it should be loud. Persistence
-        # currently writes the vault before the detector populates it, so on a
-        # cache miss this is the ordinary outcome, not a rare one.
+        # to keep what it promised to keep, and it should be loud. The guard
+        # route no longer issues a token for a mapping it did not store, so
+        # reaching here means a row written by an older build or one emptied
+        # since.
         logger.error(
             "vault %s holds no mapping; refusing to report a reversal that did not happen",
             vault_id,

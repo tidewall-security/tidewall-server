@@ -409,9 +409,17 @@ def _enforcement(response):
     for field in ("blocked", "transformed", "detectors", "guard_output"):
         assert field in result, f"result.{field!r} missing from the guard response"
     # A fresh vault token per request. Excluded deliberately: comparing it
-    # would be comparing nonces. Its presence is asserted instead, so a
-    # capture failure that suppressed redaction entirely would still show up.
-    assert result.pop("fpe_context", None), "no fpe_context, so redaction did not happen"
+    # would be comparing nonces.
+    #
+    # Its presence used to be asserted here, as the proof that a capture
+    # failure had not suppressed redaction entirely. It cannot be any more, and
+    # should never have been: the redactor these tests configure is
+    # custom_entity, which replaces the match without recording the original
+    # anywhere, so the vault is empty and there is nothing to reverse. The
+    # token was issued regardless, and /v1/unredact would have refused it.
+    # `transformed` is the same proof and is the thing actually being claimed.
+    result.pop("fpe_context", None)
+    assert result["transformed"] is True, "nothing was redacted, so this compares two clean scans"
     return {
         "status": body["status"],
         "summary": body["summary"],
