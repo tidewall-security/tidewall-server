@@ -34,6 +34,12 @@ _ROTATION_OVERLAP_SECONDS = 60
 # A key valid for longer than a quarter is one nobody will remember issuing.
 MAX_REGISTRATION_TOKEN_TTL = timedelta(days=90)
 
+#: Pending devices one key may have awaiting approval, and how long an
+#: unapproved device survives. Rate limiting only slows unbounded state; the
+#: quota bounds it and the reaper recovers it.
+MAX_PENDING_PER_TOKEN = 50
+PENDING_DEVICE_TTL = timedelta(hours=72)
+
 # No I, O, 0 or 1. The code is read off one screen and typed into another, and a
 # transcription error is indistinguishable from a failed match.
 _CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -166,6 +172,7 @@ class DeviceService:
         if cascade:
             devices = self._session.query(Device).filter_by(reg_token_id=rt.id).all()
             for device in devices:
+                self._release_pending_slot(device)
                 self._entomb(device, reason="enrolment key revoked")
                 # Pending devices too: a pending device from a leaked key is one
                 # admin mistake from being active, and the approval console
@@ -315,6 +322,25 @@ class DeviceService:
             if claimed == 0:
                 self._session.rollback()
                 return {"status": "RegistrationTokenExhausted", "result": None}
+
+        if not rt.pre_authorized:
+            # Conditional claim, same shape as the use counter: counting pending
+            # rows and then inserting is check-then-act, and SQLite serialises
+            # the writes but not the reads that preceded them.
+            claimed_slot = (
+                self._session.query(RegistrationToken)
+                .filter(
+                    RegistrationToken.id == rt.id,
+                    RegistrationToken.pending_count < MAX_PENDING_PER_TOKEN,
+                )
+                .update(
+                    {"pending_count": RegistrationToken.pending_count + 1},
+                    synchronize_session=False,
+                )
+            )
+            if claimed_slot == 0:
+                self._session.rollback()
+                return {"status": "PendingQuotaExceeded", "result": None}
 
         device = Device(
             installation_id=installation_id,
@@ -491,6 +517,10 @@ class DeviceService:
         if device.confirmation_code is None or not secrets.compare_digest(device.confirmation_code, confirmation_code):
             raise PermissionError("Confirmation code does not match")
 
+        # Release BEFORE the status changes: _release_pending_slot only acts on
+        # a device that is still pending, which is what stops a double release
+        # from a path that runs twice.
+        self._release_pending_slot(device)
         device.status = "active"
         # Single use. Left in place it is a standing credential for reactivating
         # the device after any later revocation.
@@ -544,6 +574,45 @@ class DeviceService:
         logger.info("Authorised recovery for device %s", device_id)
         return raw
 
+    def reap_pending_devices(self, *, now: datetime | None = None) -> int:
+        """Delete unapproved devices past their TTL. Returns how many.
+
+        No tombstone. A reaped device was never approved, so it was never told
+        to stop -- entombing it would make that installation permanently
+        unrecoverable for an enrolment nobody ever acted on.
+        """
+        moment = now or datetime.now(UTC)
+        cutoff = moment - PENDING_DEVICE_TTL
+        stale = [
+            d for d in self._session.query(Device).filter_by(status="pending").all() if as_utc(d.created_at) < cutoff
+        ]
+        for device in stale:
+            self._release_pending_slot(device)
+            self._session.query(AccessToken).filter_by(device_id=device.id).delete()
+            self._session.query(DeviceRefreshToken).filter_by(device_id=device.id).delete()
+            self._session.delete(device)
+        self._session.commit()
+        if stale:
+            logger.info("Reaped %d pending device(s) past their TTL", len(stale))
+        return len(stale)
+
+    def _release_pending_slot(self, device: Device) -> None:
+        """Give a pending device's quota slot back.
+
+        Called on approval, on every terminal transition, and by the reaper. A
+        counter that only ever rises is a quota that eventually refuses every
+        enrolment, so releasing is as load-bearing as claiming.
+
+        Floored at zero by the WHERE clause rather than by reading first: two
+        releases racing must not drive it negative.
+        """
+        if device.status != "pending" or device.reg_token_id is None:
+            return
+        self._session.query(RegistrationToken).filter(
+            RegistrationToken.id == device.reg_token_id,
+            RegistrationToken.pending_count > 0,
+        ).update({"pending_count": RegistrationToken.pending_count - 1}, synchronize_session=False)
+
     def _entomb(self, device: Device, reason: str) -> None:
         """Record that this device is finished, durably.
 
@@ -568,6 +637,9 @@ class DeviceService:
         device = self._session.get(Device, device_id)
         if device is None:
             raise ValueError(f"Device {device_id} not found")
+        if status == "revoked":
+            # Before the status changes, for the same reason as approval.
+            self._release_pending_slot(device)
         device.status = status
         if status == "revoked":
             self._entomb(device, reason="revoked by administrator")
@@ -584,6 +656,7 @@ class DeviceService:
         device = self._session.get(Device, device_id)
         if device is None:
             raise ValueError(f"Device {device_id} not found")
+        self._release_pending_slot(device)
         self._entomb(device, reason="deleted by administrator")
         # Cascade delete credentials first (in case the DB doesn't enforce it)
         self._session.query(AccessToken).filter_by(device_id=device_id).delete()

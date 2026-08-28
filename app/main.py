@@ -353,6 +353,19 @@ def create_app() -> FastAPI:
     from app.security_headers import SecurityHeadersMiddleware
 
     app.add_middleware(AuthMiddleware)
+    # Added AFTER auth, so it runs OUTSIDE it: a flood must be refused before
+    # any credential lookup, not after one. Starlette processes middleware in
+    # reverse add order.
+    from app.enrolment_rate_limit import EnrolmentRateLimitMiddleware
+    from app.services.enrolment_limits import EnrolmentLimits
+
+    # Read here rather than reaching for a module-level `settings`: create_app
+    # has no such binding, and the name resolves to the config MODULE, whose
+    # attributes are the class and not its values.
+    app_settings = Settings.from_env()
+    app.state.enrolment_limits = EnrolmentLimits(app_settings.ENROLMENT_RATE_PER_MINUTE)
+    app.state.trusted_proxy_hops = app_settings.TRUSTED_PROXY_HOPS
+    app.add_middleware(EnrolmentRateLimitMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(
         CORSMiddleware,

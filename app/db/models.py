@@ -545,6 +545,11 @@ class RegistrationToken(Base):
     # to live in the WHERE clause.
     max_uses: Mapped[int | None] = mapped_column(Integer, nullable=True)
     uses: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # Pending devices this key currently has awaiting approval. Maintained by
+    # conditional DML in the same transaction as the insert, like `uses`:
+    # counting rows and then inserting is check-then-act, and SQLite serialises
+    # the writes but not the reads before them.
+    pending_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     # False by default: a key that is sufficient on its own is a key whose leak
     # is immediately a working device. True exists for fleet deployment where
     # the delivery channel is already trusted, which is why it is set per key
