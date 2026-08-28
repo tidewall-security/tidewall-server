@@ -57,8 +57,17 @@ BOOTSTRAP = "test-bootstrap-key-0123456789"
 
 
 @pytest.fixture
-def session_factory():
-    engine = get_engine("sqlite:///:memory:")
+def session_factory(tmp_path):
+    """A file database, not ``:memory:``, and the difference is load bearing.
+
+    An in-memory SQLite engine uses ``StaticPool``, so every session in the
+    process shares one connection -- including the sweep's, which runs in a
+    worker thread. A reader on that same connection sees the sweep's
+    uncommitted DELETE, so a purge that never commits still looks like it
+    worked. Separate connections make the commit real, and production is a file
+    anyway.
+    """
+    engine = get_engine(f"sqlite:///{tmp_path / 'vaults.db'}")
     Base.metadata.create_all(engine)
     return get_session_factory(engine)
 
