@@ -37,9 +37,7 @@ def _ctx(vault_id: str = "vault-1") -> str:
 
 
 def _app(vault: TidewallVault | None):
-    engine = create_engine(
-        "sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool
-    )
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
 
@@ -60,9 +58,7 @@ def _app(vault: TidewallVault | None):
     raw = generate_key(prefix="ak")
     session = Session()
     session.add(Policy(id="policy-a", name="policy-a", type="application"))
-    session.add(
-        APIKey(name="api", key_hash=hash_key(raw), key_prefix=key_prefix(raw), role="api")
-    )
+    session.add(APIKey(name="api", key_hash=hash_key(raw), key_prefix=key_prefix(raw), role="api"))
     session.commit()
     session.close()
     return TestClient(app), raw

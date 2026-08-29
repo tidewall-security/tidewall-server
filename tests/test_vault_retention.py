@@ -267,9 +267,7 @@ def test_a_lifespan_whose_scheduler_fails_to_start_redacts_irreversibly(tmp_path
     # passing one and nothing fails.
     declines = [m for m in errors if "was not stored" in m]
     assert declines, f"the withheld save was silent; errors were {errors}"
-    assert "was withheld" in declines[0], (
-        f"the decline blamed a missing key when one is configured: {declines[0]!r}"
-    )
+    assert "was withheld" in declines[0], f"the decline blamed a missing key when one is configured: {declines[0]!r}"
 
 
 def test_a_started_scheduler_stores_a_row_a_cold_reader_opens(tmp_path):
