@@ -18,6 +18,10 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Interaction
+
+# One vocabulary. Two independent copies of this set existed, so adding an
+# event type meant finding both, and missing one would have been silent.
+from app.models import EVENT_TYPES as _EVENT_TYPES
 from app.services.safe_export_evidence import EVIDENCE_SCHEMA_VERSION, project_detectors
 from app.services.safe_logging import report
 
@@ -53,7 +57,6 @@ from app.services.safe_logging import report
 # keyring was explicitly deferred.
 _MAX_METADATA_BYTES = 64
 _IDENTIFIER_EXTRAS = "_-.@"
-_EVENT_TYPES = frozenset({"input", "output", "tool_input", "tool_output", "tool_listing"})
 
 
 def _looks_like_an_identifier(value: str) -> bool:

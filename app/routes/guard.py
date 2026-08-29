@@ -124,10 +124,15 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
 
     # Flatten all message content into a single string for detectors that
     # operate on the full conversation (e.g. prompt injection, topic).
-    messages = body.guard_input.get("messages", [])
+    # Validated at the boundary, handed on as plain dicts. Everything downstream
+    # -- the collector, the engine, the interaction record -- takes list[dict],
+    # and the model exists to stop malformed shapes reaching them, not to change
+    # what they receive. `extra="allow"` means a real OpenAI message keeps its
+    # `name`, `tool_calls` and the rest through model_dump().
+    messages = [m.model_dump() for m in body.guard_input.messages]
     event_type = body.event_type
     all_text = " ".join(m.get("content", "") for m in messages)
-    tools = body.guard_input.get("tools", [])
+    tools = body.guard_input.tools
 
     device_id = getattr(request.state, "device_id", None)
 

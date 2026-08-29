@@ -404,6 +404,14 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Before any router: a validation error must not quote the request back.
+    # The default handler includes the offending value, which for this product
+    # means a rejected prompt is echoed into a response body that reaches
+    # proxies, APM tools and the caller's own logs.
+    from app.validation_errors import install as install_validation_errors
+
+    install_validation_errors(app)
+
     from starlette.middleware.cors import CORSMiddleware
 
     from app.auth.middleware import AuthMiddleware

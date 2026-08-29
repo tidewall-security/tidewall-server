@@ -17,13 +17,50 @@ Data flow::
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 # ===================================================================
 # Request models
 # ===================================================================
+
+
+#: The event types the product understands, in one place.
+#:
+#: There were two independent copies of this set -- one in the interaction log,
+#: one in the export service -- so adding a sixth type meant finding both, and
+#: missing one would have been silent. Both now import this.
+EVENT_TYPES = frozenset({"input", "output", "tool_input", "tool_output", "tool_listing"})
+
+
+class Message(BaseModel):
+    """One chat message.
+
+    ``role`` is optional because callers omit it today and the route tolerates
+    that. ``content`` must be a string: the route joins message contents, so a
+    number or a list has never worked -- it raised inside the handler and
+    returned 500 rather than telling the caller their request was malformed.
+
+    Extra fields are allowed. Real OpenAI messages carry ``name``,
+    ``tool_calls`` and more, and rejecting them would break callers for no gain:
+    this model exists to stop crashes, not to police a vocabulary the product
+    does not read.
+    """
+
+    model_config = {"extra": "allow"}
+
+    role: str | None = None
+    content: str = ""
+
+
+class GuardInput(BaseModel):
+    """The chat payload. Only ``messages`` and ``tools`` are ever read."""
+
+    model_config = {"extra": "allow"}
+
+    messages: list[Message] = []
+    tools: list[dict] = []
 
 
 class GuardRequest(BaseModel):
@@ -34,8 +71,11 @@ class GuardRequest(BaseModel):
     "output" (post-LLM), or "tool_listing" (MCP tool filtering).
     """
 
-    guard_input: dict
-    event_type: str = "input"
+    guard_input: GuardInput
+    #: Constrained here rather than only at logging time. An unknown value used
+    #: to run the entire guard and then raise inside `interaction_log`, so the
+    #: caller got a 500 after their prompt had already been scanned.
+    event_type: Literal["input", "output", "tool_input", "tool_output", "tool_listing"] = "input"
     app_id: str | None = None
     user_id: str | None = None
     llm_provider: str | None = None
