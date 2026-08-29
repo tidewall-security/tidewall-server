@@ -29,11 +29,14 @@ expiry is therefore deleted by the read that found it, cache hit included -- the
 expired hit falls through to the row rather than short-circuiting, which is the
 only reason that deletion happens at all.
 
-**That is not yet a retention guarantee, and nothing here should be read as
-one.** The ordinary request redacts and never calls ``/v1/unredact``, so its row
-is never read and never reclaimed. Nothing sweeps them: the scheduler's
-retention job purges captured content and does not touch this table. Until a
-sweep exists, a sealed mapping written today is still on disk indefinitely.
+**A read alone was never a retention guarantee, so a sweep does the rest.**
+The ordinary request redacts and never calls ``/v1/unredact``, so its row is
+never read and a read-time deletion never reaches it. :func:`purge_expired_vaults`
+is what reclaims those, on a schedule, and reversible redaction refuses to store
+a mapping at all unless that schedule is running -- see ``app/main.py``. The
+bound it buys is "not readable through the API and not present in the table",
+not "erased from the disk": SQLite keeps deleted rows in the write-ahead log
+and in free pages until the file is vacuumed.
 
 The unknown-key-is-loud rule does **not** depend on that sweep, though an
 earlier draft of this docstring said it did. The expiry gate runs *before* the
@@ -101,16 +104,33 @@ class _Cached(NamedTuple):
 class VaultManager:
     """Creates vaults, writes the populated ones, and reads them back.
 
-    ``keyring`` is what a deployment configured. ``None`` means no key, so
-    there is nowhere safe to put a mapping: redaction still works and is
-    irreversible, no row is written and no row can be opened. Persistence and
-    encryption are one change -- a vault written in the clear would turn a
-    broken feature into a disclosure.
+    ``keyring`` is ``None`` when there is nowhere safe to put a mapping, and
+    that is two conditions rather than one: the deployment configured no key,
+    or it configured one and vault retention could not be scheduled, in which
+    case startup withholds the ring it built. Either way redaction still works
+    and is irreversible, no row is written and no row can be opened.
+
+    Persistence and encryption are one change -- a vault written in the clear
+    would turn a broken feature into a disclosure -- and persistence and
+    deletion are likewise: collecting a plaintext mapping nothing will ever
+    delete is the TTL quietly false.
     """
 
-    def __init__(self, session_factory: sessionmaker[Session], keyring: Keyring | None = None) -> None:
+    #: Said when there is no keyring and nobody told us why. The withheld case
+    #: passes its own reason, because "no key is configured" sends an operator
+    #: to check a configuration that is in fact fine.
+    _DEFAULT_NO_KEYRING_REASON = "no vault encryption key is configured"
+
+    def __init__(
+        self,
+        session_factory: sessionmaker[Session],
+        keyring: Keyring | None = None,
+        *,
+        no_keyring_reason: str | None = None,
+    ) -> None:
         self._session_factory = session_factory
         self._keyring = keyring
+        self._no_keyring_reason = no_keyring_reason or self._DEFAULT_NO_KEYRING_REASON
         # Most recently used last, so the eviction end is the front.
         self._cache: OrderedDict[str, _Cached] = OrderedDict()
 
@@ -140,8 +160,9 @@ class VaultManager:
             return False
         if self._keyring is None:
             logger.error(
-                "vault %s was not stored: no vault encryption key is configured, so redaction is irreversible",
+                "vault %s was not stored: %s, so redaction is irreversible",
                 vault_id,
+                self._no_keyring_reason,
             )
             return False
 
@@ -183,8 +204,9 @@ class VaultManager:
             # an attacker can select: it turns on the deployment's own
             # configuration, not on any field in the row.
             logger.error(
-                "vault %s was requested but no vault encryption key is configured, so no vault can be opened",
+                "vault %s was requested but %s, so no vault can be opened",
                 vault_id,
+                self._no_keyring_reason,
             )
             return None
 
@@ -243,3 +265,29 @@ class VaultManager:
             return result
         except Exception:
             return None
+
+
+def purge_expired_vaults(session: Session, *, now: datetime | None = None) -> int:
+    """Delete every vault past its expiry. Returns how many rows went.
+
+    The counterpart to the read path's delete-what-it-finds, and the reason the
+    TTL means anything on disk: the ordinary request redacts and never calls
+    ``/v1/unredact``, so its row is never read and a read-time deletion never
+    reaches it. Without this, a sealed mapping written today stays there for the
+    life of the database file and a key compromise exposes every row ever
+    written under that key rather than the hour the TTL advertises.
+
+    Deletes by predicate rather than by a list read earlier, so it is idempotent
+    and two callers racing simply both find less to do.
+
+    SQLite caveat, because the guarantee should not be overstated: deleted rows
+    may persist in the write-ahead log and in free pages until the file is
+    vacuumed, and in any backup taken before the deletion. The bound is "not
+    readable through the API and not present in the table", not "erased from
+    the disk".
+    """
+    moment = now or datetime.now(UTC)
+    deleted: int = session.query(VaultModel).filter(VaultModel.expires_at <= moment).delete(synchronize_session=False)
+    if deleted:
+        session.commit()
+    return deleted
