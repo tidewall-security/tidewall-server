@@ -20,12 +20,16 @@ from app.db.models import ExportTarget
 from app.interaction_log import _validated as _safe_meta
 from app.interaction_log import _validated_ip as _safe_ip
 from app.interaction_log import is_generated_request_id
+
+# One vocabulary. Two independent copies of this set existed, so adding an
+# event type meant finding both, and missing one would have been silent.
+from app.models import EVENT_TYPES as _EVENT_TYPES
 from app.services.ocsf_builder import build_aidr_compat_event, build_ocsf_event
 from app.services.safe_export_evidence import project_detectors
 from app.services.safe_logging import describe
 
 _STATUSES = frozenset({"allowed", "blocked", "transformed", "reported", "alerted"})
-_EVENT_TYPES = frozenset({"input", "output", "tool_input", "tool_output", "tool_listing"})
+
 # The complete set an export may carry. Closed, so a new keyword argument is
 # invisible until someone decides it is safe to send.
 _EXPORTABLE_FIELDS = frozenset(
