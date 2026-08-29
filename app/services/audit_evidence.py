@@ -652,7 +652,21 @@ def report_match(
         source, local_start, local_end = resolved
         batch.add(
             ExactMatch(
-                detector=detector,
+                # The batch's name, not the caller's. A detector knows itself by
+                # its class's `name`; the scanner opens its batch under the key
+                # the POLICY registers it by, and for most detectors those two
+                # differ -- `pii` versus `confidential_and_pii_entity`. The
+                # mismatch failed validation, poisoned the batch, and discarded
+                # every match that detector found, at debug level.
+                #
+                # `custom_entity` matched by coincidence, its class name and its
+                # policy key being the same string, which is why capture appeared
+                # to work at all.
+                #
+                # One source of truth: the batch was opened for exactly one
+                # detector and can only be handed to that detector, so the name
+                # it was opened under is the answer.
+                detector=batch.detector,
                 match_type=match_type,
                 source=source,
                 value=value,
