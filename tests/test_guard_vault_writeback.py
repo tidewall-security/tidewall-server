@@ -328,3 +328,50 @@ def test_an_expired_row_is_deleted_by_the_unredact_that_finds_it(guard):
     assert response.status_code == 404
     with guard.session_factory() as session:
         assert session.get(VaultModel, vault_id) is None
+
+
+def test_the_token_the_guard_issues_is_the_token_unredact_accepts(guard):
+    """The whole feature in one request pair, in the shape a real client uses.
+
+    One test above drives the real guard route and opens the vault with a cold
+    MANAGER. Another posts a hand-built token to the real unredact ROUTE. This
+    is the only one that takes the `fpe_context` the guard route ACTUALLY ISSUED
+    and hands it to the route that consumes it.
+
+    Honest about its strength: I could not construct a mutation this kills and
+    the others do not. The encoder, `decode_fpe_context` and the route's own
+    inline decoder all share the literal "vault_id", so breaking any one of them
+    breaks tests that were already there. This is insurance against a change
+    that has not happened yet -- a signature, a version prefix, a second field --
+    where the hand-built tokens in the other tests would silently not follow and
+    every one of them would keep passing.
+
+    Worth keeping at one cheap test. Not worth claiming more for.
+    """
+    _install(guard.client, guard.session_factory, [_detector(_VaultRedactor, "redact")])
+
+    redacted = _post(guard).json()
+    token = redacted["result"]["fpe_context"]
+    assert token, "the guard route returned no token to test the seam with"
+    redacted_text = _redacted_text(redacted)
+    assert SECRET not in redacted_text
+
+    # A cold manager on a second app, as a different worker would be.
+    app = FastAPI()
+    app.add_middleware(AuthMiddleware)
+    app.state.session_factory = guard.session_factory
+    app.state.vault_manager = VaultManager(guard.session_factory, keyring=guard.ring)
+
+    from app.routes import unredact as unredact_route
+
+    app.include_router(unredact_route.router)
+
+    response = TestClient(app, raise_server_exceptions=False).post(
+        "/v1/unredact",
+        headers={"Authorization": f"Bearer {guard.key}"},
+        # The token VERBATIM, not one this test built. That is the point.
+        json={"fpe_context": token, "redacted_data": redacted_text},
+    )
+
+    assert response.status_code == 200, f"the seam is broken: {response.text}"
+    assert response.json()["result"]["data"] == CONTENT
