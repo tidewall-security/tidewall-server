@@ -109,7 +109,7 @@ def test_the_canary_should_reach_matches_json_and_does_not(case, family, tmp_pat
     """
     from app.scanner_engine import ScannerEngine
     from tests.release.execution import decode_at_boundary, encode_for
-    from tests.release.leaves import shape
+    from tests.release.leaves import captured_value, detector_config, shape
     from tests.release.persistence import capture_matches_into
 
     manifest_case = MANIFEST_CASES[case.case_id]
@@ -119,7 +119,12 @@ def test_the_canary_should_reach_matches_json_and_does_not(case, family, tmp_pat
 
     messages = [{"role": "user", "content": text}]
     collector = _build_collector(messages)
-    engine = ScannerEngine.from_detectors({manifest_case.detector: {"enabled": True}})
+    # The config the detector needs to actually fire. `custom_entity` matches
+    # nothing without a pattern, so a bare {"enabled": True} had 98 of these
+    # cases asserting the capture of a value nothing had detected.
+    engine = ScannerEngine.from_detectors(
+        {manifest_case.detector: detector_config(manifest_case.detector, case.canary)}
+    )
     engine.scan(
         text,
         event_type=manifest_case.event,
@@ -137,7 +142,13 @@ def test_the_canary_should_reach_matches_json_and_does_not(case, family, tmp_pat
     # Read back FROM SQLITE, through build_content + capture_content.
     stored = capture_matches_into(tmp_path / "store.db", matches=captured, canary=case.canary)
 
-    if case.canary.lower() not in stored.lower():
+    # What capture SHOULD hold is the value the DETECTOR matched, which is only
+    # the canary when the canary is inside that value. For `card` and `ssn` the
+    # canary is planted alongside on purpose, so asserting on it asked capture
+    # to contain a string the detector never saw -- unsatisfiable however
+    # correct capture is, and what 91 of these cases were failing on.
+    expected = decode_at_boundary(family, encode_for(family, captured_value(manifest_case.leaf, case.canary)))
+    if expected.lower() not in stored.lower():
         RECORDER.record_and_fail(
             Signature(
                 case_id=f"{case.case_id}#matches_json",
@@ -147,14 +158,22 @@ def test_the_canary_should_reach_matches_json_and_does_not(case, family, tmp_pat
                 representation=family,
                 occurrence_rule="REQUIRED",
             ),
-            diagnose(case, f"matches_json holds no occurrence of the canary: {stored[:120]}"),
+            diagnose(case, f"matches_json holds no occurrence of {expected!r}: {stored[:120]}"),
         )
 
 
-def test_the_collector_finalises_empty_for_a_real_detection():
+def test_the_collector_finalises_with_the_match_for_a_real_detection():
     """The measurement behind all 245, stated once and directly.
 
-    A real PII value, a real collector, the real engine: zero groups.
+    It used to assert ZERO groups, and left a tripwire saying that if a detector
+    ever did report through this channel the 245 records should be reconsidered.
+    The tripwire fired: a detector named itself by its class while the scanner
+    opened its capture batch under the policy's key for it, the mismatch failed
+    staging, and every batch was poisoned at debug level. Fixed by taking the
+    name from the batch.
+
+    So this now asserts the opposite, which is the point of having written it
+    as a premise rather than as a constant.
     """
     from app.scanner_engine import ScannerEngine
 
@@ -171,10 +190,12 @@ def test_the_collector_finalises_empty_for_a_real_detection():
         matches=collector,
     )
 
-    assert collector.finalize() == [], (
-        "premise changed: a detector now reports through the exact-match "
-        "channel, so these 245 records should be reconsidered"
-    )
+    groups = collector.finalize()
+    assert groups, "the detector found a value and the collector finalised empty"
+    stored = [g.as_storable() for g in groups]
+    assert any("canary.person@example.com" in str(g.get("value")) for g in stored), stored
+    # The name the POLICY knows it by, which is the half that was wrong.
+    assert all(g["detector"] == "confidential_and_pii_entity" for g in stored), stored
 
 
 def test_the_parametrised_family_genuinely_changes_the_planted_input():
@@ -191,7 +212,7 @@ def test_the_parametrised_family_genuinely_changes_the_planted_input():
     executed its own representation seven times under seven different labels.
     """
     from tests.release.execution import decode_at_boundary, encode_for
-    from tests.release.leaves import shape
+    from tests.release.leaves import captured_value, detector_config, shape
 
     case = CASES[0]
     manifest_case = MANIFEST_CASES[case.case_id]

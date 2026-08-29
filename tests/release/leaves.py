@@ -62,6 +62,45 @@ def shape(leaf: str, canary: str, sub_path: str = "") -> str:
     raise NoShapeForLeaf(f"no shaping rule for leaf {leaf!r}; the case cannot be driven")
 
 
+def captured_value(leaf: str, canary: str) -> str:
+    """What capture SHOULD hold for this leaf: the value the detector matches.
+
+    Not the canary. For `email` and `custom-match` the canary IS inside the
+    matched value, so the two coincide. For `card` and `ssn` it is deliberately
+    alongside -- a canary cannot be Luhn-valid, and deriving SSN digits from it
+    made detection canary-dependent (see `shape`). Capture stores what the
+    detector matched, so asserting the canary reaches it asked capture to hold a
+    string the detector never saw. That is unsatisfiable by construction, and it
+    is what 91 of these cases were failing on.
+
+    Keep this in step with `shape`: the two describe the same fixture from
+    either end, and a leaf added to one belongs in the other.
+    """
+    if leaf == "email":
+        return f"{canary.lower()}@example.com"
+    if leaf == "card":
+        return "4111111111111111"
+    if leaf == "ssn":
+        return "078-05-1120"
+    if leaf == "custom-match":
+        return canary
+    raise NoShapeForLeaf(f"no captured-value rule for leaf {leaf!r}")
+
+
+#: `custom_entity` matches nothing without a pattern, so a bare
+#: `{"enabled": True}` left 98 cases asserting capture of a value no detector
+#: had found. The pattern is the canary itself, which is what an operator
+#: configuring a custom entity is doing.
+def detector_config(detector: str, canary: str) -> dict:
+    """The config a case needs for its detector to actually fire."""
+    if detector == "custom_entity":
+        # A list of PATTERN STRINGS. `compile_pattern` refuses anything else,
+        # and the refusal is swallowed -- a dict here left the detector with no
+        # patterns and no complaint.
+        return {"enabled": True, "patterns": [canary]}
+    return {"enabled": True}
+
+
 def tools_for(leaf: str, canary: str) -> list[dict] | None:
     """MCP cases are driven by TOOLS, not by text.
 
