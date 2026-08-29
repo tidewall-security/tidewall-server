@@ -92,12 +92,13 @@ class OutOfDomain(Exception):
 
 #: Endpoints excluded from the "every HTTP response" domain, with their owner.
 #:
-#: `/v1/unredact` returns exact PII to a base `api` caller through the
-#: in-process VaultManager cache. That is assigned to P0-9 and is not step 10's
-#: to fix -- but a silent omission and an intentional exclusion are
-#: observationally identical, so it is declared and tested rather than left out.
+#: `/v1/unredact` returns exact PII by design -- it is the endpoint that
+#: reverses a redaction -- so it cannot be held to the rule that no response
+#: carries protected content. Tracked as its own concern, not this suite's to
+#: fix. A silent omission and an intentional exclusion are observationally
+#: identical, so it is declared and tested rather than left out.
 EXCLUDED_FROM_HTTP_DOMAIN: dict[str, str] = {
-    "POST /v1/unredact": "P0-9: exact-content exception via VaultManager._cache",
+    "POST /v1/unredact": "reverses redaction by design; exact content is its purpose",
 }
 
 

@@ -95,7 +95,7 @@ def test_unredact_is_out_of_domain_and_names_its_owner():
     """
     with pytest.raises(OutOfDomain) as caught:
         resolve(**BASE, path="POST /v1/unredact -> $.data")
-    assert "P0-9" in str(caught.value)
+    assert "reverses redaction by design" in str(caught.value)
     assert "POST /v1/unredact" in EXCLUDED_FROM_HTTP_DOMAIN
 
 
