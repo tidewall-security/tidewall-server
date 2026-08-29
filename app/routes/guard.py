@@ -464,6 +464,17 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             saved = vault_mgr.save(
                 vault_id,
                 vault,
+                # `bound_policy_id`, not the resolved `policy_id`. Substituting
+                # the resolved one here changes no behaviour and cannot be
+                # killed by a test: a vault is only created when the key IS
+                # bound, and for a bound key the resolver returns that same
+                # binding, so the two are necessarily equal wherever this runs.
+                #
+                # Written this way regardless, because the equality is a
+                # consequence of the guard above rather than a property of the
+                # resolver. If the vault ever gets created unconditionally, the
+                # resolved value would silently become the default policy and
+                # every unbound key's vaults would land in one shared pool.
                 policy_id=bound_policy_id,
                 created_by_key_id=getattr(request.state, "api_key_id", None),
             )

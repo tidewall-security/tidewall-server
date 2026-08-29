@@ -395,13 +395,26 @@ def test_an_unbound_key_is_redacted_but_gets_no_token():
         assert SECRET not in json.dumps(body["result"]["guard_output"])
 
 
-def test_a_bound_key_does_get_a_token():
+def test_a_bound_key_does_get_a_token_and_the_row_records_who_made_it():
     """The other half: without this, "no token" passes against a build that
-    never issues one."""
-    with _routes() as (client, keys, _app):
+    never issues one.
+
+    The attribution is checked HERE rather than only through the manager,
+    because it is guard that has to pass it: a manager test proves the column
+    stores what it is given, not that the route gives it anything.
+    """
+    with _routes() as (client, keys, app):
         r = _guard(client, keys["bound"])
         assert r.status_code == 200
-        assert r.json()["result"]["fpe_context"] is not None
+        token = r.json()["result"]["fpe_context"]
+        assert token is not None
+
+        mgr = app.state.vault_manager
+        vault_id = mgr.decode_fpe_context(token)
+        with app.state.session_factory() as session:
+            row = session.get(VaultModel, vault_id)
+            assert row.policy_id == "pol_main"
+            assert row.created_by_key_id is not None, "the row does not record which key made it"
 
 
 def test_a_foreign_vault_is_indistinguishable_from_an_absent_one():
