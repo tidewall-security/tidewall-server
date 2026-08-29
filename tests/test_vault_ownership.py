@@ -171,12 +171,24 @@ def test_deleting_a_policy_takes_its_vaults(vault_manager, policies, session_fac
 
 
 def _alembic(url: str, target: str) -> None:
+    """Drive a migration against `url`, and mean it.
+
+    `alembic/env.py` prefers the DB_URL environment variable over the config's
+    `sqlalchemy.url`, so `set_main_option` alone is a request rather than an
+    instruction: any test that leaves DB_URL set sends these migrations at a
+    different database, and this one then finds no tables. That passed locally
+    and failed in CI, where the suite runs in random order.
+    """
+    import os
+    from unittest.mock import patch
+
     from alembic import command
     from alembic.config import Config
 
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", url)
-    command.upgrade(cfg, target) if target != "-1" else command.downgrade(cfg, "-1")
+    with patch.dict(os.environ, {"DB_URL": url}):
+        command.upgrade(cfg, target) if target != "-1" else command.downgrade(cfg, "-1")
 
 
 _POLICY_SQL = (
