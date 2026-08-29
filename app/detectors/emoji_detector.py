@@ -46,6 +46,7 @@ class EmojiDetector(BaseDetector):
         return "emoji"
 
     def scan(self, text: str, **kwargs: Any) -> DetectorResult:
+        # release:component emoji/pattern_match -- the pattern ran over the text
         matches = _EMOJI_PATTERN.findall(text)
 
         if not matches:
@@ -70,6 +71,7 @@ class EmojiDetector(BaseDetector):
         if not emojis:
             return DetectorResult(detected=False)
 
+        # release:component emoji/reported -- emoji found and carried into the result
         action = "blocked" if self.can_block else "reported"
 
         return DetectorResult(

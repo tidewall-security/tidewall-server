@@ -56,11 +56,13 @@ class LanguageDetector(BaseDetector):
 
     def scan(self, text: str, **kwargs: Any) -> DetectorResult:
         if self._pipeline is None:
+            # release:component language/pipeline_unavailable -- model never loaded; absence proves nothing
             return self.unavailable_result()
 
         try:
             results = self._pipeline(text)
         except Exception as exc:
+            # release:component language/inference_failure -- classifier raised; no verdict was produced
             logger.warning("Language classifier inference failed: %s", describe(exc))
             return DetectorResult.failed(FailureCode.SCAN_FAILED)
 
@@ -69,6 +71,7 @@ class LanguageDetector(BaseDetector):
         confidence = max(0.0, min(1.0, float(top.get("score", 0.0))))
 
         # Violation if the predicted language is not in the allow-list.
+        # release:component language/classification -- the classifier ran and produced a verdict
         detected = predicted not in self._valid_languages
         if not detected:
             return DetectorResult(detected=False)

@@ -167,6 +167,7 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     access_rules_data: list[dict[str, Any]] = []
     access_rules_result: dict[str, Any] = {"action": "continue", "matched_rules": [], "blocked": False}
 
+    # release:component access_rules/early_block -- blocks before any detector runs
     if rule_set and rule_set.access_rules:
         access_rules_data = [
             {

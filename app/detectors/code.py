@@ -60,11 +60,13 @@ class CodeDetector(BaseDetector):
 
     def scan(self, text: str, **kwargs: Any) -> DetectorResult:
         if self._pipeline is None:
+            # release:component code/pipeline_unavailable -- model never loaded; absence proves nothing
             return self.unavailable_result()
 
         try:
             results = self._pipeline(text)
         except Exception as exc:
+            # release:component code/inference_failure -- classifier raised; no verdict was produced
             logger.warning("Code classifier inference failed: %s", describe(exc))
             return DetectorResult.failed(FailureCode.SCAN_FAILED)
 
@@ -75,6 +77,7 @@ class CodeDetector(BaseDetector):
 
         # Detected if the top language is in the configured allow-list and
         # the model is reasonably confident about it.
+        # release:component code/classification -- the classifier ran and produced a verdict
         detected = label in self._languages and score >= self._threshold
 
         if not detected:

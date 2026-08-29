@@ -133,6 +133,7 @@ class TopicDetector(BaseDetector):
         return "topic"
 
     def scan(self, text: str, **kwargs: Any) -> DetectorResult:
+        # release:component topic/both_pipelines_unavailable -- neither loaded; speaks to neither property
         if self._topics_pipeline is None and self._toxicity_pipeline is None:
             return self.unavailable_result()
 
@@ -144,6 +145,7 @@ class TopicDetector(BaseDetector):
         components: dict[str, ComponentStatus] = {}
 
         # Toxicity: max across the HARM labels only — see _TOXICITY_HARM_LABELS.
+        # release:component topic/toxicity_pipeline -- independent of topics; either can run alone
         if self._toxicity_pipeline is not None:
             try:
                 results = self._toxicity_pipeline(text)
@@ -183,6 +185,7 @@ class TopicDetector(BaseDetector):
             components["toxicity"] = ComponentStatus(status=DetectorStatus.SKIPPED, skip_reason=SkipReason.NOT_ENABLED)
 
         # Banned topics: zero-shot classification against the candidate list.
+        # release:component topic/topics_pipeline -- zero-shot over the configured topic list
         if self._topics_pipeline is not None and self._topics:
             try:
                 zsl = self._topics_pipeline(text, candidate_labels=self._topics, multi_label=True)

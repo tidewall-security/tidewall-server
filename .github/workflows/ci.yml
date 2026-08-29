@@ -101,6 +101,95 @@ jobs:
       - run: uv sync --group dev
       - run: uv run pytest tests/ --cov=app --cov-report=term-missing -q --ignore=tests/e2e
 
+  release-gate:
+    name: Release Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-${{ runner.os }}-
+      - run: uv sync --group dev --group e2e
+      - run: uv run playwright install --with-deps chromium
+      # Both suites ALWAYS run. The first is deliberately red while the
+      # expected-failure manifest is non-empty, and a failing step stops later
+      # steps -- so using it as control flow would remove the browser canary
+      # from the gate for exactly as long as the gate is red.
+      #
+      # --ignore=tests/release/browser is load-bearing: `pytest tests/release`
+      # recursively collects the browser subtree and then deselects it under
+      # the default -m 'not e2e', which would contradict the deselected == 0
+      # rule below and make the gate permanently un-greenable. The two
+      # commands PARTITION their domains.
+      - id: release_suite
+        continue-on-error: true
+        run: >-
+          uv run pytest tests/release --ignore=tests/release/browser
+          -q -p no:randomly --junitxml=release.xml
+          --release-counts=release-counts.json
+          --release-signatures=release-signatures.json
+      - id: browser_canary
+        continue-on-error: true
+        run: >-
+          uv run pytest tests/release/browser -q -m e2e -o addopts=''
+          --junitxml=browser.xml --release-counts=browser-counts.json
+          --release-signatures=browser-signatures.json
+      # The ONLY step that decides the job. JUnit XML cannot carry a
+      # deselection count, so the counts files are passed alongside it.
+      # Declared counts come from the checked-in tests/release/declared_counts.json,
+      # NOT from what this run happened to select -- otherwise the
+      # selected == declared comparison is necessarily true.
+      - run: >-
+          uv run python tests/release/gate_report.py
+          release.xml release-counts.json
+          browser.xml browser-counts.json
+          release-signatures.json browser-signatures.json
+
+  mutation-step:
+    name: Out-Of-Tree Mutation Step
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --group dev
+      # Runs the suite unmutated, checks it reproduces the recorded baseline
+      # EXACTLY, applies the named edit, proves it applied, runs again, and
+      # requires the delta to be exactly the predeclared signature and count.
+      # It never reads an exit code: while the baseline is red every run exits
+      # non-zero, so an exit code carries no information.
+      - run: uv run python tests/release/run_mutation_step.py
+
+  manifest-empty:
+    name: Expected-Failure Manifest Is Empty
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --group dev
+      # A STANDALONE required step, landed independently of the deferred
+      # publish decision. Asserting the manifest is empty is NOT the same as
+      # gating publication on it, and this repository does not claim that
+      # release-gate failures block release until a publish job exists that
+      # `needs: release-gate`.
+      - run: uv run python tests/release/manifest_empty.py
   contract:
     name: Contract (extension against this server)
     runs-on: ubuntu-latest

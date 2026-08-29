@@ -1,0 +1,85 @@
+name: Release
+
+# Publishing is triggered by a tag, never by a branch push: a release is a
+# deliberate act with a name, and a workflow that publishes on every merge to
+# main will eventually publish something nobody decided to release.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  # The gate runs HERE, not merely on CI, so publication cannot proceed on a
+  # commit whose gate was never evaluated. Duplicating the job is deliberate:
+  # `needs:` cannot reach across workflows, and inferring "CI passed on this
+  # SHA" from an API call is a check that can be wrong in a way nobody sees.
+  release-gate:
+    name: Release Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --group dev --group e2e
+      - run: uv run playwright install --with-deps chromium
+      - id: release_suite
+        continue-on-error: true
+        run: >-
+          uv run pytest tests/release --ignore=tests/release/browser
+          -q -p no:randomly --junitxml=release.xml
+          --release-counts=release-counts.json
+          --release-signatures=release-signatures.json
+      - id: browser_canary
+        continue-on-error: true
+        run: >-
+          uv run pytest tests/release/browser -q -m e2e -o addopts=''
+          --junitxml=browser.xml --release-counts=browser-counts.json
+          --release-signatures=browser-signatures.json
+      - run: >-
+          uv run python tests/release/gate_report.py
+          release.xml release-counts.json
+          browser.xml browser-counts.json
+          release-signatures.json browser-signatures.json
+
+  publish:
+    name: Publish to PyPI
+    needs: release-gate
+    runs-on: ubuntu-latest
+    # NO `environment:`. The OIDC claim GitHub mints INCLUDES the environment
+    # name, and PyPI's Trusted Publisher for this project was registered with
+    # the environment field blank. Declaring one here would make the claims
+    # disagree and publication would fail at the last hop -- after the gate has
+    # passed, which is the worst place to find out.
+    #
+    # Adding one later means changing BOTH sides together: the PyPI publisher
+    # entry, this line, and a GitHub environment of that name.
+    permissions:
+      # Overriding `permissions` sets every UNLISTED scope to `none`, so
+      # `contents: read` must be stated explicitly or actions/checkout cannot
+      # read the repository and the job dies at its first step -- after the
+      # gate has passed, which is the worst place to discover it.
+      contents: read
+      # OIDC for Trusted Publishing. No long-lived API token exists to leak, be
+      # committed, or outlive the person who created it.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --group dev
+      # Asserted again in the publishing job itself, not only inferred from
+      # `needs:`. A gate that passed in another job is evidence about that job.
+      - run: uv run python tests/release/manifest_empty.py
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@release/v1
