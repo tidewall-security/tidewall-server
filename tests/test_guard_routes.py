@@ -43,6 +43,9 @@ def _make_app_and_client():
     )
     session.add(policy)
     session.flush()
+    # Captured now: a later commit expires the instance, and reading .id off a
+    # detached one raises.
+    seeded_policy_id = policy.id
 
     for event_type in ("input", "output"):
         rs = RuleSet(
@@ -87,6 +90,10 @@ def _make_app_and_client():
         key_hash=hash_key(raw_api_key),
         key_prefix=key_prefix(raw_api_key),
         role="api",
+        # Bound, as a collector key is in a real deployment. Ownership of a
+        # vault comes from this binding, and an unbound key deliberately gets
+        # no vault and can reverse nothing.
+        policy_id=seeded_policy_id,
     )
     session.add(api_key)
 

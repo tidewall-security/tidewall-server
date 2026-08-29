@@ -221,6 +221,10 @@ API keys are passed as `Authorization: Bearer ak_...` headers. Each key is a col
 | `viewer` | Yes | Yes | Yes | No | No |
 | `admin` | Yes | Yes | Yes | Yes | Yes |
 
+Role is necessary for reversal and not sufficient. A vault can only be reversed
+by the policy that created it, and never by a device credential whatever role it
+holds — see [Who may reverse](#who-may-reverse).
+
 ### First Boot
 
 Authentication is on by default. With no API keys in the database, the server
@@ -358,9 +362,42 @@ If vault retention cannot be scheduled, reversible redaction **disables itself**
 and says so. A deployment that cannot promise to delete the plaintext mapping
 should not be collecting it.
 
-Reversal is an `api`-role operation and is **refused to device credentials**: an
-enrolled browser extension holds the `api` role in order to call the guard, and
-that must not also let it reverse redactions belonging to other devices.
+### Who may reverse
+
+A vault belongs to **the policy of the key that created it**, and only that
+policy's credentials can reverse it. A vault id is not a password: it travels in
+a response body, which reaches proxies, APM tools, browser devtools and the
+caller's own logs. Possession of one is not authority to use it.
+
+An id that belongs to another policy is answered exactly as a missing one is —
+same status, same body. A caller able to tell "not yours" from "no such vault"
+could enumerate other policies' ids.
+
+**An API key must be bound to a policy.** Creating an `api`-role key without one
+is refused, because an unbound collector owns no vault and its redactions could
+never be reversed — it would guard perfectly well and then be refused at
+`/v1/unredact`, which reads as a bug rather than a configuration choice. Two
+paths still reach that state and both are reported rather than silent: the
+bootstrap admin key is installed before any policy exists, and deleting a policy
+sets its keys' binding to null.
+
+**Deleting a policy destroys its vaults.** Retention never becomes a reason a
+policy cannot be deleted, and a vault whose owner is gone must not outlive it.
+
+Reversal is **refused to device credentials outright**, whatever policy they
+carry. An enrolled browser extension holds the `api` role so it can call the
+guard; handing recovered PII back into a page is not something a policy binding
+should be able to authorise.
+
+### Upgrading
+
+The migration that adds ownership **deletes every existing vault**. No owner was
+ever recorded for them and none can be recovered; they are at most an hour old
+and hold the mapping itself.
+
+**Restart every worker as part of that upgrade.** The vault cache is per
+process, and a cache hit answers without consulting the row, so deleting rows
+does not revoke what a running process already holds.
 
 ## Event Export (OCSF)
 

@@ -34,19 +34,28 @@ import pytest
 
 from app.config import Settings
 from app.db.engine import get_engine, get_session_factory
-from app.db.models import Base
+from app.db.models import Base, Policy
 from app.db.models import Vault as VaultModel
 from app.vault_crypto import AuthenticationFailed, Keyring, UnknownKey
 from app.vault_manager import VaultManager
 
 SECRET = "jon@example.com"
 
+#: Vaults are owned by the policy that created them, and the foreign key
+#: rejects a save naming one that does not exist. These tests are about the
+#: manager rather than about ownership, so they all live under one policy.
+POLICY = "pol_test"
+
 
 @pytest.fixture
 def session_factory():
     engine = get_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
-    return get_session_factory(engine)
+    factory = get_session_factory(engine)
+    with factory() as session:
+        session.add(Policy(id=POLICY, name=POLICY, type="application"))
+        session.commit()
+    return factory
 
 
 def _material() -> str:
@@ -67,11 +76,27 @@ def _manager(session_factory, keyring: Keyring | None = None) -> VaultManager:
     return VaultManager(session_factory, keyring=keyring if keyring is not None else _ring())
 
 
+def _ensure_policy(mgr: VaultManager) -> str:
+    """Give the manager's database the policy these helpers save under.
+
+    Shared with the retention tests, which boot a real server and so get a
+    schema this module's fixture never touched. The foreign key means a save
+    naming an absent policy raises, so the owner has to exist wherever the
+    helper is used.
+    """
+    with mgr._session_factory() as session:
+        if session.get(Policy, POLICY) is None:
+            session.add(Policy(id=POLICY, name=POLICY, type="application"))
+            session.commit()
+    return POLICY
+
+
 def _populated(mgr: VaultManager, original: str = SECRET, **save_kwargs) -> tuple[str, str]:
     """Create, populate and save a vault. Returns its id and its placeholder."""
+    _ensure_policy(mgr)
     vault_id, vault = mgr.create_vault()
     placeholder = vault.store("EMAIL", original)
-    assert mgr.save(vault_id, vault, **save_kwargs) is True
+    assert mgr.save(vault_id, vault, POLICY, **save_kwargs) is True
     return vault_id, placeholder
 
 
@@ -118,7 +143,7 @@ def test_a_vault_saved_by_one_manager_is_recoverable_by_another(session_factory)
 
     reader = _manager(session_factory, ring)
 
-    recovered = reader.get_vault(vault_id)
+    recovered = reader.get_vault(vault_id, POLICY)
     assert recovered is not None, "the row was never written, so no other process can reverse the redaction"
     assert recovered.unredact(f"mail {placeholder} now") == f"mail {SECRET} now"
 
@@ -140,7 +165,7 @@ def test_an_empty_vault_is_not_written(session_factory):
     mgr = _manager(session_factory)
     vault_id, vault = mgr.create_vault()
 
-    assert mgr.save(vault_id, vault) is False
+    assert mgr.save(vault_id, vault, POLICY) is False
     assert _rows(session_factory) == []
 
 
@@ -151,7 +176,7 @@ def test_no_key_configured_writes_nothing(session_factory):
     vault_id, vault = mgr.create_vault()
     vault.store("EMAIL", SECRET)
 
-    assert mgr.save(vault_id, vault) is False
+    assert mgr.save(vault_id, vault, POLICY) is False
     assert _rows(session_factory) == []
 
 
@@ -186,7 +211,7 @@ def test_an_expired_row_is_deleted_by_the_read_that_finds_it(session_factory):
 
     reader = _manager(session_factory, ring)
 
-    assert reader.get_vault(vault_id) is None
+    assert reader.get_vault(vault_id, POLICY) is None
     assert _rows(session_factory) == [], "the expired row was refused and left on disk"
 
 
@@ -197,7 +222,7 @@ def test_a_cached_vault_past_its_expiry_is_refused(session_factory):
     assert vault_id in mgr._cache, "the save did not cache, so this says nothing about cache hits"
     assert _rows(session_factory) == [vault_id], "the row must exist, or the deletion below proves nothing"
 
-    assert mgr.get_vault(vault_id) is None
+    assert mgr.get_vault(vault_id, POLICY) is None
 
     # The expired hit must FALL THROUGH to the row rather than returning early,
     # because falling through is how the row gets deleted. Returning None from
@@ -212,14 +237,14 @@ def test_a_live_row_is_still_served(session_factory):
     mgr = _manager(session_factory)
     vault_id, placeholder = _populated(mgr)
 
-    recovered = mgr.get_vault(vault_id)
+    recovered = mgr.get_vault(vault_id, POLICY)
 
     assert recovered is not None
     assert recovered.unredact(placeholder) == SECRET
 
 
 def test_a_missing_vault_is_absent_rather_than_an_error(session_factory):
-    assert _manager(session_factory).get_vault("no-such-vault") is None
+    assert _manager(session_factory).get_vault("no-such-vault", POLICY) is None
 
 
 # ---------------------------------------------------------------------------
@@ -238,16 +263,16 @@ def test_the_cache_evicts_by_use_not_by_insertion(session_factory, monkeypatch):
     second, _ = _populated(mgr, "b@example.com")
     third, _ = _populated(mgr, "c@example.com")
 
-    assert mgr.get_vault(first) is not None  # touched, so no longer the oldest by use
+    assert mgr.get_vault(first, POLICY) is not None  # touched, so no longer the oldest by use
     fourth, _ = _populated(mgr, "d@example.com")
 
     # Only memory can answer now, so what survived eviction is observable.
     _drop_every_row(session_factory)
 
-    assert mgr.get_vault(first) is not None, "the most recently used vault was evicted"
-    assert mgr.get_vault(second) is None, "the least recently used vault was kept"
-    assert mgr.get_vault(third) is not None
-    assert mgr.get_vault(fourth) is not None
+    assert mgr.get_vault(first, POLICY) is not None, "the most recently used vault was evicted"
+    assert mgr.get_vault(second, POLICY) is None, "the least recently used vault was kept"
+    assert mgr.get_vault(third, POLICY) is not None
+    assert mgr.get_vault(fourth, POLICY) is not None
 
 
 def test_the_read_path_is_bounded(session_factory, monkeypatch):
@@ -260,7 +285,7 @@ def test_the_read_path_is_bounded(session_factory, monkeypatch):
 
     mgr._cache.clear()
     for vault_id in ids:
-        assert mgr.get_vault(vault_id) is not None
+        assert mgr.get_vault(vault_id, POLICY) is not None
 
     assert len(mgr._cache) == 3
 
@@ -281,7 +306,7 @@ def test_a_row_whose_key_left_the_ring_is_loud(session_factory):
     withdrawn = _manager(session_factory, _ring({"k2": _material()}, current="k2"))
 
     with pytest.raises(UnknownKey):
-        withdrawn.get_vault(vault_id)
+        withdrawn.get_vault(vault_id, POLICY)
 
 
 def test_a_row_whose_ciphertext_was_altered_is_loud(session_factory):
@@ -293,7 +318,7 @@ def test_a_row_whose_ciphertext_was_altered_is_loud(session_factory):
     reader = _manager(session_factory, ring)
 
     with pytest.raises(AuthenticationFailed):
-        reader.get_vault(vault_id)
+        reader.get_vault(vault_id, POLICY)
 
 
 def test_neither_failure_is_reported_as_an_expired_row(session_factory):
@@ -306,7 +331,7 @@ def test_neither_failure_is_reported_as_an_expired_row(session_factory):
     _alter_the_ciphertext(session_factory, vault_id)
 
     with pytest.raises(AuthenticationFailed):
-        _manager(session_factory, ring).get_vault(vault_id)
+        _manager(session_factory, ring).get_vault(vault_id, POLICY)
 
     assert _rows(session_factory) == [vault_id]
 
@@ -323,11 +348,12 @@ def test_a_legacy_row_is_absent_rather_than_loud(session_factory):
                 data=b'{"placeholders": {}, "counters": {}}',
                 created_at=datetime.now(UTC),
                 expires_at=datetime.now(UTC) + timedelta(hours=1),
+                policy_id=POLICY,
             )
         )
         session.commit()
 
-    assert _manager(session_factory).get_vault("legacy-1") is None
+    assert _manager(session_factory).get_vault("legacy-1", POLICY) is None
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +371,7 @@ def test_a_row_sealed_under_a_retained_key_opens_after_rotation(session_factory)
 
     rotated = _manager(session_factory, _ring({"k1": retained, "k2": incoming}, current="k2"))
 
-    recovered = rotated.get_vault(vault_id)
+    recovered = rotated.get_vault(vault_id, POLICY)
     assert recovered is not None
     assert recovered.unredact(placeholder) == SECRET
 
@@ -359,7 +385,7 @@ def test_a_rotated_deployment_seals_new_rows_under_the_new_key(session_factory):
     # A ring holding only the new key opens it, which the old key alone cannot.
     reader = _manager(session_factory, _ring({"k2": incoming}, current="k2"))
 
-    recovered = reader.get_vault(vault_id)
+    recovered = reader.get_vault(vault_id, POLICY)
     assert recovered is not None
     assert recovered.unredact(placeholder) == SECRET
 

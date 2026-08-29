@@ -39,6 +39,19 @@ from .test_vault_manager import SECRET, _alter_the_ciphertext, _material, _ring,
 CONTENT = f"mail {SECRET} now"
 
 
+def _policy(session_factory) -> str:
+    """The id of the one policy this app seeds.
+
+    Vaults belong to the policy that created them and the foreign key rejects a
+    save naming one that does not exist, so these tests have to name a real one.
+    The seeded policy's id is generated, so it is looked up rather than pinned.
+    """
+    from app.db.models import Policy
+
+    with session_factory() as session:
+        return session.query(Policy).one().id
+
+
 class _VaultRedactor(BaseDetector):
     """A redactor that records what it removed, the way the PII detector does.
 
@@ -141,7 +154,7 @@ def test_a_redaction_the_caller_receives_is_saved_and_opens_cold(guard):
     assert SECRET not in _redacted_text(body)
 
     cold = VaultManager(guard.session_factory, keyring=guard.ring)
-    recovered = cold.get_vault(cold.decode_fpe_context(token))
+    recovered = cold.get_vault(cold.decode_fpe_context(token), _policy(guard.session_factory))
 
     assert recovered is not None, "the token names a vault that was never written"
     assert recovered.unredact(_redacted_text(body)) == CONTENT
@@ -251,7 +264,7 @@ def _seal_a_vault(guard: _Guard) -> str:
     mgr = VaultManager(guard.session_factory, keyring=guard.ring)
     vault_id, vault = mgr.create_vault()
     vault.store("EMAIL", SECRET)
-    assert mgr.save(vault_id, vault) is True
+    assert mgr.save(vault_id, vault, _policy(guard.session_factory)) is True
     return vault_id
 
 
@@ -321,7 +334,15 @@ def test_an_expired_row_is_deleted_by_the_unredact_that_finds_it(guard):
     mgr = VaultManager(guard.session_factory, keyring=guard.ring)
     vault_id, vault = mgr.create_vault()
     vault.store("EMAIL", SECRET)
-    assert mgr.save(vault_id, vault, expires_at=datetime.now(UTC) - timedelta(minutes=1)) is True
+    assert (
+        mgr.save(
+            vault_id,
+            vault,
+            _policy(guard.session_factory),
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        )
+        is True
+    )
 
     response = _unredact(guard, vault_id)
 

@@ -8,6 +8,7 @@ import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, StrictBool, StrictInt
+from sqlalchemy.exc import OperationalError
 
 from app.auth.dependencies import require_role
 from app.config import OnDetectorFailure
@@ -168,6 +169,21 @@ async def delete_policy(policy_id: str, request: Request) -> None:
             # 409: the request is well formed, but deleting would silently
             # rebind the devices scoped to this policy onto the default one.
             raise HTTPException(status_code=409, detail=str(e)) from None
+        except OperationalError:
+            # The cascade and the scheduled vault purge are two bulk writers
+            # against a database that admits one. Losing that race means the
+            # policy is still there, so this must read as a refused
+            # administrative action -- and nothing may be evicted on the
+            # strength of a delete that did not happen.
+            session.rollback()
+            raise HTTPException(status_code=503, detail="the database was busy; the policy was not deleted") from None
+
+        # Only now, and only here: PolicyService is constructed per request and
+        # cannot reach the vault manager. Deleting the rows leaves this
+        # process's cache still answering with decrypted vaults.
+        vault_mgr = getattr(request.app.state, "vault_manager", None)
+        if vault_mgr is not None:
+            vault_mgr.evict_policy(policy_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     finally:

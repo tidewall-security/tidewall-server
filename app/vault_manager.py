@@ -91,14 +91,19 @@ _MAX_CACHE = 500
 
 
 class _Cached(NamedTuple):
-    """A vault held in memory, with the expiry of the row it came from.
+    """A vault held in memory, with the expiry and owner of the row it came from.
 
     The expiry travels with it because a cache hit has to answer the same
     question the row would have: a vault whose row has died must die with it.
+
+    The owner travels with it for the same reason. Without it a hit could not be
+    checked at all, and the check would have to live in the caller -- where the
+    next consumer of ``get_vault`` would simply not perform it.
     """
 
     vault: TidewallVault
     expires_at: datetime
+    policy_id: str
 
 
 class VaultManager:
@@ -142,7 +147,14 @@ class VaultManager:
         """
         return str(uuid.uuid4()), TidewallVault()
 
-    def save(self, vault_id: str, vault: TidewallVault, expires_at: datetime | None = None) -> bool:
+    def save(
+        self,
+        vault_id: str,
+        vault: TidewallVault,
+        policy_id: str,
+        created_by_key_id: str | None = None,
+        expires_at: datetime | None = None,
+    ) -> bool:
         """Seal the mapping and write the row. ``True`` if one was written.
 
         Declines rather than raising when there is nothing worth writing or
@@ -174,30 +186,58 @@ class VaultManager:
         blob = self._keyring.seal(vault_id, when, vault.to_bytes())
 
         with self._session_factory() as session:
-            session.add(VaultModel(id=vault_id, data=blob, created_at=datetime.now(UTC), expires_at=when))
+            session.add(
+                VaultModel(
+                    id=vault_id,
+                    data=blob,
+                    created_at=datetime.now(UTC),
+                    expires_at=when,
+                    policy_id=policy_id,
+                    created_by_key_id=created_by_key_id,
+                )
+            )
+            # Raises if the policy has been deleted since this request captured
+            # it. The caller treats a failed save as a failed reversal promise
+            # and withholds the token, which is the right outcome: the vault
+            # would have had no reachable owner.
             session.commit()
 
-        self._remember(vault_id, vault, when)
+        self._remember(vault_id, vault, when, policy_id)
         return True
 
-    def get_vault(self, vault_id: str) -> TidewallVault | None:
-        """The vault behind ``vault_id``, or ``None`` if there is genuinely none.
+    def get_vault(self, vault_id: str, policy_id: str) -> TidewallVault | None:
+        """The vault behind ``vault_id``, if ``policy_id`` owns it.
 
-        ``None`` means absent, expired, or written before the sealed format.
-        Every other failure raises: see the module docstring for why a wrong
-        key must not read as a missing vault.
+        ``None`` means absent, expired, written before the sealed format, or
+        owned by somebody else -- deliberately the same answer, because a caller
+        able to tell "not yours" from "no such vault" can enumerate other
+        policies' ids. Every other failure raises: see the module docstring for
+        why a wrong key must not read as a missing vault.
+
+        The owner is an argument rather than a check in the route because this
+        cache answers before any session opens. A caller cannot read a vault
+        without stating whose policy it reads for; omitting it is a type error
+        rather than a silent hole.
         """
         now = datetime.now(UTC)
 
         cached = self._cache.get(vault_id)
         if cached is not None:
-            if cached.expires_at > now:
+            if cached.policy_id != policy_id:
+                # Deliberately NOT answered from memory. `save` warms this cache
+                # during the guard call, so every live vault is in it, and a
+                # cached refusal would return in microseconds where an absent id
+                # costs a query. That difference is a usable statement that the
+                # id exists. Fall through and do the work absence does.
+                pass
+            elif cached.expires_at > now:
                 self._cache.move_to_end(vault_id)
                 return cached.vault
-            # Past its expiry, so it is not answered from memory and the read
-            # continues to the row -- which is how the row gets deleted rather
-            # than left behind by a cache hit that short-circuited it.
-            del self._cache[vault_id]
+            else:
+                # Past its expiry, so it is not answered from memory and the read
+                # continues to the row -- which is how the row gets deleted rather
+                # than left behind by a cache hit that short-circuited it.
+                del self._cache[vault_id]
 
         if self._keyring is None:
             # Nothing was sealed and nothing can be opened. Not a quiet branch
@@ -213,6 +253,10 @@ class VaultManager:
         with self._session_factory() as session:
             row = session.get(VaultModel, vault_id)
             if row is None:
+                return None
+            if row.policy_id != policy_id:
+                # Before decrypting. A vault belonging to another policy is
+                # never opened, so a bug further down cannot leak one.
                 return None
             expires_at = as_utc(row.expires_at)
             if expires_at <= now:
@@ -235,10 +279,10 @@ class VaultManager:
         # something this server wrote. Left to raise: it is a defect here, not
         # a missing vault.
         vault = TidewallVault.from_bytes(plaintext)
-        self._remember(vault_id, vault, expires_at)
+        self._remember(vault_id, vault, expires_at, policy_id)
         return vault
 
-    def _remember(self, vault_id: str, vault: TidewallVault, expires_at: datetime) -> None:
+    def _remember(self, vault_id: str, vault: TidewallVault, expires_at: datetime, policy_id: str) -> None:
         """Hold a vault in memory as the most recently used, within the bound.
 
         A vault_id is new every time this is reached -- `save` mints one per
@@ -246,12 +290,30 @@ class VaultManager:
         to the end of an OrderedDict on its own. Reordering is the read's job,
         in `get_vault`, where a hit moves the entry it just used.
         """
-        self._cache[vault_id] = _Cached(vault, expires_at)
+        self._cache[vault_id] = _Cached(vault, expires_at, policy_id)
         while len(self._cache) > _MAX_CACHE:
             # The least recently *used*, which is the point: evicting in
             # insertion order dropped a vault being read every second to keep
             # one nobody had touched since it was written.
             self._cache.popitem(last=False)
+
+    def evict_policy(self, policy_id: str) -> int:
+        """Drop this policy's vaults from memory. Returns how many went.
+
+        The database cascade deletes the rows, but a cache hit answers without
+        consulting the row, so deleting them revokes nothing this process
+        already holds. Called after a policy is deleted.
+
+        Process-local, and there is no cross-process invalidation channel: in a
+        multi-worker deployment another worker can keep serving a deleted
+        policy's vault until the entry expires. That window is bounded by the
+        vault TTL, because `_remember` stores the row's own expiry and reads
+        never extend it.
+        """
+        doomed = [vid for vid, entry in self._cache.items() if entry.policy_id == policy_id]
+        for vault_id in doomed:
+            del self._cache[vault_id]
+        return len(doomed)
 
     def encode_fpe_context(self, vault_id: str) -> str:
         """Encode vault_id as a base64 ``fpe_context`` string."""

@@ -44,7 +44,7 @@ from fastapi.testclient import TestClient
 import app.services.scheduler as scheduler_module
 from app.config import Settings
 from app.db.engine import get_engine, get_session_factory
-from app.db.models import Base, RuleSet
+from app.db.models import Base, Policy, RuleSet
 from app.main import create_app
 from app.services.scheduler import Scheduler, vault_retention_job
 from app.vault_crypto import Keyring
@@ -56,6 +56,9 @@ from .test_vault_manager import SECRET, _ago, _material, _populated, _ring, _row
 
 #: Long enough to be a credential and fixed so the request can present it.
 BOOTSTRAP = "test-bootstrap-key-0123456789"
+
+
+POLICY = "pol_test"
 
 
 @pytest.fixture
@@ -71,7 +74,13 @@ def session_factory(tmp_path):
     """
     engine = get_engine(f"sqlite:///{tmp_path / 'vaults.db'}")
     Base.metadata.create_all(engine)
-    return get_session_factory(engine)
+    factory = get_session_factory(engine)
+    # Vaults are owned, and the foreign key rejects a save naming a policy that
+    # does not exist. These tests are about retention, so one policy will do.
+    with factory() as session:
+        session.add(Policy(id=POLICY, name=POLICY, type="application"))
+        session.commit()
+    return factory
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +232,26 @@ def _running_server(tmp_path, name: str, declaration: str, *, break_the_schedule
         app = create_app()
         client = stack.enter_context(TestClient(app))
         _install_the_redactor(app, client)
+        _bind_the_bootstrap_key(app)
         yield app, client
+
+
+def _bind_the_bootstrap_key(app) -> str:
+    """Give the bootstrap key a policy, and return that policy's id.
+
+    A vault belongs to the policy that created it, so a key with no binding
+    gets no vault and no reversal token. The bootstrap key is issued unbound --
+    it exists before any policy does -- and these tests are about retention, not
+    about that. Binding it here keeps them testing what they name.
+    """
+    from app.db.models import APIKey, Policy
+
+    with app.state.session_factory() as session:
+        policy = session.query(Policy).filter_by(is_default=True).one()
+        for key in session.query(APIKey).all():
+            key.policy_id = policy.id
+        session.commit()
+        return policy.id
 
 
 def _post(client):
@@ -288,7 +316,7 @@ def test_a_started_scheduler_stores_a_row_a_cold_reader_opens(tmp_path):
         assert _rows(app.state.session_factory) != [], "the token names a vault that was never written"
 
         cold = VaultManager(get_session_factory(get_engine(os.environ["DB_URL"])), keyring=_keyring(declaration))
-        recovered = cold.get_vault(cold.decode_fpe_context(token))
+        recovered = cold.get_vault(cold.decode_fpe_context(token), _bind_the_bootstrap_key(app))
 
         assert recovered is not None, "the row is there and a cold reader could not open it"
         assert recovered.unredact(_redacted_text(body)) == CONTENT

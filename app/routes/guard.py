@@ -283,7 +283,30 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     # detectors write original values into this vault keyed by placeholder
     # tokens.  The vault is later persisted so that /v1/unredact can
     # recover the originals using the fpe_context token.
-    vault_id, vault = vault_mgr.create_vault()
+    # Only a key with a policy BINDING owns anything. `bound_policy_id` above,
+    # not `policy_id` below it: the latter falls back to the default policy,
+    # which decides how to SCAN. If it decided ownership, every unbound key's
+    # vaults would land in one shared pool that moves whenever an administrator
+    # changes the default.
+    #
+    # An unbound key still gets redaction -- the detector emits its own
+    # placeholders when handed no vault -- it just gets no way to reverse it.
+    if bound_policy_id:
+        vault_id, vault = vault_mgr.create_vault()
+    else:
+        # Creation now refuses an unbound `api` key, so reaching here means the
+        # bootstrap admin -- installed before any policy exists -- or a key whose
+        # policy was deleted, which sets the binding to NULL. Either way the
+        # caller is about to get a redaction with no token and no explanation,
+        # so name the key and the reason rather than leave a null field to be
+        # puzzled over.
+        report(
+            logger,
+            "warning",
+            f"api key {getattr(request.state, 'api_key_id', None)} has no policy binding, "
+            "so its redactions cannot be reversed; bind it to a policy to enable reversal",
+        )
+        vault_id, vault = None, None
 
     # Detectors use synchronous ML inference (torch, ONNX) so we offload
     # the entire scan to a thread to keep the async event loop responsive.
@@ -361,7 +384,10 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             redaction_failed = True
         else:
             guard_output = {"messages": transformed_msgs}
-            fpe_context = vault_mgr.encode_fpe_context(vault_id)
+            # No vault means an unbound key: redaction happened, using the
+            # detector's own placeholders, and nothing can reverse it. A token
+            # here would promise a reversal with no mapping behind it.
+            fpe_context = vault_mgr.encode_fpe_context(vault_id) if vault_id else None
 
     # Handle MCP tool filtering (tool_listing events). Skipped after a failed
     # redaction: rebuilding a guard_output there would re-populate the field the
@@ -447,7 +473,23 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     # race it.
     if fpe_context is not None:
         try:
-            saved = vault_mgr.save(vault_id, vault)
+            saved = vault_mgr.save(
+                vault_id,
+                vault,
+                # `bound_policy_id`, not the resolved `policy_id`. Substituting
+                # the resolved one here changes no behaviour and cannot be
+                # killed by a test: a vault is only created when the key IS
+                # bound, and for a bound key the resolver returns that same
+                # binding, so the two are necessarily equal wherever this runs.
+                #
+                # Written this way regardless, because the equality is a
+                # consequence of the guard above rather than a property of the
+                # resolver. If the vault ever gets created unconditionally, the
+                # resolved value would silently become the default policy and
+                # every unbound key's vaults would land in one shared pool.
+                policy_id=bound_policy_id,
+                created_by_key_id=getattr(request.state, "api_key_id", None),
+            )
         except Exception as exc:
             # Reported through the wrapper, like every other report in this
             # route that is not itself the security decision: an operator's

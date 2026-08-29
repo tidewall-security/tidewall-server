@@ -27,10 +27,11 @@ router = APIRouter()
     "/v1/unredact",
     response_model=UnredactResponse,
     # `api` alone is not enough here: every enrolled device holds that role,
-    # so this endpoint was reachable by any laptop in the fleet — and it
-    # resolves a caller-supplied vault id with no ownership check, because
-    # `Vault` has no owner column to check against. Reversing a redaction is
-    # denied to device credentials until vaults are owned.
+    # so this endpoint was reachable by any laptop in the fleet. Vaults are now
+    # owned, and this denial stays regardless: no browser client reverses a
+    # redaction. A device token is the most exposed credential in the system,
+    # and handing recovered PII back into a page is not something a policy
+    # binding should be able to authorise.
     dependencies=[Depends(require_role("api")), Depends(deny_device_credentials)],
 )
 async def unredact(body: UnredactRequest, request: Request) -> UnredactResponse:
@@ -53,7 +54,15 @@ async def unredact(body: UnredactRequest, request: Request) -> UnredactResponse:
     if not vault_id:
         raise HTTPException(status_code=400, detail="Invalid fpe_context: no vault_id or algorithm")
 
-    vault = vault_mgr.get_vault(vault_id)
+    # The caller's BOUND policy, never a resolved default. An unbound key owns
+    # nothing, so it can reverse nothing -- and it is refused with the same 404
+    # a missing vault gets, because a caller able to tell "not yours" from "no
+    # such vault" can enumerate other policies' ids.
+    caller_policy = getattr(request.state, "policy_id", None)
+    if not caller_policy:
+        raise HTTPException(status_code=404, detail="Vault expired or not found")
+
+    vault = vault_mgr.get_vault(vault_id, caller_policy)
     if not vault:
         raise HTTPException(status_code=404, detail="Vault expired or not found")
 
