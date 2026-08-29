@@ -18,6 +18,12 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
+          # This workflow manages ~/.cache/uv with actions/cache, so letting
+          # setup-uv prune the same directory at teardown is duplicated work
+          # whose failure fails the job AFTER every real step has passed. The
+          # contract job went red exactly that way, with all thirteen of its
+          # steps green.
+          prune-cache: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -43,6 +49,12 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
+          # This workflow manages ~/.cache/uv with actions/cache, so letting
+          # setup-uv prune the same directory at teardown is duplicated work
+          # whose failure fails the job AFTER every real step has passed. The
+          # contract job went red exactly that way, with all thirteen of its
+          # steps green.
+          prune-cache: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -55,21 +67,37 @@ jobs:
       - run: uv run mypy app/
 
   backend-tests:
-    name: Backend Tests
+    name: Backend Tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      # Both ends of requires-python (>=3.12,<3.14). Testing only the floor let
+      # a test pass for everyone developing on 3.13 while CI stayed red on
+      # 3.12 -- 3.13 dedents docstrings at compile time and 3.12 does not, so a
+      # raw __doc__ comparison disagreed between the two supported versions.
+      # A version the project claims to support and never runs is a version
+      # nobody is checking.
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
+          # This workflow manages ~/.cache/uv with actions/cache, so letting
+          # setup-uv prune the same directory at teardown is duplicated work
+          # whose failure fails the job AFTER every real step has passed. The
+          # contract job went red exactly that way, with all thirteen of its
+          # steps green.
+          prune-cache: false
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - uses: actions/cache@v4
         with:
           path: ~/.cache/uv
-          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
-          restore-keys: uv-${{ runner.os }}-
+          key: uv-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-${{ runner.os }}-py${{ matrix.python-version }}-
       - run: uv sync --group dev
       - run: uv run pytest tests/ --cov=app --cov-report=term-missing -q --ignore=tests/e2e
 
@@ -162,6 +190,106 @@ jobs:
       # release-gate failures block release until a publish job exists that
       # `needs: release-gate`.
       - run: uv run python tests/release/manifest_empty.py
+  contract:
+    name: Contract (extension against this server)
+    runs-on: ubuntu-latest
+    # Here rather than in the extension's CI, for two reasons.
+    #
+    # Cost: this job already installs the server's Python dependencies, seven of
+    # which are heavy ML packages. The extension side is a 1s build. Running it
+    # the other way round pays that install on a job that otherwise takes
+    # seconds.
+    #
+    # Attribution: the break this exists to catch happens when the SERVER
+    # changes. The extension called an endpoint deleted here and was
+    # non-functional for eleven days while its own 288 tests passed -- no
+    # extension PR was at fault, so nothing in that repo would have been on the
+    # hook. A server PR that removes a route should fail on that PR.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: server
+      - uses: actions/checkout@v4
+        with:
+          repository: tidewall-security/tidewall-browser-extension
+          path: extension
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          # This workflow manages ~/.cache/uv with actions/cache, so letting
+          # setup-uv prune the same directory at teardown is duplicated work
+          # whose failure fails the job AFTER every real step has passed. The
+          # contract job went red exactly that way, with all thirteen of its
+          # steps green.
+          prune-cache: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-py3.12-${{ hashFiles('server/uv.lock') }}
+          restore-keys: uv-${{ runner.os }}-py3.12-
+
+      - name: Install server
+        working-directory: server
+        run: uv sync --group dev
+
+      - name: Install and build extension
+        working-directory: extension
+        run: |
+          npm ci
+          npm run build
+
+      - name: Start the server
+        working-directory: server
+        env:
+          # PREWARM=false because the contract tests never invoke a detector --
+          # loading the models would add minutes to prove nothing.
+          DB_URL: sqlite:////tmp/contract.db
+          BOOTSTRAP_KEY: ak_ci_contract_bootstrap_key_00000001
+          PREWARM: "false"
+        run: |
+          uv run uvicorn app.main:app --port 8099 > /tmp/server.log 2>&1 &
+          for i in $(seq 1 90); do
+            curl -sf http://localhost:8099/health > /dev/null && break
+            if [ "$i" = "90" ]; then echo "server did not start"; cat /tmp/server.log; exit 1; fi
+            sleep 1
+          done
+
+      - name: Seed a policy and a registration token
+        working-directory: server
+        env:
+          # The seed step needs the SAME key the server was bootstrapped with.
+          # Omitted here on the first attempt, so it used the default and got a
+          # 401 -- which surfaced as a KeyError two lines into the script.
+          TIDEWALL_ADMIN_KEY: ak_ci_contract_bootstrap_key_00000001
+        run: uv run python ../extension/tests/integration/seed.py
+
+      - name: Client HTTP layer against the running server
+        working-directory: extension
+        env:
+          TIDEWALL_INTEGRATION: "1"
+          TIDEWALL_ADMIN_KEY: ak_ci_contract_bootstrap_key_00000001
+        run: npx vitest run tests/integration/live-server.test.ts
+
+      - name: The extension itself, in a real browser
+        working-directory: extension
+        env:
+          TIDEWALL_INTEGRATION: "1"
+          TIDEWALL_ADMIN_KEY: ak_ci_contract_bootstrap_key_00000001
+        run: |
+          npx playwright install chromium --with-deps
+          xvfb-run --auto-servernum npx playwright test tests/e2e/live-enrolment.spec.ts
+
+      - name: Server log on failure
+        if: failure()
+        run: cat /tmp/server.log
 
   frontend-tests:
     name: Frontend Tests

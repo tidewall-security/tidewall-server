@@ -60,6 +60,19 @@ class KeyService:
         # successfully and shows an empty dashboard, which reads as a bug.
         if role == "viewer" and not policy_id:
             raise ValueError("a viewer key must be bound to a policy: an unbound viewer can see nothing")
+        # The same argument one endpoint over. A vault belongs to the policy
+        # that created it, so a collector with no binding owns nothing and its
+        # redactions can never be reversed -- it guards fine and /v1/unredact
+        # refuses it, which reads as a bug rather than as a configuration
+        # choice. Refusing the key is the honest failure.
+        #
+        # Not enforced for admin: the bootstrap admin key is installed before
+        # any policy necessarily exists and cannot be bound. An admin used as a
+        # collector still gets no reversibility, and guard says so.
+        if role == "api" and not policy_id:
+            raise ValueError(
+                "an api key must be bound to a policy: an unbound collector's " "redactions cannot be reversed"
+            )
         if policy_id is not None:
             # Validate here rather than relying on the database: an in-memory
             # session without FK enforcement would otherwise create a viewer

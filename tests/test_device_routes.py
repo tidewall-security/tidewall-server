@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import FastAPI
@@ -13,7 +15,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.auth.key_utils import generate_key, hash_key, key_prefix
 from app.auth.middleware import AuthMiddleware
-from app.db.models import APIKey, Base, Policy
+from app.db.models import AccessToken, APIKey, Base, Device, DeviceRefreshToken, Policy, RegistrationToken
 
 
 def _iid(label: str) -> str:
@@ -88,7 +90,11 @@ def test_create_registration_token_admin(setup):
     client, admin_key, _ = setup
     resp = client.post(
         "/v1/registration-tokens",
-        json={"name": "test-rt", "policy_id": TEST_POLICY_ID},
+        json={
+            "name": "test-rt",
+            "policy_id": TEST_POLICY_ID,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     assert resp.status_code == 201
@@ -116,7 +122,11 @@ def test_create_registration_token_viewer_forbidden(setup):
 
     resp = client.post(
         "/v1/registration-tokens",
-        json={"name": "nope", "policy_id": TEST_POLICY_ID},
+        json={
+            "name": "nope",
+            "policy_id": TEST_POLICY_ID,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
         headers={"Authorization": f"Bearer {raw_viewer}"},
     )
     assert resp.status_code == 403
@@ -127,12 +137,20 @@ def test_list_registration_tokens(setup):
     # Create two tokens
     client.post(
         "/v1/registration-tokens",
-        json={"name": "rt-1", "policy_id": TEST_POLICY_ID},
+        json={
+            "name": "rt-1",
+            "policy_id": TEST_POLICY_ID,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     client.post(
         "/v1/registration-tokens",
-        json={"name": "rt-2", "policy_id": TEST_POLICY_ID},
+        json={
+            "name": "rt-2",
+            "policy_id": TEST_POLICY_ID,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     resp = client.get(
@@ -147,7 +165,11 @@ def test_delete_registration_token(setup):
     client, admin_key, _ = setup
     create_resp = client.post(
         "/v1/registration-tokens",
-        json={"name": "to-delete", "policy_id": TEST_POLICY_ID},
+        json={
+            "name": "to-delete",
+            "policy_id": TEST_POLICY_ID,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     token_id = create_resp.json()["id"]
@@ -167,7 +189,16 @@ def _create_rt_token(client, admin_key):
     """Helper: create an rt_ token and return the raw token string."""
     resp = client.post(
         "/v1/registration-tokens",
-        json={"name": "device-rt", "policy_id": TEST_POLICY_ID},
+        json={
+            "name": "device-rt",
+            "policy_id": TEST_POLICY_ID,
+            # Required since keys became bounded.
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+            # Pre-authorized: these tests are about refresh, revocation and
+            # listing, not about approval. The pending default is pinned by the
+            # approval tests, which omit this field.
+            "pre_authorized": True,
+        },
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     return resp.json()["token"]
@@ -207,16 +238,19 @@ def test_refresh_with_the_devices_own_token_returns_a_new_one(setup):
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
     enrolled = _enrol_device(client, rt_token, installation_id=_iid("inst-refresh-1")).json()["result"]
+    dr1 = enrolled["refresh_token"]["token"]
     at1 = enrolled["access_token"]["token"]
 
     resp = client.post(
         f"/v1/devices/{enrolled['device_id']}/refresh",
         json={"device_name": "Renamed"},
-        headers={"Authorization": f"Bearer {at1}"},
+        headers={"Authorization": f"Bearer {dr1}"},
     )
 
     assert resp.status_code == 200
+    # A NEW access token, and the SAME refresh token: nothing rotates.
     assert resp.json()["result"]["access_token"]["token"] != at1
+    assert "refresh_token" not in resp.json()["result"]
 
 
 def test_a_registration_token_cannot_refresh(setup):
@@ -243,10 +277,13 @@ def test_another_devices_token_cannot_refresh(setup):
     resp = client.post(
         f"/v1/devices/{victim['device_id']}/refresh",
         json={},
-        headers={"Authorization": f"Bearer {attacker['access_token']['token']}"},
+        headers={"Authorization": f"Bearer {attacker['refresh_token']['token']}"},
     )
 
-    assert resp.status_code == 403
+    # The takeover is still refused; the answer is now credential_unknown so it
+    # is indistinguishable from presenting a credential that does not exist.
+    assert resp.status_code == 401
+    assert resp.json()["reason"] == "credential_unknown"
 
 
 def test_at_token_works_for_guard_like_call(setup):
@@ -356,7 +393,11 @@ def test_at_token_rejected_for_admin_only_paths(setup):
     # Try to create a registration token (admin only)
     resp2 = client.post(
         "/v1/registration-tokens",
-        json={"name": "nope", "policy_id": TEST_POLICY_ID},
+        json={
+            "name": "nope",
+            "policy_id": TEST_POLICY_ID,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
         headers={"Authorization": f"Bearer {at_token}"},
     )
     assert resp2.status_code == 403
@@ -430,7 +471,11 @@ def test_a_registration_token_policy_must_exist(setup):
     client, admin_key, _ = setup
     resp = client.post(
         "/v1/registration-tokens",
-        json={"name": "bad-policy", "policy_id": "no-such-policy"},
+        json={
+            "name": "bad-policy",
+            "policy_id": "no-such-policy",
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     assert resp.status_code == 400
@@ -440,7 +485,11 @@ def test_the_created_token_reports_its_policy(setup):
     client, admin_key, _ = setup
     resp = client.post(
         "/v1/registration-tokens",
-        json={"name": "scoped", "policy_id": TEST_POLICY_ID},
+        json={
+            "name": "scoped",
+            "policy_id": TEST_POLICY_ID,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     assert resp.json()["policy_id"] == TEST_POLICY_ID
@@ -500,21 +549,6 @@ def test_a_non_uuid_installation_id_is_rejected(setup, bad):
     assert resp.status_code == 422
 
 
-def test_a_rotated_token_cannot_refresh_again_over_http(setup):
-    """The replay defect, at the route."""
-    client, admin_key, _ = setup
-    rt_token = _create_rt_token(client, admin_key)
-    enrolled = _enrol_device(client, rt_token, installation_id=_iid("inst-replay")).json()["result"]
-    first = enrolled["access_token"]["token"]
-    device_id = enrolled["device_id"]
-
-    ok = client.post(f"/v1/devices/{device_id}/refresh", json={}, headers={"Authorization": f"Bearer {first}"})
-    assert ok.status_code == 200
-
-    replay = client.post(f"/v1/devices/{device_id}/refresh", json={}, headers={"Authorization": f"Bearer {first}"})
-    assert replay.status_code == 403
-
-
 def test_refreshing_a_revoked_device_is_forbidden(setup):
     client, admin_key, _ = setup
     rt_token = _create_rt_token(client, admin_key)
@@ -533,3 +567,413 @@ def test_refreshing_a_revoked_device_is_forbidden(setup):
         headers={"Authorization": f"Bearer {at_token}"},
     )
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Registration token expiry
+#
+# The rt_ branch of the middleware read expires_at straight off the row and
+# compared it to an aware now(). SQLite has no timezone type, so the column
+# comes back naive and the comparison raises instead of returning a verdict.
+#
+# No existing test set an expiry -- test_device_service asserts it is None --
+# so the whole path was unexercised while the suite stayed green.
+# ---------------------------------------------------------------------------
+
+
+def _enrol(client, raw_token: str, label: str):
+    return client.post(
+        "/v1/devices/enrol",
+        headers={"Authorization": f"Bearer {raw_token}"},
+        json={
+            "installation_id": _iid(label),
+            "device_name": "d",
+            "user_name": "u",
+            "user_email": "u@example.com",
+            "browser": "b",
+            "os": "o",
+            "extension_version": "1",
+        },
+    )
+
+
+def _seed_token(session_factory, *, expires_at) -> str:
+    raw = generate_key(prefix="rt")
+    session = session_factory()
+    session.add(
+        RegistrationToken(
+            name="expiry-fixture",
+            token_hash=hash_key(raw),
+            token_prefix=key_prefix(raw),
+            policy_id=TEST_POLICY_ID,
+            expires_at=expires_at,
+        )
+    )
+    session.commit()
+    session.close()
+    return raw
+
+
+def test_registration_token_with_an_expiry_can_enrol(setup):
+    """A token with a future expiry must work.
+
+    A time-limited onboarding key is the security-conscious choice, and it was
+    the one that did not function.
+    """
+    client, _admin_key, session_factory = setup
+    raw = _seed_token(session_factory, expires_at=datetime.now(UTC) + timedelta(days=1))
+
+    response = _enrol(client, raw, "expiring-token")
+
+    assert response.status_code == 201
+
+
+def test_expired_registration_token_is_refused_not_crashed(setup):
+    """An expired token is a 401. A 500 is not a verdict."""
+    client, _admin_key, session_factory = setup
+    raw = _seed_token(session_factory, expires_at=datetime.now(UTC) - timedelta(seconds=1))
+
+    response = _enrol(client, raw, "expired-token")
+
+    assert response.status_code == 401
+    assert "expired" in response.json()["detail"].lower()
+
+
+def test_an_expired_access_token_is_rejected_by_the_middleware(setup):
+    """The middleware must refuse an expired at_ token, not merely the service.
+
+    Found by mutation: deleting the expiry check in _handle_at_token entirely
+    left all 1496 tests passing. The check was correct and nothing proved it,
+    which is exactly how the sibling rt_ comparison six lines above came to be
+    broken without the suite noticing.
+
+    Asserting 401 rather than "some rejection" is the point. refresh_device
+    checks expiry again for itself and answers 403, so a test that accepted any
+    4xx would pass with the middleware guard removed -- and every OTHER route a
+    device token reaches has no second check at all.
+    """
+    client, admin_key, session_factory = setup
+    rt_token = _create_rt_token(client, admin_key)
+    enrolled = _enrol_device(client, rt_token, installation_id=_iid("inst-expired-at")).json()["result"]
+    at_token = enrolled["access_token"]["token"]
+    device_id = enrolled["device_id"]
+
+    session = session_factory()
+    session.query(AccessToken).filter_by(token_hash=hash_key(at_token)).update(
+        {"expires_at": datetime.now(UTC) - timedelta(seconds=1)}
+    )
+    session.commit()
+    session.close()
+
+    response = client.post(
+        f"/v1/devices/{device_id}/refresh",
+        json={},
+        headers={"Authorization": f"Bearer {at_token}"},
+    )
+
+    assert response.status_code == 401, "the middleware let an expired credential through"
+    assert "expired" in response.json()["detail"].lower()
+
+
+def test_the_device_listing_never_publishes_the_confirmation_code(setup):
+    """The code is the one field an approver holds that a claimant cannot supply.
+
+    The listing is readable by `viewer`. Publishing the code there would collapse
+    approval back to "device id alone", which is the thing the code exists to
+    prevent -- and it would do so without changing a single line of the approval
+    check, so nothing else in this suite would notice.
+    """
+    client, admin_key, session_factory = setup
+    # Its own token, NOT the shared pre-authorized helper: a pre-authorized
+    # device has no code, so this test would assert nothing.
+    rt = client.post(
+        "/v1/registration-tokens",
+        json={
+            "name": "needs-approval",
+            "policy_id": TEST_POLICY_ID,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
+        headers={"Authorization": f"Bearer {admin_key}"},
+    )
+    enrolled = _enrol_device(client, rt.json()["token"], installation_id=_iid("inst-no-leak")).json()["result"]
+    code = enrolled["confirmation_code"]
+    assert code, "fixture produced no code; the test would pass vacuously"
+
+    listing = client.get("/v1/devices", headers={"Authorization": f"Bearer {admin_key}"})
+
+    assert listing.status_code == 200
+    body = listing.text
+    assert code not in body, "the confirmation code was published in the device listing"
+    for device in listing.json():
+        assert "confirmation_code" not in device
+
+
+def test_an_access_token_is_refused_at_refresh(setup):
+    """The clean cut. at_ was the credential here and must now fail.
+
+    Not a deprecation. Accepting both would leave the one-hour lockout in place
+    for any client that kept using the old credential, which is the entire
+    problem the refresh token exists to solve.
+    """
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+    enrolled = _enrol_device(client, rt_token, installation_id=_iid("inst-cleancut")).json()["result"]
+
+    resp = client.post(
+        f"/v1/devices/{enrolled['device_id']}/refresh",
+        json={},
+        headers={"Authorization": f"Bearer {enrolled['access_token']['token']}"},
+    )
+
+    assert resp.status_code == 401
+
+
+def test_a_refresh_token_reaches_nothing_but_its_own_refresh_route(setup):
+    """It grants no role at all.
+
+    If it did, it would be a thirty-day api credential -- far longer-lived than
+    the one-hour token it exists to renew, and reaching everything that one
+    reaches.
+    """
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+    enrolled = _enrol_device(client, rt_token, installation_id=_iid("inst-reach")).json()["result"]
+    dr = enrolled["refresh_token"]["token"]
+    auth = {"Authorization": f"Bearer {dr}"}
+
+    assert client.get("/v1/devices", headers=auth).status_code == 403
+    assert client.get("/v1/registration-tokens", headers=auth).status_code == 403
+    assert client.post("/v1/devices/enrol", json={}, headers=auth).status_code == 403
+    assert (
+        client.post(
+            f"/v1/devices/{enrolled['device_id']}/approve", json={"confirmation_code": "X"}, headers=auth
+        ).status_code
+        == 403
+    )
+    # Its own route is the one thing it reaches.
+    assert client.post(f"/v1/devices/{enrolled['device_id']}/refresh", json={}, headers=auth).status_code == 200
+
+
+def test_a_refresh_token_cannot_refresh_a_different_device_over_http(setup):
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+    mine = _enrol_device(client, rt_token, installation_id=_iid("inst-mine-http")).json()["result"]
+    theirs = _enrol_device(client, rt_token, installation_id=_iid("inst-theirs-http")).json()["result"]
+
+    resp = client.post(
+        f"/v1/devices/{theirs['device_id']}/refresh",
+        json={},
+        headers={"Authorization": f"Bearer {mine['refresh_token']['token']}"},
+    )
+
+    # credential_unknown, NOT a distinct "wrong device" answer. Distinguishing
+    # the two would tell a caller whether the target device exists.
+    assert resp.status_code == 401
+    assert resp.json()["reason"] == "credential_unknown"
+
+
+# ---------------------------------------------------------------------------
+# The same precedence, over HTTP
+#
+# The service-level table is not enough. Until the dr_ middleware was corrected
+# it answered three of these five outcomes itself, before the route ran -- and
+# every service test still passed while the HTTP path, the only one a client
+# takes, returned the wrong answer. A service-only suite cannot detect an
+# authority that short-circuits it.
+# ---------------------------------------------------------------------------
+
+
+def _http_revoked_with_expired_credential(client, admin_key, session_factory, label):
+    rt = _create_rt_token(client, admin_key)
+    d = _enrol_device(client, rt, installation_id=_iid(label)).json()["result"]
+    session = session_factory()
+    session.query(DeviceRefreshToken).filter_by(device_id=d["device_id"]).update(
+        {"expires_at": datetime.now(UTC) - timedelta(days=1)}, synchronize_session=False
+    )
+    session.get(Device, d["device_id"]).status = "revoked"
+    session.commit()
+    session.close()
+    return d["device_id"], d["refresh_token"]["token"]
+
+
+def _http_pending_with_expired_credential(client, admin_key, session_factory, label):
+    rt = _create_rt_token(client, admin_key)
+    d = _enrol_device(client, rt, installation_id=_iid(label)).json()["result"]
+    session = session_factory()
+    session.query(DeviceRefreshToken).filter_by(device_id=d["device_id"]).update(
+        {"expires_at": datetime.now(UTC) - timedelta(days=1)}, synchronize_session=False
+    )
+    session.get(Device, d["device_id"]).status = "pending"
+    session.commit()
+    session.close()
+    return d["device_id"], d["refresh_token"]["token"]
+
+
+def _http_pending_with_valid_credential(client, admin_key, session_factory, label):
+    rt = _create_rt_token(client, admin_key)
+    d = _enrol_device(client, rt, installation_id=_iid(label)).json()["result"]
+    session = session_factory()
+    session.get(Device, d["device_id"]).status = "pending"
+    session.commit()
+    session.close()
+    return d["device_id"], d["refresh_token"]["token"]
+
+
+def _http_unknown_credential(client, admin_key, session_factory, label):
+    rt = _create_rt_token(client, admin_key)
+    d = _enrol_device(client, rt, installation_id=_iid(label)).json()["result"]
+    return d["device_id"], "dr_not_a_real_token_at_all"
+
+
+@pytest.mark.parametrize(
+    "make_state, expected_status, expected_reason",
+    [
+        # Both conditions dead; the DEVICE must decide the answer.
+        (_http_revoked_with_expired_credential, 403, "device_revoked"),
+        (_http_unknown_credential, 401, "credential_unknown"),
+        (_http_pending_with_expired_credential, 401, "credential_expired"),
+        (_http_pending_with_valid_credential, 202, "device_pending"),
+    ],
+)
+def test_refresh_precedence_over_http(setup, make_state, expected_status, expected_reason):
+    client, admin_key, session_factory = setup
+    device_id, raw_dr = make_state(client, admin_key, session_factory, f"inst-http-{expected_reason}")
+
+    resp = client.post(
+        f"/v1/devices/{device_id}/refresh",
+        json={},
+        headers={"Authorization": f"Bearer {raw_dr}"},
+    )
+
+    assert resp.status_code == expected_status
+    assert resp.json()["reason"] == expected_reason
+
+
+def test_the_recovery_secret_is_returned_once_and_only_to_an_admin(setup):
+    """It is a credential: minted once, never listed, admin only."""
+    client, admin_key, session_factory = setup
+    rt_token = _create_rt_token(client, admin_key)
+    device_id = _enrol_device(client, rt_token, installation_id=_iid("inst-recov-http")).json()["result"]["device_id"]
+    client.patch(
+        f"/v1/devices/{device_id}",
+        json={"status": "revoked"},
+        headers={"Authorization": f"Bearer {admin_key}"},
+    )
+
+    granted = client.post(
+        f"/v1/devices/{device_id}/authorise-recovery",
+        headers={"Authorization": f"Bearer {admin_key}"},
+    )
+
+    assert granted.status_code == 200
+    secret = granted.json()["recovery_secret"]
+    assert secret.startswith("rec_")
+
+    # Not in the listing, which a viewer can read.
+    listing = client.get("/v1/devices", headers={"Authorization": f"Bearer {admin_key}"})
+    assert secret not in listing.text
+    assert "recovery_secret" not in listing.text
+
+    # And not grantable twice.
+    again = client.post(
+        f"/v1/devices/{device_id}/authorise-recovery",
+        headers={"Authorization": f"Bearer {admin_key}"},
+    )
+    assert again.status_code == 200, "re-issuing before use is fine; using it twice is not"
+
+
+# ---------------------------------------------------------------------------
+# Enrolment failures must not answer 201
+# ---------------------------------------------------------------------------
+
+
+def test_a_tombstoned_installation_is_refused_not_created(setup):
+    """201 for an enrolment that created nothing wedges the client.
+
+    A client keying on the status code stores an empty credential tuple and has
+    no credentials and no error. Both of these statuses were added after the
+    route's mapping was written and simply never got an entry.
+    """
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+    first = _enrol_device(client, rt_token, installation_id=_iid("inst-tomb-http")).json()["result"]
+    client.patch(
+        f"/v1/devices/{first['device_id']}",
+        json={"status": "revoked"},
+        headers={"Authorization": f"Bearer {admin_key}"},
+    )
+
+    again = _enrol_device(client, rt_token, installation_id=_iid("inst-tomb-http"))
+
+    assert again.status_code == 403
+    assert again.json()["reason"] == "InstallationTombstoned"
+    assert again.json()["result"] is None
+
+
+def test_an_exhausted_pending_quota_is_refused_not_created(setup):
+    """Capacity, not misbehaviour: 429 tells the client to come back."""
+    from app.services.device_service import MAX_PENDING_PER_TOKEN
+
+    client, admin_key, session_factory = setup
+    rt = client.post(
+        "/v1/registration-tokens",
+        json={
+            "name": "quota",
+            "policy_id": TEST_POLICY_ID,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
+        headers={"Authorization": f"Bearer {admin_key}"},
+    ).json()["token"]
+
+    for n in range(MAX_PENDING_PER_TOKEN):
+        assert _enrol_device(client, rt, installation_id=_iid(f"q{n}")).status_code == 201
+
+    over = _enrol_device(client, rt, installation_id=_iid("q-over"))
+
+    assert over.status_code == 429
+    assert over.json()["reason"] == "PendingQuotaExceeded"
+
+
+def test_every_enrolment_outcome_the_service_can_return_is_mapped(setup):
+    """A new status with no entry must fail loudly, not answer 201.
+
+    The two statuses above reached production answering "Created" precisely
+    because the route grew a chain of ifs and nobody extended it. This pins the
+    table against the service instead.
+    """
+    import inspect
+
+    from app.routes.devices import _ENROL_FAILURE_STATUS
+    from app.services import device_service
+
+    source = inspect.getsource(device_service.DeviceService.enrol_device)
+    returned = set(re.findall(r'"status": "(\w+)"', source))
+    unmapped = returned - set(_ENROL_FAILURE_STATUS) - {"Success"}
+
+    assert not unmapped, f"enrolment can return {unmapped}, which the route does not map"
+
+
+def test_an_unmapped_enrolment_outcome_answers_500_not_201(setup, monkeypatch):
+    """The guard for the NEXT status someone adds without a table entry.
+
+    Unreachable while the table is complete, so it needs a status the table has
+    never heard of. Without this the branch is only exercised by deleting an
+    entry, which proves the entry exists and not that the fallback is safe --
+    and the fallback is the whole point: 201 for an unrecognised outcome is how
+    the two real statuses came to be silently successful.
+    """
+    from app.services.device_service import DeviceService
+
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+
+    monkeypatch.setattr(
+        DeviceService,
+        "enrol_device",
+        lambda self, **kwargs: {"status": "SomethingNobodyMapped", "result": None},
+    )
+
+    resp = _enrol_device(client, rt_token, installation_id=_iid("inst-unmapped"))
+
+    assert resp.status_code == 500, "an unrecognised outcome answered as if it had created a device"
+    assert resp.json()["detail"] == "Unhandled enrolment outcome"

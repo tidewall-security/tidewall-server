@@ -187,6 +187,25 @@ all — the routes are simply not registered.
 | `DB_URL` | `sqlite:///data/tidewall.db` | SQLAlchemy database URL |
 | `POLICY_FILE` | `policy.yaml` | YAML policy file for first-boot seeding |
 | `LOG_LEVEL` | `info` | Logging verbosity |
+| `VAULT_ENCRYPTION_KEYS` | unset | `id:base64` entries, comma separated. Enables reversible redaction |
+| `VAULT_ENCRYPTION_CURRENT` | unset | Which key id new vaults are sealed under |
+
+### Enabling reversible redaction
+
+Both variables must be set; either alone is a startup error rather than a
+silent downgrade. Material is 32 raw bytes, base64 encoded:
+
+```bash
+python -c "import os,base64; print('k1:' + base64.b64encode(os.urandom(32)).decode())"
+
+export VAULT_ENCRYPTION_KEYS='k1:8Xb2...=='
+export VAULT_ENCRYPTION_CURRENT='k1'
+```
+
+Key ids are operator-chosen labels and **must stay stable** — every stored row
+names the id it was sealed under. To rotate, add the new key alongside the old,
+repoint `VAULT_ENCRYPTION_CURRENT` at it, and keep the previous key listed for
+at least the vault TTL. Nothing is re-encrypted; old rows simply expire.
 
 ---
 
@@ -201,6 +220,10 @@ API keys are passed as `Authorization: Bearer ak_...` headers. Each key is a col
 | `api` | Yes | Yes | No | No | No |
 | `viewer` | Yes | Yes | Yes | No | No |
 | `admin` | Yes | Yes | Yes | Yes | Yes |
+
+Role is necessary for reversal and not sufficient. A vault can only be reversed
+by the policy that created it, and never by a device credential whatever role it
+holds — see [Who may reverse](#who-may-reverse).
 
 ### First Boot
 
@@ -267,20 +290,37 @@ credential you cannot see.
 
 ---
 
-## Redaction Methods
+## Redaction and Reversal
 
-Per-entity-type rules — each entity type within a detector can have its own action:
+### What the model actually receives
 
-| Method | Action Label | Example | Reversible |
-|--------|-------------|---------|------------|
-| Replacement | `redacted:replaced` | `234-56-7890` → `<US_SSN>` | No |
-| Mask | `redacted:masked` | `234-56-7890` → `***********` | No |
-| Partial Mask | `redacted:masked` | `234-56-7890` → `***-**-7890` | No |
-| Hash | `redacted:hashed` | `234-56-7890` → `a1b2c3d4e5f6` | No |
-| Defang | `defanged` | `http://evil.com` → `http://evil[.]com` | No |
+**Every detected entity is replaced with a typed, numbered placeholder** —
+`[REDACTED_EMAIL_ADDRESS_1]`, `[REDACTED_US_SSN_2]` — and that is what is sent
+onward, whatever redaction method the policy names.
+
+The numbering matters: two mentions of the same value in one prompt get the same
+placeholder, and two different values get different ones. The model can still
+reason about "the first email" versus "the second" without seeing either.
+
+### Redaction methods change the REPORT, not the prompt
+
+This is the part that surprises people, so it is worth stating plainly. The
+per-entity-type method controls how the value appears in findings, exports and
+the dashboard. It does **not** change the text the model receives.
+
+| Method | Action label | Reported as | Sent to the model |
+|---|---|---|---|
+| Replacement | `redacted:replaced` | `<US_SSN>` | `[REDACTED_US_SSN_1]` |
+| Mask | `redacted:masked` | `***********` | `[REDACTED_US_SSN_1]` |
+| Partial Mask | `redacted:masked` | `***-**-7890` | `[REDACTED_US_SSN_1]` |
+| Hash | `redacted:hashed` | `a1b2c3d4e5f6` | `[REDACTED_US_SSN_1]` |
+| Defang | `defanged` | `http://evil[.]com` | `[REDACTED_URL_1]` |
+
+Choose a method for what an operator should see in a finding — a masked tail is
+useful for recognising a card, a hash is useful for correlating without
+disclosing. None of them weakens or strengthens what the model is shown.
 
 ```yaml
-# Per-entity-type rules in policy config
 confidential_and_pii_entity:
   enabled: true
   action: redact
@@ -294,11 +334,70 @@ confidential_and_pii_entity:
     - type: EMAIL_ADDRESS
       action: hash
       salt: "my-salt"
-    - type: IP_ADDRESS
-      action: redact
 ```
 
----
+### Reversal
+
+Because the placeholder is a token rather than a mask, redaction is
+**reversible** — the mapping from placeholder to original is kept server-side and
+`POST /v1/unredact` exchanges one for the other.
+
+This is tokenisation, not encryption. The placeholder has no mathematical
+relationship to the value it stands for, so it discloses nothing on its own; the
+mapping is the only way back. That is the deliberate alternative to
+format-preserving encryption, whose output is reversible ciphertext and stays in
+scope for most compliance regimes.
+
+The mapping is:
+
+- **encrypted at rest** with AES-256-GCM under a keyring, with the row's own
+  identity bound as associated data so a stored blob cannot be moved to another
+  row or given a longer life
+- **short-lived** — one hour — and **deleted**, not merely refused, when it expires
+- **off by default.** Set `VAULT_ENCRYPTION_KEYS` and `VAULT_ENCRYPTION_CURRENT`
+  to enable it. Without them, redaction still runs and is simply irreversible:
+  the server will not store the mapping anywhere it cannot protect it.
+
+If vault retention cannot be scheduled, reversible redaction **disables itself**
+and says so. A deployment that cannot promise to delete the plaintext mapping
+should not be collecting it.
+
+### Who may reverse
+
+A vault belongs to **the policy of the key that created it**, and only that
+policy's credentials can reverse it. A vault id is not a password: it travels in
+a response body, which reaches proxies, APM tools, browser devtools and the
+caller's own logs. Possession of one is not authority to use it.
+
+An id that belongs to another policy is answered exactly as a missing one is —
+same status, same body. A caller able to tell "not yours" from "no such vault"
+could enumerate other policies' ids.
+
+**An API key must be bound to a policy.** Creating an `api`-role key without one
+is refused, because an unbound collector owns no vault and its redactions could
+never be reversed — it would guard perfectly well and then be refused at
+`/v1/unredact`, which reads as a bug rather than a configuration choice. Two
+paths still reach that state and both are reported rather than silent: the
+bootstrap admin key is installed before any policy exists, and deleting a policy
+sets its keys' binding to null.
+
+**Deleting a policy destroys its vaults.** Retention never becomes a reason a
+policy cannot be deleted, and a vault whose owner is gone must not outlive it.
+
+Reversal is **refused to device credentials outright**, whatever policy they
+carry. An enrolled browser extension holds the `api` role so it can call the
+guard; handing recovered PII back into a page is not something a policy binding
+should be able to authorise.
+
+### Upgrading
+
+The migration that adds ownership **deletes every existing vault**. No owner was
+ever recorded for them and none can be recovered; they are at most an hour old
+and hold the mapping itself.
+
+**Restart every worker as part of that upgrade.** The vault cache is per
+process, and a cache hit answers without consulting the row, so deleting rows
+does not revoke what a running process already holds.
 
 ## Event Export (OCSF)
 

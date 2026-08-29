@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import builtins
+import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import FastAPI
@@ -41,6 +43,9 @@ def _make_app_and_client():
     )
     session.add(policy)
     session.flush()
+    # Captured now: a later commit expires the instance, and reading .id off a
+    # detached one raises.
+    seeded_policy_id = policy.id
 
     for event_type in ("input", "output"):
         rs = RuleSet(
@@ -61,10 +66,11 @@ def _make_app_and_client():
     app.state.interaction_log = InteractionLog(session_factory=SessionLocal)
     app.state.export_service = ExportService(session_factory=SessionLocal)
 
-    from app.routes import guard, registration
+    from app.routes import devices, guard, registration
 
     app.include_router(guard.router)
     app.include_router(registration.router)
+    app.include_router(devices.router)
 
     # Create an admin API key (admin can call guard because admin > api)
     raw_admin_key = generate_key(prefix="ak")
@@ -84,6 +90,10 @@ def _make_app_and_client():
         key_hash=hash_key(raw_api_key),
         key_prefix=key_prefix(raw_api_key),
         role="api",
+        # Bound, as a collector key is in a real deployment. Ownership of a
+        # vault comes from this binding, and an unbound key deliberately gets
+        # no vault and can reverse nothing.
+        policy_id=seeded_policy_id,
     )
     session.add(api_key)
 
@@ -240,7 +250,11 @@ def test_rt_token_cannot_call_guard(setup):
     # Create an rt_ token via the registration endpoint
     resp = client.post(
         "/v1/registration-tokens",
-        json={"name": "test-rt", "policy_id": policy_id},
+        json={
+            "name": "test-rt",
+            "policy_id": policy_id,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     assert resp.status_code == 201
@@ -402,9 +416,17 @@ def _enforcement(response):
     for field in ("blocked", "transformed", "detectors", "guard_output"):
         assert field in result, f"result.{field!r} missing from the guard response"
     # A fresh vault token per request. Excluded deliberately: comparing it
-    # would be comparing nonces. Its presence is asserted instead, so a
-    # capture failure that suppressed redaction entirely would still show up.
-    assert result.pop("fpe_context", None), "no fpe_context, so redaction did not happen"
+    # would be comparing nonces.
+    #
+    # Its presence used to be asserted here, as the proof that a capture
+    # failure had not suppressed redaction entirely. It cannot be any more, and
+    # should never have been: the redactor these tests configure is
+    # custom_entity, which replaces the match without recording the original
+    # anywhere, so the vault is empty and there is nothing to reverse. The
+    # token was issued regardless, and /v1/unredact would have refused it.
+    # `transformed` is the same proof and is the thing actually being claimed.
+    result.pop("fpe_context", None)
+    assert result["transformed"] is True, "nothing was redacted, so this compares two clean scans"
     return {
         "status": body["status"],
         "summary": body["summary"],
@@ -561,3 +583,132 @@ def test_a_capture_failure_that_cannot_even_be_logged_still_does_not_change_enfo
 
     assert on.status_code == 200, "a capture failure that could not be logged became an HTTP error"
     assert _enforcement(on) == baseline
+
+
+# ------------------------------------------------------------------
+# A pending device holds credentials and reaches nothing
+# ------------------------------------------------------------------
+
+
+def _enrol_via_http(client, admin_key, session_factory, *, pre_authorized: bool, label: str):
+    session = session_factory()
+    try:
+        policy_id = session.query(Policy).filter_by(is_default=True).one().id
+    finally:
+        session.close()
+
+    rt = client.post(
+        "/v1/registration-tokens",
+        json={
+            "name": f"rt-{label}",
+            "policy_id": policy_id,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+            "pre_authorized": pre_authorized,
+        },
+        headers={"Authorization": f"Bearer {admin_key}"},
+    )
+    assert rt.status_code == 201, rt.text
+
+    enrolled = client.post(
+        "/v1/devices/enrol",
+        json={
+            "installation_id": str(uuid.uuid5(uuid.NAMESPACE_DNS, label)),
+            "device_name": "d",
+            "user_name": "u",
+            "user_email": "u@example.com",
+            "browser": "b",
+            "os": "o",
+            "extension_version": "1",
+        },
+        headers={"Authorization": f"Bearer {rt.json()['token']}"},
+    )
+    assert enrolled.status_code == 201, enrolled.text
+    return enrolled.json()["result"]
+
+
+def test_a_pending_device_cannot_call_guard(setup):
+    """The control is the device's status, not the absence of a credential.
+
+    Asserted against the real guard endpoint rather than a column. A test that
+    read `device.status == "pending"` would still pass if the middleware
+    stopped consulting status altogether, which is the failure that matters.
+    """
+    client, admin_key, _api_key, _viewer_key, session_factory = setup
+    enrolled = _enrol_via_http(client, admin_key, session_factory, pre_authorized=False, label="pending-guard")
+
+    assert enrolled["device_status"] == "pending"
+
+    resp = client.post(
+        "/v1/guard_chat_completions",
+        json=_guard_payload(),
+        headers={"Authorization": f"Bearer {enrolled['access_token']['token']}"},
+    )
+
+    assert resp.status_code == 401, "a pending device reached the guard"
+
+
+def test_an_approved_device_can_call_guard(setup):
+    """The positive control.
+
+    Without this, the test above passes just as well if enrolment is broken and
+    the token is worthless for every reason. This proves the same credential
+    works once the device is approved, so the pending refusal is the status
+    doing it.
+    """
+    client, admin_key, _api_key, _viewer_key, session_factory = setup
+    enrolled = _enrol_via_http(client, admin_key, session_factory, pre_authorized=False, label="approved-guard")
+    token = enrolled["access_token"]["token"]
+
+    approve = client.post(
+        f"/v1/devices/{enrolled['device_id']}/approve",
+        json={"confirmation_code": enrolled["confirmation_code"]},
+        headers={"Authorization": f"Bearer {admin_key}"},
+    )
+    assert approve.status_code == 200, approve.text
+
+    resp = client.post(
+        "/v1/guard_chat_completions",
+        json=_guard_payload(),
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 200, resp.text
+
+
+def test_a_pre_authorized_device_can_call_guard_without_approval(setup):
+    """The fleet path: no admin step, by deliberate configuration."""
+    client, admin_key, _api_key, _viewer_key, session_factory = setup
+    enrolled = _enrol_via_http(client, admin_key, session_factory, pre_authorized=True, label="fleet-guard")
+
+    assert enrolled["device_status"] == "active"
+
+    resp = client.post(
+        "/v1/guard_chat_completions",
+        json=_guard_payload(),
+        headers={"Authorization": f"Bearer {enrolled['access_token']['token']}"},
+    )
+
+    assert resp.status_code == 200, resp.text
+
+
+def test_a_refresh_token_cannot_call_guard(setup):
+    """The credential with the longest life must have the smallest reach."""
+    client, admin_key, _api_key, _viewer_key, session_factory = setup
+    enrolled = _enrol_via_http(client, admin_key, session_factory, pre_authorized=True, label="dr-guard")
+
+    resp = client.post(
+        "/v1/guard_chat_completions",
+        json=_guard_payload(),
+        headers={"Authorization": f"Bearer {enrolled['refresh_token']['token']}"},
+    )
+
+    assert resp.status_code == 403
+
+    # Positive control: the ACCESS token from the same enrolment does work, so
+    # the refusal is the credential type and not a broken fixture.
+    ok = client.post(
+        "/v1/guard_chat_completions",
+        json=_guard_payload(),
+        headers={"Authorization": f"Bearer {enrolled['access_token']['token']}"},
+    )
+    assert ok.status_code == 200

@@ -7,7 +7,10 @@ Startup sequence (in ``lifespan``):
     4. Seed default policy from YAML on first boot
     5. Initialize PolicyService (caches scanner engines per policy)
     6. Bootstrap admin API key if auth is enabled and no keys exist
-    7. Initialize VaultManager, InteractionLog, ExportService
+    7. Initialize InteractionLog, ExportService
+    8. Start the scheduler
+    9. Initialize VaultManager -- after the scheduler, deliberately, because
+       reversible redaction is switched off when vault retention cannot run
 
 Imports inside ``lifespan`` are intentionally deferred to avoid circular
 imports and to keep startup fast when modules aren't needed (e.g. auth
@@ -29,6 +32,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import Settings
 from app.interaction_log import InteractionLog
+from app.vault_crypto import Keyring
 from app.vault_manager import VaultManager
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -166,8 +170,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         key_session.close()
 
-    # --- EXISTING: VaultManager and InteractionLog still needed ---
-    app.state.vault_manager = VaultManager(SessionLocal)
     app.state.interaction_log = InteractionLog(SessionLocal)
 
     from app.services.export_service import ExportService
@@ -198,8 +200,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.services.safe_logging import report
 
     scheduler = None
+    # Not the same question as `scheduler is not None`. That reference is kept
+    # deliberately after a partial start, so shutdown can stop tasks that were
+    # already created; this says whether start() actually completed, which is
+    # what reversible redaction below turns on.
+    scheduler_started = False
     try:
-        from app.services.scheduler import Scheduler, export_abandon_job, retention_job
+        from app.services.scheduler import (
+            Scheduler,
+            export_abandon_job,
+            retention_job,
+            vault_retention_job,
+        )
 
         # Assigned before start(), so a partial start is still stoppable. If
         # start() creates one task and then fails, dropping the reference would
@@ -210,11 +222,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         scheduler.start(
             [
                 retention_job(SessionLocal, scheduler=scheduler),
+                # Deletes vaults past their expiry. Unlike the two beside it,
+                # this one is not merely housekeeping: reversible redaction is
+                # switched off below if it does not get scheduled.
+                vault_retention_job(SessionLocal, scheduler=scheduler),
                 # Resolves export attempts left pending by a process that is
                 # gone. It never sends anything.
                 export_abandon_job(SessionLocal, boot_id=process_lock.boot_id, scheduler=scheduler),
             ]
         )
+        scheduler_started = True
     except Exception:
         report(
             logging.getLogger(__name__),
@@ -228,6 +245,50 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Deliberately not reset to None: if start() got far enough to create a
         # task, that task is running and shutdown must still stop and drain it.
     app.state.scheduler = scheduler
+
+    # --- The vault manager, and the condition it depends on ---
+    #
+    # A vault holds the placeholder-to-original mapping that makes redaction
+    # reversible, which is to say it holds exactly the values the product
+    # exists to protect. The keyring is what allows one to be stored at all:
+    # without it `save` declines, the guard route issues no token, and
+    # redaction is irreversible but honest.
+    #
+    # Constructed HERE, after the scheduler, and that ordering is the point.
+    # The block above catches a scheduler that never started and serves anyway
+    # behind a green /health, so a manager wired before it would let such a
+    # deployment write PII rows that nothing will ever delete -- the one-hour
+    # TTL quietly false, which is the failure this whole change exists to
+    # remove. A product that cannot promise to delete the plaintext mapping
+    # must not collect it.
+    #
+    # Nothing is lost by the move: no request is served until this lifespan
+    # reaches `yield`, and app.state.vault_manager is read only by the guard
+    # and unredact handlers.
+    #
+    # The ring is built either way, so a half-written declaration stops startup
+    # in front of the operator who wrote it rather than depending on whether an
+    # unrelated subsystem happened to start.
+    keyring = Keyring.from_settings(settings)
+    if keyring is not None and not scheduler_started:
+        report(
+            logging.getLogger(__name__),
+            "error",
+            "reversible redaction is DISABLED: a vault encryption key is configured, but vault "
+            "retention could not be scheduled, and the mapping between placeholders and their "
+            "original values must not be stored where nothing will ever delete it. Redaction "
+            "still runs, and is irreversible",
+        )
+        keyring = None
+        # Not "no key is configured": one IS, and an operator grepping that
+        # line would go and check a configuration that turns out to be fine.
+        no_keyring_reason = (
+            "a vault encryption key is configured but was withheld, because " "vault retention could not be scheduled"
+        )
+    else:
+        no_keyring_reason = None
+    app.state.vault_manager = VaultManager(SessionLocal, keyring=keyring, no_keyring_reason=no_keyring_reason)
+
     # Settlement tasks this process started. A bare create_task is owned by
     # nothing: the handler holds a strong reference only while it runs, and at
     # shutdown the loop can close with one still in flight.
@@ -343,6 +404,14 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Before any router: a validation error must not quote the request back.
+    # The default handler includes the offending value, which for this product
+    # means a rejected prompt is echoed into a response body that reaches
+    # proxies, APM tools and the caller's own logs.
+    from app.validation_errors import install as install_validation_errors
+
+    install_validation_errors(app)
+
     from starlette.middleware.cors import CORSMiddleware
 
     from app.auth.middleware import AuthMiddleware
@@ -353,6 +422,19 @@ def create_app() -> FastAPI:
     from app.security_headers import SecurityHeadersMiddleware
 
     app.add_middleware(AuthMiddleware)
+    # Added AFTER auth, so it runs OUTSIDE it: a flood must be refused before
+    # any credential lookup, not after one. Starlette processes middleware in
+    # reverse add order.
+    from app.enrolment_rate_limit import EnrolmentRateLimitMiddleware
+    from app.services.enrolment_limits import EnrolmentLimits
+
+    # Read here rather than reaching for a module-level `settings`: create_app
+    # has no such binding, and the name resolves to the config MODULE, whose
+    # attributes are the class and not its values.
+    app_settings = Settings.from_env()
+    app.state.enrolment_limits = EnrolmentLimits(app_settings.ENROLMENT_RATE_PER_MINUTE)
+    app.state.trusted_proxy_hops = app_settings.TRUSTED_PROXY_HOPS
+    app.add_middleware(EnrolmentRateLimitMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(
         CORSMiddleware,

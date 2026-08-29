@@ -17,13 +17,11 @@ carry.
 
 .. warning::
 
-   :meth:`to_bytes` emits **plaintext** PII. Choosing JSON over pickle was the
-   right call, but it is a separate decision from choosing plaintext over
-   ciphertext, and only the first was made. This is currently latent rather
-   than live: :class:`~app.vault_manager.VaultManager` only ever persists an
-   *empty* vault (see its module docstring), so no PII reaches the database
-   today. Any change that makes persistence work must encrypt this payload in
-   the same commit, or it creates the disclosure it was meant to fix.
+   :meth:`to_bytes` emits **plaintext** PII, and nothing may write its output
+   to disk as it stands. :class:`~app.vault_manager.VaultManager` seals it
+   through :mod:`app.vault_crypto` on the way to the ``vaults`` table and is
+   the only thing that persists a vault at all. Choosing JSON over pickle
+   answered the code-execution question; it never answered the disclosure one.
 """
 
 from __future__ import annotations
@@ -46,6 +44,18 @@ class TidewallVault:
         self._original_to_placeholder: dict[tuple[str, str], str] = {}
         # next index per entity type
         self._counters: defaultdict[str, int] = defaultdict(int)
+
+    @property
+    def is_empty(self) -> bool:
+        """True when this vault holds no placeholder mapping at all.
+
+        A vault id only exists because a redaction produced one, so an empty
+        vault does not mean "nothing was redacted" -- it means the mapping was
+        lost between the request that created it and the request reading it.
+        Callers use this to refuse rather than return the redacted text as
+        though it were the original.
+        """
+        return not self._placeholder_to_original
 
     def store(self, entity_type: str, original: str) -> str:
         """Record an original value, returning the placeholder to swap into the text.

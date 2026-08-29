@@ -2240,6 +2240,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
+    { name = "cryptography" },
     { name = "detect-secrets" },
     { name = "en-core-web-lg" },
     { name = "fastapi", extra = ["standard"] },
@@ -2276,6 +2277,7 @@ e2e = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.13" },
+    { name = "cryptography", specifier = ">=44,<46" },
     { name = "detect-secrets", specifier = ">=1.5" },
     { name = "en-core-web-lg", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.115.0" },

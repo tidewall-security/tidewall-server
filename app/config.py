@@ -41,6 +41,40 @@ class Settings(BaseModel):
     # export refuses rather than assume this network has no translation. See
     # app/services/nat64.py and the finding it names.
     PREF64: str | None = None
+    # Bounds on the two device endpoints a stranger can reach. Enrolment is
+    # unauthenticated but for the key; refresh is reachable with a credential
+    # that does not exist, because its middleware deliberately leaves
+    # adjudication to the service.
+    ENROLMENT_RATE_PER_MINUTE: int = 10
+    #: Pending devices one registration key may have awaiting approval.
+    MAX_PENDING_PER_TOKEN: int = 50
+    #: How long an unapproved device survives before it is reaped.
+    PENDING_DEVICE_TTL_HOURS: int = 72
+    #: X-Forwarded-For entries to believe, counted from the right. Zero means
+    #: the ASGI peer and nothing else -- the header is caller-supplied, and
+    #: trusting it unconditionally lets every request claim a fresh identity.
+    TRUSTED_PROXY_HOPS: int = 0
+
+    # The vault keyring. A vault holds the placeholder-to-original mapping that
+    # makes redaction reversible, which is to say it holds exactly the values
+    # the product exists to protect. It is encrypted at rest under a key the
+    # operator supplies; unset means no key, and reversible redaction has
+    # nothing to store its mapping in.
+    #
+    # Both are held here as the operator wrote them and parsed by
+    # `app.vault_crypto.Keyring.from_settings`, which runs once at startup: a
+    # malformed declaration stops the server there, in front of whoever
+    # deployed it, rather than on some later request.
+    #
+    #: ``id:base64-material`` entries, comma separated. Ids are operator-chosen
+    #: labels and must stay stable, because every row names the id it was
+    #: sealed under. Material is 32 raw bytes (AES-256), base64 encoded.
+    VAULT_ENCRYPTION_KEYS: str | None = None
+    #: Which id in VAULT_ENCRYPTION_KEYS new vaults are sealed under. To rotate,
+    #: add the new key, repoint this at it, and keep the previous key in KEYS
+    #: for at least the vault TTL -- rows naming it are still live until then,
+    #: and nothing is re-encrypted.
+    VAULT_ENCRYPTION_CURRENT: str | None = None
 
     @classmethod
     def from_env(cls) -> Settings:

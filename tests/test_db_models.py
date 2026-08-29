@@ -108,11 +108,18 @@ def test_create_interaction(db_session):
 def test_create_vault(db_session):
     from datetime import datetime
 
-    from app.db.models import Vault
+    from app.db.models import Policy, Vault
+
+    # A vault belongs to the policy that created it, and the foreign key means
+    # the owner has to exist.
+    owner = Policy(id="pol_vault", name="pol_vault", type="application")
+    db_session.add(owner)
+    db_session.flush()
 
     vault = Vault(
         data=b"pickled-vault-data",
         expires_at=datetime(2026, 3, 28, 13, 0, 0, tzinfo=UTC),
+        policy_id="pol_vault",
     )
     db_session.add(vault)
     db_session.commit()

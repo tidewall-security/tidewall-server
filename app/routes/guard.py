@@ -124,10 +124,15 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
 
     # Flatten all message content into a single string for detectors that
     # operate on the full conversation (e.g. prompt injection, topic).
-    messages = body.guard_input.get("messages", [])
+    # Validated at the boundary, handed on as plain dicts. Everything downstream
+    # -- the collector, the engine, the interaction record -- takes list[dict],
+    # and the model exists to stop malformed shapes reaching them, not to change
+    # what they receive. `extra="allow"` means a real OpenAI message keeps its
+    # `name`, `tool_calls` and the rest through model_dump().
+    messages = [m.model_dump() for m in body.guard_input.messages]
     event_type = body.event_type
     all_text = " ".join(m.get("content", "") for m in messages)
-    tools = body.guard_input.get("tools", [])
+    tools = body.guard_input.tools
 
     device_id = getattr(request.state, "device_id", None)
 
@@ -200,13 +205,18 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     if access_rules_result["blocked"]:
         response_time = _now_iso()
         request_id = f"tw_{uuid.uuid4().hex[:16]}"
-        summary = f"Blocked by access rule: {access_rules_result['matched_rules'][-1]['name']}"
-        # Exports get a fixed string. A rule name is an arbitrary control-plane
-        # value — operators put tenant names, customer identifiers and incident
-        # references in them — and it crosses webhook and syslog verbatim, plus
-        # OCSF `message`/`finding_info.desc` and AIDR `Vendor.summary`.
-        # Projecting `detectors` does nothing for this channel.
-        export_summary = "Blocked by access rule"
+        # A rule name is an arbitrary control-plane value — operators put tenant
+        # names, customer identifiers and incident references in them. That was
+        # already the reason exports get a fixed string, the reason the stored
+        # `summary` column was removed outright, and it applies just as much to
+        # the response: this one goes to the caller, who is frequently an end
+        # user reading it in a browser, and who has no relationship with the
+        # operator's naming scheme.
+        #
+        # The caller learns it was blocked and by what kind of thing. Which rule
+        # is the operator's question, answerable from their own logs.
+        summary = "Blocked by access rule"
+        export_summary = summary
 
         response = GuardResponse(
             request_id=request_id,
@@ -220,9 +230,15 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
                 guard_output=None,
                 policy=policy_name,
                 detectors={},
+                # Keyed by position, not by name. The key WAS the rule name,
+                # which put an arbitrary control-plane value in a response body
+                # for every blocked request. Nothing reads this map by name —
+                # neither the dashboard nor the extension — and the caller's
+                # question is "was I blocked and how", not "what did you call
+                # the rule".
                 access_rules={
-                    r["name"]: {"matched": r["matched"], "action": r["action"]}
-                    for r in access_rules_result["matched_rules"]
+                    str(index): {"matched": r["matched"], "action": r["action"]}
+                    for index, r in enumerate(access_rules_result["matched_rules"])
                 },
                 fpe_context=None,
             ),
@@ -284,7 +300,30 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     # detectors write original values into this vault keyed by placeholder
     # tokens.  The vault is later persisted so that /v1/unredact can
     # recover the originals using the fpe_context token.
-    vault_id, vault = vault_mgr.create_vault()
+    # Only a key with a policy BINDING owns anything. `bound_policy_id` above,
+    # not `policy_id` below it: the latter falls back to the default policy,
+    # which decides how to SCAN. If it decided ownership, every unbound key's
+    # vaults would land in one shared pool that moves whenever an administrator
+    # changes the default.
+    #
+    # An unbound key still gets redaction -- the detector emits its own
+    # placeholders when handed no vault -- it just gets no way to reverse it.
+    if bound_policy_id:
+        vault_id, vault = vault_mgr.create_vault()
+    else:
+        # Creation now refuses an unbound `api` key, so reaching here means the
+        # bootstrap admin -- installed before any policy exists -- or a key whose
+        # policy was deleted, which sets the binding to NULL. Either way the
+        # caller is about to get a redaction with no token and no explanation,
+        # so name the key and the reason rather than leave a null field to be
+        # puzzled over.
+        report(
+            logger,
+            "warning",
+            f"api key {getattr(request.state, 'api_key_id', None)} has no policy binding, "
+            "so its redactions cannot be reversed; bind it to a policy to enable reversal",
+        )
+        vault_id, vault = None, None
 
     # Detectors use synchronous ML inference (torch, ONNX) so we offload
     # the entire scan to a thread to keep the async event loop responsive.
@@ -362,7 +401,10 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             redaction_failed = True
         else:
             guard_output = {"messages": transformed_msgs}
-            fpe_context = vault_mgr.encode_fpe_context(vault_id)
+            # No vault means an unbound key: redaction happened, using the
+            # detector's own placeholders, and nothing can reverse it. A token
+            # here would promise a reversal with no mapping behind it.
+            fpe_context = vault_mgr.encode_fpe_context(vault_id) if vault_id else None
 
     # Handle MCP tool filtering (tool_listing events). Skipped after a failed
     # redaction: rebuilding a guard_output there would re-populate the field the
@@ -434,6 +476,53 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
         else:
             status = "allowed"
 
+    # --- Write the vault back ---
+    #
+    # Here, and nowhere earlier, because here is the first point at which the
+    # response's disposition is settled. `fpe_context` is created above after a
+    # successful reconstruction and cleared again twice — by the detector
+    # failure block and by report_only — so a save placed after the scan would
+    # store the placeholder-to-original mapping, which is the PII itself, for
+    # requests that end up carrying no way to retrieve it.
+    #
+    # Both `engine.scan` and every `engine.scan_single` were awaited above, so
+    # the worker thread has finished populating the vault and this does not
+    # race it.
+    if fpe_context is not None:
+        try:
+            saved = vault_mgr.save(
+                vault_id,
+                vault,
+                # `bound_policy_id`, not the resolved `policy_id`. Substituting
+                # the resolved one here changes no behaviour and cannot be
+                # killed by a test: a vault is only created when the key IS
+                # bound, and for a bound key the resolver returns that same
+                # binding, so the two are necessarily equal wherever this runs.
+                #
+                # Written this way regardless, because the equality is a
+                # consequence of the guard above rather than a property of the
+                # resolver. If the vault ever gets created unconditionally, the
+                # resolved value would silently become the default policy and
+                # every unbound key's vaults would land in one shared pool.
+                policy_id=bound_policy_id,
+                created_by_key_id=getattr(request.state, "api_key_id", None),
+            )
+        except Exception as exc:
+            # Reported through the wrapper, like every other report in this
+            # route that is not itself the security decision: an operator's
+            # broken log filter raises straight through Logger.handle, and a
+            # request whose disposition is already settled must not become a
+            # 500 because it could not be written about.
+            report(logger, "error", f"vault {vault_id} could not be saved", exc)
+            saved = False
+        if not saved:
+            # A token whose vault was never written promises a reversal that
+            # cannot happen — the same silent failure this endpoint keeps
+            # producing, one layer up. The redaction itself stands and the
+            # caller still gets it; it is only irreversible.
+            report(logger, "warning", f"vault {vault_id} was not stored; no reversal is offered")
+            fpe_context = None
+
     # Degradation is recorded as a reserved entry in the detectors payload,
     # which the interaction row and every export format already carry verbatim.
     # Without this, OCSF/AIDR/raw consumers would have to infer degradation by
@@ -479,9 +568,13 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             # browser devtools and the caller's own logging all see it. The
             # caller acts on `guard_output`, not on exact values.
             detectors=project_detectors(scan_result.detectors),
+            # Keyed by position, exactly as the blocked path above. Two sites
+            # build this map and both must stay identical: fixing one would
+            # leave the rule name in every response that was NOT blocked, which
+            # is most of them.
             access_rules={
-                r["name"]: {"matched": r["matched"], "action": r["action"]}
-                for r in access_rules_result["matched_rules"]
+                str(index): {"matched": r["matched"], "action": r["action"]}
+                for index, r in enumerate(access_rules_result["matched_rules"])
             },
             fpe_context=fpe_context,
             degraded=scan_result.degraded,

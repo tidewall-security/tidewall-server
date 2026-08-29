@@ -26,7 +26,7 @@ def app_with_auth():
     # Bound: an unbound viewer is refused at creation, because it would
     # authenticate successfully and then see nothing.
     viewer_key, _ = key_svc.create_key(name="viewer", role="viewer", policy_id=policy.id)
-    api_key, _ = key_svc.create_key(name="collector", role="api")
+    api_key, _ = key_svc.create_key(name="collector", role="api", policy_id=policy.id)
 
     from app.auth.dependencies import require_role
     from app.auth.middleware import AuthMiddleware

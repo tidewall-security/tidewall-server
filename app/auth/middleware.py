@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -12,12 +13,17 @@ from app.auth.dependencies import KNOWN_ROLES
 from app.auth.grants import GrantError, validate_grants
 from app.auth.key_utils import hash_key
 from app.db.models import AccessToken, APIKey, Device, RegistrationToken
+from app.utils import as_utc
 
 # Paths served without a credential. Deliberately minimal: /docs, /redoc and
 # /openapi.json used to be here, which published the full surface of a security
 # control plane to anyone who could reach the port. The schema is still
 # retrievable with a bearer token.
 _PUBLIC_PATHS = {"/health", "/favicon.ico"}
+
+
+#: POST /v1/devices/{device_id}/refresh, and nothing else. Compiled once.
+_REFRESH_PATH = re.compile(r"^/v1/devices/[^/]+/refresh$")
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -46,6 +52,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         request.state.role = None
         request.state.policy_id = None
         request.state.api_key_id = None
+        request.state.dr_token_hash = None
         request.state.device_id = None
         request.state.grants = frozenset()
 
@@ -84,6 +91,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await self._handle_rt_token(request, call_next, hashed)
         elif raw_key.startswith("at_"):
             return await self._handle_at_token(request, call_next, hashed)
+        elif raw_key.startswith("dr_"):
+            return await self._handle_dr_token(request, call_next, hashed)
         else:
             return await self._handle_ak_token(request, call_next, hashed)
 
@@ -97,7 +106,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if api_key is None:
                 return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
 
-            if api_key.expires_at and api_key.expires_at < datetime.now(UTC):
+            if api_key.expires_at and as_utc(api_key.expires_at) < datetime.now(UTC):
                 return JSONResponse(status_code=401, content={"detail": "API key expired"})
 
             # Validated on every request, not only at creation. A row can be
@@ -146,7 +155,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if rt is None:
                 return JSONResponse(status_code=401, content={"detail": "Invalid registration token"})
 
-            if rt.expires_at and rt.expires_at < datetime.now(UTC):
+            if rt.expires_at and as_utc(rt.expires_at) < datetime.now(UTC):
                 return JSONResponse(status_code=401, content={"detail": "Registration token expired"})
 
             request.state.role = "rt"
@@ -158,6 +167,47 @@ class AuthMiddleware(BaseHTTPMiddleware):
         finally:
             session.close()
 
+        return await call_next(request)
+
+    async def _handle_dr_token(self, request: Request, call_next, hashed: str):
+        """Identify a device refresh token. Deliberately does NOT adjudicate it.
+
+        This branch does not check whether the credential exists, is revoked, or
+        has expired. Those are three of the five outcomes in the refresh
+        taxonomy, and in that taxonomy device state DOMINATES credential state.
+        A middleware that answers "refresh token expired" has already decided
+        the request -- and decided it without looking at the device -- so a
+        REVOKED device holding an expired credential would be told to re-enrol,
+        undoing its own revocation.
+
+        Adjudicating in two places also makes service-level tests false-green:
+        they pass while the HTTP path, the only one a client takes, answers
+        wrongly.
+
+        So this sets state and gets out of the way. One authority decides, and
+        it is the service.
+
+        Restricting reach IS done here, because that is not a taxonomy question:
+        no role, no policy, no device_id, and the credential is refused anywhere
+        but the refresh route.
+        """
+        if not _REFRESH_PATH.match(request.url.path):
+            # Presented elsewhere it is not a weaker credential, it is the wrong
+            # one. Refused without a database read.
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Refresh tokens can only access /v1/devices/{id}/refresh"},
+            )
+
+        request.state.grants = frozenset()
+        request.state.role = None
+        request.state.policy_id = None
+        request.state.api_key_id = None
+        # NOT set. device_id marks "a device ACCESS credential", and the
+        # unredact denial keys on it. A refresh token is not that credential and
+        # must not inherit its reach.
+        request.state.device_id = None
+        request.state.dr_token_hash = hashed
         return await call_next(request)
 
     async def _handle_at_token(self, request: Request, call_next, hashed: str):
@@ -173,10 +223,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if at is None:
                 return JSONResponse(status_code=401, content={"detail": "Invalid access token"})
 
-            expires = at.expires_at
-            if expires.tzinfo is None:
-                expires = expires.replace(tzinfo=UTC)
-            if expires < datetime.now(UTC):
+            if as_utc(at.expires_at) < datetime.now(UTC):
                 return JSONResponse(status_code=401, content={"detail": "Access token expired"})
 
             device = session.query(Device).filter_by(id=at.device_id).first()

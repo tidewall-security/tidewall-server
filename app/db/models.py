@@ -302,15 +302,16 @@ class ContentAccessAudit(Base):
 class Vault(Base):
     """Persisted PII vault for reversible redaction.
 
-    ``data`` is a JSON-encoded :class:`~app.vault.TidewallVault` payload
-    containing the original PII values keyed by their placeholder tokens.
-    The /v1/unredact endpoint loads the vault by ID (encoded in the
-    fpe_context token) to recover original text.
+    ``data`` is a :class:`~app.vault.TidewallVault` payload sealed by
+    :mod:`app.vault_crypto`: AES-256-GCM, with the row's own id and expiry
+    authenticated alongside the ciphertext so a blob cannot be moved to another
+    row or given a longer life. The /v1/unredact endpoint loads the vault by ID
+    (encoded in the fpe_context token) to recover original text.
 
-    Note that in practice this column currently holds only *empty* vaults, and
-    the payload format is plaintext. See :mod:`app.vault_manager` for why, and
-    for the constraint that encryption must land in the same change as the
-    persistence fix.
+    Rows written before that format are unversioned plaintext JSON and are
+    recognised on read rather than crashed on. Every one of them holds an empty
+    mapping, because the code that wrote them persisted the vault before
+    anything populated it.
     """
 
     __tablename__ = "vaults"
@@ -319,6 +320,23 @@ class Vault(Base):
     data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    #: The policy of the key that created this vault, and the only policy whose
+    #: credentials may reverse it. Not the policy the guard *resolved* -- that
+    #: falls back to the default, which would put every unbound key's vaults
+    #: into one shared pool that moves whenever the default changes.
+    #:
+    #: The foreign key is what makes ownership an invariant rather than a
+    #: convention: a guard request that captured its policy before an
+    #: administrator deleted it resumes afterwards and tries to persist, and
+    #: nothing in that request re-checks the policy. CASCADE rather than
+    #: RESTRICT so retention never becomes a reason a policy cannot be deleted.
+    policy_id: Mapped[str] = mapped_column(
+        String, ForeignKey("policies.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    #: Attribution only, never the authorisation check. Guarding from a
+    #: collector key and reversing from a back-office tool is ordinary, and key
+    #: rotation must not orphan every live vault.
+    created_by_key_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class ActivityLog(Base):
@@ -535,7 +553,31 @@ class RegistrationToken(Base):
     token_prefix: Mapped[str] = mapped_column(String, nullable=False)
     created_by: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Mandatory. An enrolment key with no deadline is a permanent capability to
+    # create devices, and the containment story for a leak is then only
+    # "somebody eventually notices".
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # None means uncapped, which is legitimate for a fleet key whose expiry is
+    # doing the bounding. `uses` is incremented by a conditional UPDATE and
+    # never by a read-modify-write: SQLite has no row locks, so the guard has
+    # to live in the WHERE clause.
+    max_uses: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    uses: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # Pending devices this key currently has awaiting approval. Maintained by
+    # conditional DML in the same transaction as the insert, like `uses`:
+    # counting rows and then inserting is check-then-act, and SQLite serialises
+    # the writes but not the reads before them.
+    pending_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # False by default: a key that is sufficient on its own is a key whose leak
+    # is immediately a working device. True exists for fleet deployment where
+    # the delivery channel is already trusted, which is why it is set per key
+    # and never globally -- and why a pre-authorized key is worth protecting
+    # more carefully than an ordinary one.
+    pre_authorized: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    # Soft revocation. Hard deletion takes the lineage with it -- reg_token_id
+    # is SET NULL on delete -- and a revoked key is precisely when knowing which
+    # devices came from it matters most.
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Scope an enrolling device inherits. Without this a registration token
     # conferred no policy at all — the middleware set policy_id = None — so
     # enrolled devices had no binding to constrain them.
@@ -571,13 +613,81 @@ class Device(Base):
     reg_token_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("registration_tokens.id", ondelete="SET NULL"), nullable=True
     )
+    # A SNAPSHOT, not a foreign key. The FK above is SET NULL on delete, so
+    # deleting a leaked key silently makes every device it created
+    # unattributable -- and deleting the key is an administrator's first
+    # instinct on discovering the leak. Written once at enrolment and never
+    # updated: it records which key this device came from, which cannot change.
+    reg_token_prefix: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     # RESTRICT for the same reason as the registration token's: a device's scope
     # is fixed at enrolment, and deleting its policy must not quietly reassign
     # it to the default one.
     policy_id: Mapped[str | None] = mapped_column(String, ForeignKey("policies.id", ondelete="RESTRICT"), nullable=True)
     status: Mapped[str] = mapped_column(String, nullable=False, default="active")
+    # Displayed by the enrolling client and matched by an administrator before
+    # activation. Every other field on this row is supplied by the claimant, so
+    # none of them can decide approval: a key holder copies the expected user,
+    # email, device name, browser and OS and the row looks exactly like a real
+    # one. Cleared on approval so it cannot be replayed.
+    confirmation_code: Mapped[str | None] = mapped_column(String, nullable=True)
     last_seen: Mapped[datetime] = mapped_column(DateTime, default=_now)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class DeviceTombstone(Base):
+    """Durable evidence that a device was revoked.
+
+    Outlives the device row and every credential it held. "Stop permanently" is
+    only true for as long as the evidence lasts: revocation deletes the
+    credentials, so a client that comes back later presents something unknown
+    and is told to re-enrol -- which is the recovery path, and undoes the
+    revocation by itself.
+
+    No foreign key to devices. It must survive that row's deletion, which is
+    the case it exists for.
+    """
+
+    __tablename__ = "device_tombstones"
+
+    device_id: Mapped[str] = mapped_column(String, primary_key=True)
+    installation_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    reason: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # Set by an explicit administrator action. Hashed: it is a credential.
+    #
+    # Single-use decides who WINS a race; it does not decide who is ENTITLED.
+    # A bare "this installation may enrol again" flag is claimable by whoever
+    # asks first, including the party the revocation was aimed at.
+    recovery_secret_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class DeviceRefreshToken(Base):
+    """Long-lived, non-rotating, single-purpose credential for one device.
+
+    Its own table rather than a column on AccessToken: the two have different
+    lifetimes, different reach and different revocation rules, and sharing a
+    table invites a query that forgets which kind it is holding.
+
+    It does not rotate. Rotation cannot both survive a lost response and detect
+    reuse -- a client retrying after a committed-but-lost rotation is
+    indistinguishable from a thief -- so every variant either locks out real
+    clients or fails to catch real theft. Under a non-hostile host a credential
+    that cannot lock its owner out is worth more than one that pretends to
+    catch a thief it cannot catch.
+
+    The cost, stated: a stolen refresh token is usable until it expires or an
+    administrator revokes it.
+    """
+
+    __tablename__ = "device_refresh_tokens"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    token_hash: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    device_id: Mapped[str] = mapped_column(String, ForeignKey("devices.id", ondelete="CASCADE"), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class AccessToken(Base):

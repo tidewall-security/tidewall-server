@@ -337,6 +337,32 @@ _PERMITTED = [
 #: result checks could be deleted with all 63 tests green -- and they are the
 #: mechanism that turns a missing completion marker or a busy checkpoint into a
 #: failure.
+def _alembic_head() -> str:
+    """The current migration head, read from the scripts rather than pinned here.
+
+    This constant used to be a literal, and the published runbook carries the
+    same value in its `REV=` line. Two copies of one fact went stale on every
+    migration, and the staleness surfaced as 46 failures in a diff about
+    something else entirely.
+
+    Derived, the assertion becomes the invariant that actually matters: the
+    runbook names the head it was written against. A migration that lands
+    without updating the runbook now fails in one place, saying so.
+    """
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    cfg = Config(str(root / "alembic.ini"))
+    cfg.set_main_option("script_location", str(root / "alembic"))
+    heads = ScriptDirectory.from_config(cfg).get_heads()
+    assert len(heads) == 1, f"expected exactly one migration head, found {heads}"
+    return heads[0]
+
+
+HEAD_REVISION = _alembic_head()
+
+
 _PERMITTED_SHELL = [
     # The assignment lines are IN the whitelist. An earlier version dropped any
     # line starting DB= or REV= before comparing, and separately replaced the
@@ -344,7 +370,7 @@ _PERMITTED_SHELL = [
     # passed all 75 tests while making the published block exit 0 without ever
     # opening the database. A prefix is not authorisation to ignore a line.
     "DB=/path/to/tidewall.db",
-    "REV=1b42ababed28",
+    f"REV={HEAD_REVISION}",
     "out=$(sqlite3 \"$DB\" -cmd \".param set :rev '$REV'\" <<'SQL' 2>&1",
     ") || { printf 'the sequence stopped before completing:\\n%s\\n' \"$out\"; exit 1; }",
     "printf '%s\\n' \"$out\" | grep -qx 'SEQUENCE-COMPLETE' || { echo \"incomplete\"; exit 1; }",
@@ -415,7 +441,7 @@ def test_the_session_block_is_exactly_the_permitted_program():
 # Task 4: the preconditions refuse, and refuse before writing anything
 # --------------------------------------------------------------------------
 
-HEAD_REVISION = "1b42ababed28"
+
 #: The columns head actually has, read from a migrated database by
 #: `_assert_fixture_shape` rather than trusted from here.
 HEAD_INTERACTIONS_COLUMNS = 20
@@ -514,7 +540,7 @@ def _substituted_session(db, revision=HEAD_REVISION) -> str:
     # be seen by the whitelist.
     for published, replacement in (
         ("DB=/path/to/tidewall.db", f"DB={shlex.quote(str(db))}"),
-        ("REV=1b42ababed28", f"REV={shlex.quote(revision)}"),
+        (f"REV={HEAD_REVISION}", f"REV={shlex.quote(revision)}"),
     ):
         assert f"\n{published}\n" in f"\n{block}", f"the published line {published!r} moved"
         block = block.replace(published, replacement, 1)
@@ -1812,6 +1838,10 @@ _REHEARSAL_ROWS = {
     "Planted a canary in the legacy content columns": "four representations",
     "Froze a copy as the backup": "see the hashes below",
     "Confirmed all four representations are in the frozen backup": "all four found",
+    # The head AS IT WAS on 2026-08-20. This row is evidence of what the
+    # rehearsal did, not a pin on the current schema -- the sibling row
+    # naming d5a71f3c8e02 is historical for the same reason. A later
+    # migration moves HEAD_REVISION above; it does not move this.
     "Upgraded to head `1b42ababed28`": "migration succeeded",
     # As RENDERED: the source escapes each pipe as `\|` so it survives the
     # table syntax, but the operator reads `|`. Pinning the source spelling
