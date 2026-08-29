@@ -25,9 +25,30 @@ def test_the_step_is_not_continue_on_error():
         assert step.get("continue-on-error") is not True
 
 
-def test_it_fails_while_the_manifest_is_non_empty(capsys):
-    assert main(["manifest_empty.py"]) == 1
+def test_it_fails_on_a_non_empty_manifest(tmp_path, capsys):
+    """The checker's behaviour, against a fixture rather than the real file.
+
+    This used to call `main([])` and assert 1 -- reading the REAL manifest and
+    depending on it being non-empty. That conflated two claims: what the checker
+    does with records, and whether this project currently has any. The first is
+    a property of the checker and must hold forever; the second is a fact about
+    today, asserted separately below.
+    """
+    populated = tmp_path / "p.toml"
+    populated.write_text('[[expected_failure]]\ncase_id = "x"\nowner = "someone"\n')
+    assert main(["manifest_empty.py", str(populated)]) == 1
     assert "MANIFEST NOT EMPTY" in capsys.readouterr().out
+
+
+def test_this_projects_manifest_is_empty(capsys):
+    """The fact about today: nothing is accepted, so the gate can be green.
+
+    All three declared defects -- the access-rule name reaching the guard
+    response and the creation log, the validation echo, and detector matches
+    never reaching the capture column -- are fixed.
+    """
+    assert main(["manifest_empty.py"]) == 0
+    assert "MANIFEST EMPTY" in capsys.readouterr().out
 
 
 def test_it_passes_on_an_empty_manifest(tmp_path, capsys):

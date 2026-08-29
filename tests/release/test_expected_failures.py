@@ -24,7 +24,11 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 
 @pytest.fixture(scope="module")
 def checked_in() -> list[dict]:
-    return tomllib.loads(MANIFEST.read_text())["expected_failure"]
+    # `.get`, not `[...]`. An empty manifest has no `expected_failure` key at
+    # all, and empty is the goal state -- every record is an ACCEPTED defect, so
+    # none of them is what "nothing left to accept" looks like. Indexing made the
+    # file unloadable in exactly the condition the gate exists to reach.
+    return tomllib.loads(MANIFEST.read_text()).get("expected_failure", [])
 
 
 @pytest.fixture(scope="module")
@@ -57,45 +61,6 @@ def test_signatures_are_unique(checked_in):
 
 
 # --- expansion, not defect classes ------------------------------------------
-
-
-def test_matches_json_expands_per_case_and_representation(checked_in):
-    """Not one shared entry.
-
-    A single record cannot be multiset-compared against a run that fails once
-    per case, and it hides how much is missing.
-    """
-    from tests.release.representations import FAMILIES
-
-    records = [r for r in checked_in if r["surface_path"] == "interactions.matches_json"]
-    assert records, "no matches_json records at all"
-
-    by_case = collections.defaultdict(set)
-    for record in records:
-        by_case[record["case_id"]].add(record["representation"])
-
-    assert len(by_case) > 1, "matches_json collapsed to a single case"
-    for case_id, representations in by_case.items():
-        assert representations == {f.name for f in FAMILIES}, (case_id, representations)
-
-
-def test_the_422_echo_is_present_per_representation(checked_in):
-    """Omitted entirely from an earlier draft."""
-    from tests.release.representations import FAMILIES
-
-    records = [r for r in checked_in if "$.detail[*].input" in r["surface_path"]]
-    assert {r["representation"] for r in records} == {f.name for f in FAMILIES}
-
-
-def test_all_three_access_rule_surfaces_are_present(checked_in):
-    """The third was missed once, and it is a distinct surface."""
-    paths = {r["surface_path"] for r in checked_in}
-    assert "app.services.access_rule_service:logger.info/created" in paths
-    assert f"{GUARD_ROUTE} -> $.summary" in paths
-    assert f"{GUARD_ROUTE} -> $.result.access_rules[*] (key)" in paths
-
-
-# --- the route is verified, not assumed -------------------------------------
 
 
 def test_the_guard_route_exists_in_the_source():
@@ -150,6 +115,26 @@ def test_every_record_carries_an_owner_field(checked_in):
         assert "owner" in record, record
 
 
+def test_the_manifest_is_empty_because_every_declared_defect_is_fixed(checked_in):
+    """It held 255 records: three defects multiplied by representation and
+    surface.
+
+    The access-rule name reached the guard response and the creation log. The
+    validation echo quoted a rejected request back. Detector matches never
+    reached the capture column, because a detector named itself by its class
+    while the scanner opened its capture batch under the policy's key for it.
+
+    All three are fixed. Three tests describing the shape those records took are
+    gone with them; the generators that produced them are kept, unused.
+    """
+    assert checked_in == []
+
+    from tests.release.expected_failures import generate
+    from tests.release.manifest import load_cases
+
+    assert generate(load_cases()) == []
+
+
 def test_every_record_carries_a_real_owner(checked_in):
     """Owners were a blocked input; they are supplied now.
 
@@ -164,7 +149,12 @@ def test_every_record_carries_a_real_owner(checked_in):
     still_unassigned = [r for r in checked_in if r["owner"] == OWNER_UNASSIGNED]
     assert not still_unassigned, still_unassigned[:2]
 
-    assert {r["owner"] for r in checked_in} == {OWNER}, sorted({r["owner"] for r in checked_in})
+    # A SUBSET, so this holds while the manifest is empty and bites the moment a
+    # record returns. Equality asserted the manifest was non-empty as a side
+    # effect -- a different claim, made deliberately by the emptiness test above.
+    # Two tests must not both depend on the count.
+    owners = {r["owner"] for r in checked_in}
+    assert owners <= {OWNER}, sorted(owners)
 
 
 def test_the_owner_is_reachable(checked_in):

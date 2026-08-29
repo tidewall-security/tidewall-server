@@ -158,8 +158,24 @@ def validation_echo_records() -> list[Record]:
 
 
 def generate(cases) -> list[Record]:
-    records = access_rule_records() + matches_json_records(cases) + validation_echo_records()
-    return sorted(records, key=lambda r: r.signature())
+    """The accepted security defects. There are none.
+
+    This produced three families: the access-rule name reaching the guard
+    response and the creation log, the validation echo quoting a rejected
+    request back, and detector matches never reaching the capture column. 255
+    records, being three defects multiplied by representation and surface.
+
+    All three are fixed. A record is an ACCEPTED defect with an owner who
+    answers for it still being accepted, so a record for a defect that no longer
+    exists is not a lesser record -- it is a false one.
+
+    The three generators are kept rather than deleted, unused. Each is the
+    executable description of a defect this product had, and the next record's
+    shape is easier to get right by amending one than by writing it from
+    nothing.
+    """
+    _retired = (access_rule_records, matches_json_records, validation_echo_records)
+    return []
 
 
 def render(records: list[Record]) -> str:

@@ -77,7 +77,9 @@ DEFAULT_MUTATION = Mutation(
 )
 
 
-def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, int, set[str]]:
+def run_suite(
+    signatures: pathlib.Path, junit: pathlib.Path, counts: pathlib.Path
+) -> tuple[Counter, int, set[str]]:
     """Run the release suite; return its signature multiset and UNACCOUNTED failures.
 
     Every JUnit outcome is classified. An `<error>` is a harness error. A
@@ -104,11 +106,42 @@ def run_suite(signatures: pathlib.Path, junit: pathlib.Path) -> tuple[Counter, i
             "no:randomly",
             f"--junitxml={junit}",
             f"--release-signatures={signatures}",
+            f"--release-counts={counts}",
         ],
         cwd=REPO,
         capture_output=True,
         text=True,
     )
+
+    # HOW MANY TESTS RAN. Nothing here used to ask.
+    #
+    # The unmutated run was checked only against the recorded baseline, and while
+    # that baseline held 255 signature-producing cases it was incidentally
+    # evidence that the suite had run: you cannot emit 255 signatures without
+    # running the cases that emit them. That is not a property of the check, it
+    # is a property of the number being large -- and it disappears the moment the
+    # baseline is empty, which is what a gate with nothing left to accept looks
+    # like. A run of ZERO tests then satisfies `check_baseline(empty, empty)`.
+    #
+    # The release gate already solved this: `--release-counts` records how many
+    # tests were SELECTED after deselection, and `gate_report.check_counts`
+    # compares that against `declared_counts.json` and refuses any deselection,
+    # skip or xfail. The mutation runner simply never asked for it. Calling that
+    # same function rather than restating the rule keeps one definition of "the
+    # whole suite ran".
+    from tests.release.gate_report import DECLARED_COUNTS, SuiteResult, check_counts
+
+    if not counts.exists():
+        raise SystemExit(f"the run produced no counts file at {counts}; the suite did not start")
+    declared = json.loads(DECLARED_COUNTS.read_text())["release"]
+    problems = check_counts(
+        SuiteResult(name="release", counts=json.loads(counts.read_text()), declared=declared)
+    )
+    if problems:
+        raise SystemExit(
+            "the release suite did not run in full, so a delta cannot be attributed "
+            f"to the mutation: {problems}"
+        )
 
     from tests.release.signatures import (
         recorded_mismatches,
@@ -185,7 +218,7 @@ def main(argv: list[str]) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = pathlib.Path(tmp)
 
-        unmutated, base_errors, base_unaccounted = run_suite(tmpdir / "base.json", tmpdir / "base.xml")
+        unmutated, base_errors, base_unaccounted = run_suite(tmpdir / "base.json", tmpdir / "base.xml", tmpdir / "base-counts.json")
         # THE UNMUTATED RUN MUST BE CLEAN IN BOTH SENSES. A harness error means
         # the gate did not run; an unaccounted failure means something is
         # broken for a reason nobody has attributed, and a later delta cannot
@@ -234,7 +267,7 @@ def main(argv: list[str]) -> int:
             # KNOWABLE AND DECLARED, not waved through. Discarding this set let
             # any number of unrelated failures introduced only in the mutant run
             # be excused while the message still claimed an exact delta.
-            mutant, mutant_errors, mutant_unaccounted = run_suite(tmpdir / "mut.json", tmpdir / "mut.xml")
+            mutant, mutant_errors, mutant_unaccounted = run_suite(tmpdir / "mut.json", tmpdir / "mut.xml", tmpdir / "mut-counts.json")
         finally:
             source.write_text(original)
 

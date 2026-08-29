@@ -262,14 +262,49 @@ def test_the_baseline_matches_what_the_suite_currently_emits():
     )
 
 
-def test_the_baseline_is_not_empty():
-    """An empty baseline hides the difference between "nothing failed" and
-    "the run produced no signatures at all"."""
+def test_the_runner_proves_the_whole_suite_ran():
+    """What the non-empty baseline was standing in for.
+
+    This asserted the baseline was non-empty, because "an empty baseline hides
+    the difference between nothing failed and the run produced no signatures at
+    all". That was true, and the baseline was the wrong instrument for it: it
+    supplied that evidence only incidentally, by being large. You cannot emit 255
+    signatures without running the cases that emit them -- but that is a property
+    of the number, not of the check, and it vanishes when the gate reaches the
+    state it exists to reach and there is nothing left to accept.
+
+    A run of zero tests satisfies `check_baseline(empty, empty)`. So does a
+    REDUCED run that happens to emit the expected signatures, which the non-empty
+    baseline never caught either.
+
+    The release gate already had the right instrument: `--release-counts` records
+    how many tests were selected after deselection, and `check_counts` compares
+    that against `declared_counts.json` while refusing any deselection, skip or
+    xfail. The mutation runner never asked for it. It does now, calling that same
+    function rather than restating the rule.
+    """
+    import inspect
+
+    from tests.release import run_mutation_step
+
+    source = inspect.getsource(run_mutation_step.run_suite)
+    assert "--release-counts" in source, "the runner does not ask how many tests ran"
+    assert "check_counts" in source, "the runner does not check how many tests ran"
+
+    # And the check it calls genuinely refuses a short run.
     import json
     import pathlib
 
-    path = pathlib.Path(__file__).resolve().parent / "mutation_baseline.json"
-    assert json.loads(path.read_text()), "the recorded baseline is empty"
+    from tests.release.gate_report import DECLARED_COUNTS, SuiteResult, check_counts
+
+    declared = json.loads(DECLARED_COUNTS.read_text())["release"]
+    assert check_counts(SuiteResult(name="release", counts={"selected": 0}, declared=declared))
+    assert check_counts(
+        SuiteResult(name="release", counts={"selected": declared, "skipped": 1}, declared=declared)
+    )
+    assert not check_counts(
+        SuiteResult(name="release", counts={"selected": declared}, declared=declared)
+    )
 
 
 def test_the_baseline_is_complete_over_the_families_it_covers():
