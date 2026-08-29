@@ -252,3 +252,221 @@ def test_the_migration_round_trips(tmp_path):
     _alembic(url, "head")
     cols = {c["name"] for c in inspect(get_engine(url)).get_columns("vaults")}
     assert "policy_id" in cols and "created_by_key_id" in cols
+
+
+# --- The routes ------------------------------------------------------------
+#
+# The manager tests above prove the boundary in isolation. These prove the two
+# call sites reach it with the right policy, which is a separate question: guard
+# holds BOTH a bound policy and a resolved one that falls back to the default,
+# and using the wrong one is invisible to every test above.
+
+import json  # noqa: E402
+from contextlib import contextmanager  # noqa: E402
+
+from fastapi import FastAPI  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+
+from app.auth.key_utils import generate_key, hash_key, key_prefix  # noqa: E402
+from app.auth.middleware import AuthMiddleware  # noqa: E402
+from app.db.models import APIKey, RuleSet  # noqa: E402
+from app.detectors.base import BaseDetector, DetectorResult  # noqa: E402
+from app.services.policy_service import PolicyService  # noqa: E402
+
+
+class _Redactor(BaseDetector):
+    """Redacts, with or without a vault -- as the real PII detector does.
+
+    Handed no vault it still replaces the value; it just emits a placeholder
+    nothing can reverse. A redactor that assumed a vault would turn the unbound
+    case into a crash and hide the behaviour under test.
+    """
+
+    @property
+    def name(self) -> str:
+        return "confidential_and_pii_entity"
+
+    def scan(self, text: str, **kwargs) -> DetectorResult:
+        if SECRET not in text:
+            return DetectorResult(detected=False)
+        vault = kwargs.get("vault")
+        placeholder = vault.store("EMAIL", SECRET) if vault is not None else "[REDACTED_EMAIL_1]"
+        return DetectorResult(detected=True, sanitized_text=text.replace(SECRET, placeholder))
+
+
+@contextmanager
+def _routes():
+    """An app with the two call sites, one policy, and a bound and unbound key."""
+    engine = get_engine("sqlite:///:memory:")  # get_engine: foreign keys enforced
+    Base.metadata.create_all(engine)
+    factory = get_session_factory(engine)
+
+    app = FastAPI()
+    app.add_middleware(AuthMiddleware)
+    app.state.session_factory = factory
+    app.state.policy_service = PolicyService(session_factory=factory)
+    app.state.vault_manager = VaultManager(factory, keyring=_ring())
+
+    from app.interaction_log import InteractionLog
+    from app.services.export_service import ExportService
+
+    app.state.interaction_log = InteractionLog(session_factory=factory)
+    app.state.export_service = ExportService(session_factory=factory)
+
+    from app.routes import guard, policies, unredact
+
+    for router in (guard.router, unredact.router, policies.router):
+        app.include_router(router)
+
+    keys = {}
+    with factory() as session:
+        # pol_main is NOT the default: deleting the default is refused, and one
+        # test has to delete the policy that owns a vault. pol_default exists
+        # because an unbound key resolves to it for scanning.
+        session.add(Policy(id="pol_default", name="pol_default", type="application", is_default=True))
+        session.add(Policy(id="pol_main", name="pol_main", type="application"))
+        session.add(Policy(id="pol_other", name="pol_other", type="application"))
+        for policy_id in ("pol_default", "pol_main"):
+            for event_type in ("input", "output"):
+                session.add(RuleSet(policy_id=policy_id, event_type=event_type, detectors={}))
+        for label, role, bound in (
+            ("bound", "api", "pol_main"),
+            ("other", "api", "pol_other"),
+            ("unbound", "api", None),
+            ("admin", "admin", "pol_main"),
+        ):
+            raw = generate_key(prefix="ak")
+            keys[label] = raw
+            session.add(
+                APIKey(
+                    name=label,
+                    key_hash=hash_key(raw),
+                    key_prefix=key_prefix(raw),
+                    role=role,
+                    policy_id=bound,
+                )
+            )
+        session.commit()
+
+    with TestClient(app) as client:
+        # Force the live engine to hold exactly this redactor, so no ML model
+        # loads and the detector's behaviour with and without a vault is the
+        # thing under test.
+        # Both engines: the bound key scans under pol_main, the unbound key
+        # under the default. Installing on only one would leave half the
+        # comparison untested.
+        for policy_id in ("pol_main", "pol_default"):
+            redactor = _Redactor({"action": "redact"})
+            redactor.action = "redact"  # what makes the engine transform, not report
+            engine_obj = app.state.policy_service.get_engine(policy_id, "input")
+            engine_obj._detectors = [("confidential_and_pii_entity", redactor)]
+            engine_obj._construction_failures = []
+        yield client, keys, app
+
+
+def _guard(client, key):
+    return client.post(
+        "/v1/guard_chat_completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "guard_input": {"messages": [{"role": "user", "content": f"mail {SECRET} now"}]},
+            "event_type": "input",
+        },
+    )
+
+
+def _unredact(client, key, token):
+    return client.post(
+        "/v1/unredact",
+        headers={"Authorization": f"Bearer {key}"},
+        json={"fpe_context": token, "redacted_data": "[REDACTED_EMAIL_1]"},
+    )
+
+
+def test_an_unbound_key_is_redacted_but_gets_no_token():
+    """Binding is what buys reversibility, and its absence must not cost
+    protection: the prompt is still redacted, there is simply nothing to
+    reverse it with."""
+    with _routes() as (client, keys, _app):
+        r = _guard(client, keys["unbound"])
+        assert r.status_code == 200
+        body = r.json()
+        assert body["result"]["fpe_context"] is None
+        assert SECRET not in json.dumps(body["result"]["guard_output"])
+
+
+def test_a_bound_key_does_get_a_token():
+    """The other half: without this, "no token" passes against a build that
+    never issues one."""
+    with _routes() as (client, keys, _app):
+        r = _guard(client, keys["bound"])
+        assert r.status_code == 200
+        assert r.json()["result"]["fpe_context"] is not None
+
+
+def test_a_foreign_vault_is_indistinguishable_from_an_absent_one():
+    """Status AND body. A caller able to tell "not yours" from "no such vault"
+    can enumerate other policies' ids."""
+    with _routes() as (client, keys, _app):
+        token = _guard(client, keys["bound"]).json()["result"]["fpe_context"]
+        assert token
+
+        foreign = _unredact(client, keys["other"], token)
+        absent = _unredact(client, keys["other"], _absent_token())
+        assert foreign.status_code == absent.status_code == 404
+        assert foreign.json() == absent.json()
+        assert SECRET not in foreign.text
+
+
+def test_an_unbound_key_cannot_reverse_a_default_policy_vault():
+    """The read side must use the caller's BOUND policy, never the resolved one.
+
+    Guard resolves "bound, else default" to decide how to scan. If unredact
+    resolved the same way, an unbound key would inherit the default policy and
+    reverse every vault that policy owns. The vault here is created by a BOUND
+    key, so testing unbound creation does not cover it.
+    """
+    with _routes() as (client, keys, _app):
+        token = _guard(client, keys["bound"]).json()["result"]["fpe_context"]
+        assert token
+        refused = _unredact(client, keys["unbound"], token)
+        assert refused.status_code == 404
+        assert SECRET not in refused.text
+
+
+def test_the_owning_policy_can_reverse_its_own_vault():
+    """Otherwise every refusal above passes against a build that refuses
+    everyone."""
+    with _routes() as (client, keys, _app):
+        token = _guard(client, keys["bound"]).json()["result"]["fpe_context"]
+        assert _unredact(client, keys["bound"], token).status_code == 200
+
+
+def test_deleting_a_policy_through_the_route_evicts_the_cache():
+    """Read back through the app's OWN manager. A fresh one has an empty cache
+    and passes against no eviction at all."""
+    with _routes() as (client, keys, app):
+        token = _guard(client, keys["bound"]).json()["result"]["fpe_context"]
+        assert token
+        mgr = app.state.vault_manager
+        vault_id = mgr.decode_fpe_context(token)
+        assert mgr.get_vault(vault_id, "pol_main") is not None  # warm
+
+        # A policy cannot be deleted while keys are bound to it, so unbind them
+        # first -- which is the order an operator has to work in anyway.
+        with app.state.session_factory() as session:
+            for key in session.query(APIKey).filter_by(policy_id="pol_main").all():
+                key.policy_id = "pol_default"
+            session.commit()
+
+        r = client.delete("/v1/policies/pol_main", headers={"Authorization": f"Bearer {keys['admin']}"})
+        assert r.status_code == 204
+        assert mgr.get_vault(vault_id, "pol_main") is None
+
+
+def _absent_token() -> str:
+    import uuid
+
+    from app.vault_manager import VaultManager as _VM
+
+    return _VM.encode_fpe_context(None, str(uuid.uuid4()))  # type: ignore[arg-type]
