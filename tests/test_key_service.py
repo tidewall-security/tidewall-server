@@ -38,6 +38,7 @@ def test_create_key(db_session):
     raw_key, api_key = svc.create_key(
         name="test-collector",
         role="api",
+        policy_id=db_session.query(Policy).first().id,
         collector_type="application",
     )
     assert raw_key.startswith("ak_")
@@ -73,7 +74,7 @@ def test_delete_key(db_session):
     from app.services.key_service import KeyService
 
     svc = KeyService(db_session)
-    _, api_key = svc.create_key(name="deletable", role="api")
+    _, api_key = svc.create_key(name="deletable", role="api", policy_id=db_session.query(Policy).first().id)
     svc.delete_key(api_key.id)
     assert db_session.query(APIKey).filter_by(id=api_key.id).first() is None
 

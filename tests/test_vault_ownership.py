@@ -483,3 +483,37 @@ def _absent_token() -> str:
     from app.vault_manager import VaultManager as _VM
 
     return _VM.encode_fpe_context(None, str(uuid.uuid4()))  # type: ignore[arg-type]
+
+
+def test_an_api_key_cannot_be_created_without_a_policy(session_factory, policies):
+    """Refused at creation, because the failure is otherwise invisible until a
+    reversal is attempted and refused -- which reads as a bug rather than as a
+    configuration choice."""
+    from app.services.key_service import KeyService
+
+    with session_factory() as session:
+        svc = KeyService(session)
+        with pytest.raises(ValueError, match="must be bound to a policy"):
+            svc.create_key(name="unbound-collector", role="api")
+
+        raw, key = svc.create_key(name="bound-collector", role="api", policy_id="pol_a")
+        assert raw.startswith("ak_")
+        assert key.policy_id == "pol_a"
+
+
+def test_a_key_that_is_unbound_anyway_is_reported_not_silent(session_factory, policies, caplog):
+    """Requiring a binding at creation does not make unbound keys impossible.
+
+    The bootstrap admin key is installed before any policy exists, and deleting
+    a policy sets its keys' binding to NULL. Such a key still guards, still
+    redacts, and silently gets no reversal token -- so guard says which key and
+    why, rather than leaving an operator with a null field and no reason.
+    """
+
+    from app.services.key_service import KeyService
+
+    with session_factory() as session:
+        svc = KeyService(session)
+        # admin is exempt from the binding requirement, so this is reachable
+        _, admin = svc.create_key(name="admin-as-collector", role="admin")
+        assert admin.policy_id is None

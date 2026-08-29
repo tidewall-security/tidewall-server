@@ -294,6 +294,18 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     if bound_policy_id:
         vault_id, vault = vault_mgr.create_vault()
     else:
+        # Creation now refuses an unbound `api` key, so reaching here means the
+        # bootstrap admin -- installed before any policy exists -- or a key whose
+        # policy was deleted, which sets the binding to NULL. Either way the
+        # caller is about to get a redaction with no token and no explanation,
+        # so name the key and the reason rather than leave a null field to be
+        # puzzled over.
+        report(
+            logger,
+            "warning",
+            f"api key {getattr(request.state, 'api_key_id', None)} has no policy binding, "
+            "so its redactions cannot be reversed; bind it to a policy to enable reversal",
+        )
         vault_id, vault = None, None
 
     # Detectors use synchronous ML inference (torch, ONNX) so we offload
