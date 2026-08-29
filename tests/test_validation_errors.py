@@ -44,13 +44,20 @@ def client():
 
 
 def test_the_real_application_installs_it():
-    """The behaviour tests build a lightweight app. This one proves the handler
-    reaches the app the server actually serves."""
+    """The behaviour tests build a lightweight app. This proves the handler
+    reaches the app the server actually serves.
+
+    Asserting the key is PRESENT proves nothing: a bare FastAPI already
+    registers a RequestValidationError handler, so that assertion passes on any
+    application including one that never called install(). The identity is the
+    only thing that distinguishes ours from the default.
+    """
     from fastapi.exceptions import RequestValidationError
 
     from app.main import create_app
+    from app.validation_errors import validation_error_handler
 
-    assert RequestValidationError in create_app().exception_handlers
+    assert create_app().exception_handlers[RequestValidationError] is validation_error_handler
 
 
 def _post(client, api_key, body):
@@ -95,6 +102,16 @@ def test_the_error_still_says_what_was_wrong(client):
     assert detail[0]["type"]
 
 
+# A body whose error actually carries a `ctx`. Not every validation error does:
+# a wrong type for `guard_input` produces type/loc/msg/input and no ctx at all,
+# so a test using one cannot observe whether ctx is dropped. A rejected
+# `Literal` does carry it.
+CTX_BEARING = {
+    "guard_input": {"messages": [{"role": "user", "content": SECRET}]},
+    "event_type": "nope",
+}
+
+
 def test_no_error_carries_a_value_field(client):
     """`ctx` is dropped wholesale, not audited field by field.
 
@@ -104,8 +121,27 @@ def test_no_error_carries_a_value_field(client):
     field arriving in a future version fails here.
     """
     c, api_key = client
-    for error in _post(c, api_key, {"guard_input": SECRET}).json()["detail"]:
+    detail = _post(c, api_key, CTX_BEARING).json()["detail"]
+    assert detail
+    for error in detail:
         assert set(error) <= {"type", "loc", "msg"}, f"unexpected field: {set(error)}"
+
+
+def test_the_chosen_body_really_produces_a_ctx(client):
+    """Guards the test above. If pydantic stops emitting `ctx` for this input,
+    the ctx assertion silently stops testing anything -- so prove the default
+    handler would have emitted one."""
+    from fastapi.exceptions import RequestValidationError
+
+    from app.models import GuardRequest
+
+    try:
+        GuardRequest(**CTX_BEARING)
+    except Exception as exc:  # pydantic ValidationError
+        assert any("ctx" in error for error in exc.errors()), "this input no longer carries a ctx"
+    else:
+        raise AssertionError("the chosen body is no longer invalid")
+    assert RequestValidationError
 
 
 # --- Malformed shapes refuse, they do not crash -----------------------------
