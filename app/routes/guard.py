@@ -204,13 +204,18 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     if access_rules_result["blocked"]:
         response_time = _now_iso()
         request_id = f"tw_{uuid.uuid4().hex[:16]}"
-        summary = f"Blocked by access rule: {access_rules_result['matched_rules'][-1]['name']}"
-        # Exports get a fixed string. A rule name is an arbitrary control-plane
-        # value — operators put tenant names, customer identifiers and incident
-        # references in them — and it crosses webhook and syslog verbatim, plus
-        # OCSF `message`/`finding_info.desc` and AIDR `Vendor.summary`.
-        # Projecting `detectors` does nothing for this channel.
-        export_summary = "Blocked by access rule"
+        # A rule name is an arbitrary control-plane value — operators put tenant
+        # names, customer identifiers and incident references in them. That was
+        # already the reason exports get a fixed string, the reason the stored
+        # `summary` column was removed outright, and it applies just as much to
+        # the response: this one goes to the caller, who is frequently an end
+        # user reading it in a browser, and who has no relationship with the
+        # operator's naming scheme.
+        #
+        # The caller learns it was blocked and by what kind of thing. Which rule
+        # is the operator's question, answerable from their own logs.
+        summary = "Blocked by access rule"
+        export_summary = summary
 
         response = GuardResponse(
             request_id=request_id,
@@ -224,9 +229,15 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
                 guard_output=None,
                 policy=policy_name,
                 detectors={},
+                # Keyed by position, not by name. The key WAS the rule name,
+                # which put an arbitrary control-plane value in a response body
+                # for every blocked request. Nothing reads this map by name —
+                # neither the dashboard nor the extension — and the caller's
+                # question is "was I blocked and how", not "what did you call
+                # the rule".
                 access_rules={
-                    r["name"]: {"matched": r["matched"], "action": r["action"]}
-                    for r in access_rules_result["matched_rules"]
+                    str(index): {"matched": r["matched"], "action": r["action"]}
+                    for index, r in enumerate(access_rules_result["matched_rules"])
                 },
                 fpe_context=None,
             ),
@@ -556,9 +567,13 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             # browser devtools and the caller's own logging all see it. The
             # caller acts on `guard_output`, not on exact values.
             detectors=project_detectors(scan_result.detectors),
+            # Keyed by position, exactly as the blocked path above. Two sites
+            # build this map and both must stay identical: fixing one would
+            # leave the rule name in every response that was NOT blocked, which
+            # is most of them.
             access_rules={
-                r["name"]: {"matched": r["matched"], "action": r["action"]}
-                for r in access_rules_result["matched_rules"]
+                str(index): {"matched": r["matched"], "action": r["action"]}
+                for index, r in enumerate(access_rules_result["matched_rules"])
             },
             fpe_context=fpe_context,
             degraded=scan_result.degraded,

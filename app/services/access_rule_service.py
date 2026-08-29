@@ -57,7 +57,12 @@ class AccessRuleService:
         )
         self._session.add(rule)
         self._session.commit()
-        logger.info("Created access rule '%s' (sort_order=%d)", name, next_order)
+        # The id, not the name. A rule name is arbitrary operator text -- tenant
+        # names, customer identifiers, incident references -- and an application
+        # log is shipped, aggregated and searched far more widely than the
+        # control plane that set it. The id resolves through the API for anyone
+        # entitled to ask.
+        logger.info("Created access rule %s (sort_order=%d)", rule.id, next_order)
         return rule
 
     def update_rule(
@@ -94,4 +99,4 @@ class AccessRuleService:
             raise ValueError(f"Access rule {rule_id} not found")
         self._session.delete(rule)
         self._session.commit()
-        logger.info("Deleted access rule '%s'", rule.name)
+        logger.info("Deleted access rule %s", rule.id)
