@@ -187,6 +187,25 @@ all — the routes are simply not registered.
 | `DB_URL` | `sqlite:///data/tidewall.db` | SQLAlchemy database URL |
 | `POLICY_FILE` | `policy.yaml` | YAML policy file for first-boot seeding |
 | `LOG_LEVEL` | `info` | Logging verbosity |
+| `VAULT_ENCRYPTION_KEYS` | unset | `id:base64` entries, comma separated. Enables reversible redaction |
+| `VAULT_ENCRYPTION_CURRENT` | unset | Which key id new vaults are sealed under |
+
+### Enabling reversible redaction
+
+Both variables must be set; either alone is a startup error rather than a
+silent downgrade. Material is 32 raw bytes, base64 encoded:
+
+```bash
+python -c "import os,base64; print('k1:' + base64.b64encode(os.urandom(32)).decode())"
+
+export VAULT_ENCRYPTION_KEYS='k1:8Xb2...=='
+export VAULT_ENCRYPTION_CURRENT='k1'
+```
+
+Key ids are operator-chosen labels and **must stay stable** — every stored row
+names the id it was sealed under. To rotate, add the new key alongside the old,
+repoint `VAULT_ENCRYPTION_CURRENT` at it, and keep the previous key listed for
+at least the vault TTL. Nothing is re-encrypted; old rows simply expire.
 
 ---
 
@@ -267,20 +286,37 @@ credential you cannot see.
 
 ---
 
-## Redaction Methods
+## Redaction and Reversal
 
-Per-entity-type rules — each entity type within a detector can have its own action:
+### What the model actually receives
 
-| Method | Action Label | Example | Reversible |
-|--------|-------------|---------|------------|
-| Replacement | `redacted:replaced` | `234-56-7890` → `<US_SSN>` | No |
-| Mask | `redacted:masked` | `234-56-7890` → `***********` | No |
-| Partial Mask | `redacted:masked` | `234-56-7890` → `***-**-7890` | No |
-| Hash | `redacted:hashed` | `234-56-7890` → `a1b2c3d4e5f6` | No |
-| Defang | `defanged` | `http://evil.com` → `http://evil[.]com` | No |
+**Every detected entity is replaced with a typed, numbered placeholder** —
+`[REDACTED_EMAIL_ADDRESS_1]`, `[REDACTED_US_SSN_2]` — and that is what is sent
+onward, whatever redaction method the policy names.
+
+The numbering matters: two mentions of the same value in one prompt get the same
+placeholder, and two different values get different ones. The model can still
+reason about "the first email" versus "the second" without seeing either.
+
+### Redaction methods change the REPORT, not the prompt
+
+This is the part that surprises people, so it is worth stating plainly. The
+per-entity-type method controls how the value appears in findings, exports and
+the dashboard. It does **not** change the text the model receives.
+
+| Method | Action label | Reported as | Sent to the model |
+|---|---|---|---|
+| Replacement | `redacted:replaced` | `<US_SSN>` | `[REDACTED_US_SSN_1]` |
+| Mask | `redacted:masked` | `***********` | `[REDACTED_US_SSN_1]` |
+| Partial Mask | `redacted:masked` | `***-**-7890` | `[REDACTED_US_SSN_1]` |
+| Hash | `redacted:hashed` | `a1b2c3d4e5f6` | `[REDACTED_US_SSN_1]` |
+| Defang | `defanged` | `http://evil[.]com` | `[REDACTED_URL_1]` |
+
+Choose a method for what an operator should see in a finding — a masked tail is
+useful for recognising a card, a hash is useful for correlating without
+disclosing. None of them weakens or strengthens what the model is shown.
 
 ```yaml
-# Per-entity-type rules in policy config
 confidential_and_pii_entity:
   enabled: true
   action: redact
@@ -294,11 +330,37 @@ confidential_and_pii_entity:
     - type: EMAIL_ADDRESS
       action: hash
       salt: "my-salt"
-    - type: IP_ADDRESS
-      action: redact
 ```
 
----
+### Reversal
+
+Because the placeholder is a token rather than a mask, redaction is
+**reversible** — the mapping from placeholder to original is kept server-side and
+`POST /v1/unredact` exchanges one for the other.
+
+This is tokenisation, not encryption. The placeholder has no mathematical
+relationship to the value it stands for, so it discloses nothing on its own; the
+mapping is the only way back. That is the deliberate alternative to
+format-preserving encryption, whose output is reversible ciphertext and stays in
+scope for most compliance regimes.
+
+The mapping is:
+
+- **encrypted at rest** with AES-256-GCM under a keyring, with the row's own
+  identity bound as associated data so a stored blob cannot be moved to another
+  row or given a longer life
+- **short-lived** — one hour — and **deleted**, not merely refused, when it expires
+- **off by default.** Set `VAULT_ENCRYPTION_KEYS` and `VAULT_ENCRYPTION_CURRENT`
+  to enable it. Without them, redaction still runs and is simply irreversible:
+  the server will not store the mapping anywhere it cannot protect it.
+
+If vault retention cannot be scheduled, reversible redaction **disables itself**
+and says so. A deployment that cannot promise to delete the plaintext mapping
+should not be collecting it.
+
+Reversal is an `api`-role operation and is **refused to device credentials**: an
+enrolled browser extension holds the `api` role in order to call the guard, and
+that must not also let it reverse redactions belonging to other devices.
 
 ## Event Export (OCSF)
 
