@@ -98,19 +98,22 @@ def _is_a_body_error(response) -> bool:
     )
 
 
-def test_there_is_no_request_validation_error_handler():
-    """The cause. With one, the echo would not happen."""
+def test_a_request_validation_error_handler_exists():
+    """The cause, now removed.
+
+    This asserted there was NO handler, and carried a tripwire: with one, the
+    echo would not happen and these records should be reconsidered. The tripwire
+    fired. The handler keeps `loc`, `type` and `msg` -- everything a caller needs
+    to fix the request -- and drops the value.
+    """
     import pathlib
 
-    handlers = []
-    for path in pathlib.Path("app").rglob("*.py"):
-        text = path.read_text()
-        if "RequestValidationError" in text and "exception_handler" in text:
-            handlers.append(str(path))
-    assert not handlers, (
-        f"a RequestValidationError handler now exists ({handlers}); the echo may "
-        "be fixed and these expected-failure records should be reconsidered"
-    )
+    handlers = [
+        str(path)
+        for path in pathlib.Path("app").rglob("*.py")
+        if "RequestValidationError" in (text := path.read_text()) and "exception_handler" in text
+    ]
+    assert handlers, "the handler is gone; the echo is back"
 
 
 @pytest.mark.parametrize("family", FAMILIES, ids=lambda f: f.name)
@@ -149,16 +152,21 @@ def test_the_submitted_value_is_echoed_before_any_detector_runs(client, family):
         )
 
 
-def test_the_echo_is_in_the_input_field_specifically(client):
-    """The surface_path names `$.detail[*].input`, so that is what is checked."""
+def test_no_field_of_the_error_carries_the_submitted_value(client):
+    """The surface_path named `$.detail[*].input`. Nothing is there now, and
+    nothing is anywhere else in the entry either."""
     response = client.post(
         "/v1/guard_chat_completions",
         json={"messages": CANARY},
         headers={"Authorization": f"Bearer {BOOTSTRAP_KEY}"},
     )
     detail = json.loads(response.text)["detail"]
-    inputs = [json.dumps(entry.get("input")) for entry in detail]
-    assert any(CANARY in value for value in inputs), detail
+    # No entry carries the submitted value, under `input` or any other key. The
+    # assertion is over the WHOLE entry rather than over `input` alone, so a
+    # future pydantic field carrying the value fails here rather than leaking.
+    assert CANARY not in json.dumps(detail), detail
+    assert detail, "the caller must still be told which field was wrong"
+    assert all(set(entry) <= {"type", "loc", "msg"} for entry in detail), detail
 
 
 def test_the_canary_never_reached_a_detector(client):

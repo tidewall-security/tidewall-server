@@ -289,8 +289,12 @@ def test_production_writes_the_blob_column_with_sqlites_blob_storage_class(tmp_p
     db = tmp_path / "vault.db"
     create_vault_via_production(db)
 
-    assert vault_rows(db) == 1, "production wrote no vault row"
-    assert stored_type(db, *BLOB_COLUMN) == "blob"
+    # `create_vault` writes NOTHING now, which is the fix rather than a
+    # regression. It used to persist the vault while it was still empty, so
+    # every stored row held `{"placeholders": {}, "counters": {}}` and a reader
+    # in another process recovered nothing. The row is written by `save`, once
+    # there is a mapping worth writing and a keyring to seal it with.
+    assert vault_rows(db) == 0, "create_vault is persisting again, before anything populates the vault"
 
 
 def test_a_neutered_production_writer_fails_this(tmp_path: Path, monkeypatch):
@@ -334,10 +338,22 @@ def test_no_production_path_writes_a_canary_into_the_blob_column(tmp_path: Path)
     ), "the canary is in the database file although no production path writes it"
 
 
-def test_the_persisted_vault_is_the_empty_serialisation(tmp_path: Path):
-    """Pins the reason above, so a change to it fails loudly."""
+def test_the_persisted_vault_is_populated_and_sealed(tmp_path: Path):
+    """Pins the reason above, so a change to it fails loudly.
+
+    This asserted the stored blob WAS the empty serialisation -- the defect,
+    recorded as a fact. What is stored now is the populated vault, sealed: not
+    the empty form, and not plaintext either.
+    """
     from app.vault import TidewallVault
 
+    from tests.release.persistence import save_vault_via_production
+
     db = tmp_path / "vault.db"
-    create_vault_via_production(db)
-    assert vault_blob(db) == TidewallVault().to_bytes()
+    save_vault_via_production(db)
+
+    blob = vault_blob(db)
+    assert blob, "nothing was stored"
+    assert blob != TidewallVault().to_bytes(), "the empty serialisation is stored again"
+    assert b"placeholders" not in blob, "the mapping is stored in the clear"
+    assert stored_type(db, *BLOB_COLUMN) == "blob"

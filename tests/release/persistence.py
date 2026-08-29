@@ -188,6 +188,41 @@ def live_cells_holding(db: Path, value: str) -> set[tuple[str, int, str]]:
 BLOB_COLUMN = ("vaults", "data")
 
 
+def save_vault_via_production(db: Path) -> str:
+    """Write a POPULATED vault the way production does: create, store, save.
+
+    `create_vault` no longer touches the database -- persisting an empty vault
+    was the defect -- so a test about what is stored has to drive `save`, which
+    is the only writer now.
+    """
+    import base64
+    import secrets
+
+    from sqlalchemy.orm import sessionmaker as _sessionmaker
+
+    from app.config import Settings
+    from app.vault_crypto import Keyring
+    from app.vault_manager import VaultManager
+
+    engine = sa.create_engine(f"sqlite:///{db}")
+    Base.metadata.create_all(engine)
+    with _sessionmaker(bind=engine)() as session:
+        session.add(Policy(id="pol_capture", name="pol_capture", type="application"))
+        session.commit()
+
+    ring = Keyring.from_settings(
+        Settings(
+            VAULT_ENCRYPTION_KEYS=f"k1:{base64.b64encode(secrets.token_bytes(32)).decode()}",
+            VAULT_ENCRYPTION_CURRENT="k1",
+        )
+    )
+    manager = VaultManager(_sessionmaker(bind=engine), keyring=ring)
+    vault_id, vault = manager.create_vault()
+    vault.store("EMAIL_ADDRESS", "someone@example.com")
+    assert manager.save(vault_id, vault, "pol_capture") is True
+    return vault_id
+
+
 def create_vault_via_production(db: Path) -> tuple[str, object]:
     """Write the BLOB column THE WAY PRODUCTION DOES.
 

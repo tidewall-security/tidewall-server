@@ -129,27 +129,36 @@ def test_the_rule_name_is_a_key_in_the_result(guarded):
         )
 
 
-def test_the_two_surfaces_are_independent(guarded):
-    """They are separate records because they are separate surfaces.
+def test_neither_surface_carries_the_rule_name(guarded):
+    """They are separate records because they are separate surfaces, and a fix
+    to one must not be credited to the other -- so each is asserted on its own
+    terms, in the direction they now hold.
 
-    A fix to one must not be credited to the other, so this asserts the value
-    is present in each on its own terms.
+    The `access_rules` map was KEYED by rule name, which put the value in every
+    blocked response and in every allowed one where a rule matched without
+    stopping. It is keyed by position now.
     """
     body = guarded.json()
-    assert CANARY in body.get("summary", "")
-    assert any(CANARY in str(k) for k in (body["result"].get("access_rules") or {}))
+    assert CANARY not in body.get("summary", "")
+    assert not any(CANARY in str(k) for k in (body["result"].get("access_rules") or {}))
+    # And the caller still learns what happened, or emptying the response would
+    # satisfy the two assertions above.
+    assert "access rule" in body.get("summary", "").lower()
 
 
-def test_the_export_summary_is_deliberately_fixed():
-    """The contrast that makes this a finding rather than a preference.
+def test_the_response_summary_is_now_fixed_too():
+    """The contrast that made this a finding rather than a preference.
 
-    Exports already get a fixed string for exactly this reason; the guard
-    response does not.
+    Exports already got a fixed string for exactly this reason and the guard
+    response did not, which is what made the difference a defect rather than a
+    choice. Both are fixed, and they are the same string -- written once and
+    used twice, so they cannot drift back apart.
     """
     import pathlib
 
     source = pathlib.Path("app/routes/guard.py").read_text()
-    assert 'export_summary = "Blocked by access rule"' in source
+    assert 'summary = "Blocked by access rule"' in source
+    assert "export_summary = summary" in source
 
 
 # --- record 1 of 3: the creation log ----------------------------------------
