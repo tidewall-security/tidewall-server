@@ -46,7 +46,7 @@ def _app(vault: TidewallVault | None):
     app.state.session_factory = Session
 
     class _Vaults:
-        def get_vault(self, _vault_id):
+        def get_vault(self, _vault_id, _policy_id):
             return vault
 
     app.state.vault_manager = _Vaults()
@@ -58,7 +58,17 @@ def _app(vault: TidewallVault | None):
     raw = generate_key(prefix="ak")
     session = Session()
     session.add(Policy(id="policy-a", name="policy-a", type="application"))
-    session.add(APIKey(name="api", key_hash=hash_key(raw), key_prefix=key_prefix(raw), role="api"))
+    # Bound, as a collector key is in a deployment. Reversal is scoped to the
+    # policy that created the vault, and an unbound key owns nothing.
+    session.add(
+        APIKey(
+            name="api",
+            key_hash=hash_key(raw),
+            key_prefix=key_prefix(raw),
+            role="api",
+            policy_id="policy-a",
+        )
+    )
     session.commit()
     session.close()
     return TestClient(app), raw

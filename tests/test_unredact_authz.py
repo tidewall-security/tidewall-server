@@ -40,7 +40,7 @@ def env():
     app.state.session_factory = Session
 
     class _Vaults:
-        def get_vault(self, _vault_id):
+        def get_vault(self, _vault_id, _policy_id):
             return None
 
     app.state.vault_manager = _Vaults()

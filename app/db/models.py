@@ -320,6 +320,23 @@ class Vault(Base):
     data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    #: The policy of the key that created this vault, and the only policy whose
+    #: credentials may reverse it. Not the policy the guard *resolved* -- that
+    #: falls back to the default, which would put every unbound key's vaults
+    #: into one shared pool that moves whenever the default changes.
+    #:
+    #: The foreign key is what makes ownership an invariant rather than a
+    #: convention: a guard request that captured its policy before an
+    #: administrator deleted it resumes afterwards and tries to persist, and
+    #: nothing in that request re-checks the policy. CASCADE rather than
+    #: RESTRICT so retention never becomes a reason a policy cannot be deleted.
+    policy_id: Mapped[str] = mapped_column(
+        String, ForeignKey("policies.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    #: Attribution only, never the authorisation check. Guarding from a
+    #: collector key and reversing from a back-office tool is ordinary, and key
+    #: rotation must not orphan every live vault.
+    created_by_key_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class ActivityLog(Base):
