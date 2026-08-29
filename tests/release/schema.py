@@ -45,6 +45,15 @@ from dataclasses import dataclass
 REFERENTIAL_ACTIONS: frozenset[tuple[str, str, str, str, str, str]] = frozenset(
     {
         ("access_rules", "rule_set_id", "rule_sets", "id", "NO ACTION", "CASCADE"),
+        # A device's refresh credential dies with the device. Leaving it would
+        # keep a credential addressed to a device that no longer exists.
+        ("device_refresh_tokens", "device_id", "devices", "id", "NO ACTION", "CASCADE"),
+        # A vault dies with the policy that owns it. The vault holds the
+        # placeholder-to-original mapping, and once its policy is gone no
+        # credential can resolve that policy -- so the row would be unreachable
+        # plaintext. CASCADE rather than RESTRICT so retention never becomes a
+        # reason a policy cannot be deleted.
+        ("vaults", "policy_id", "policies", "id", "NO ACTION", "CASCADE"),
         ("access_tokens", "device_id", "devices", "id", "NO ACTION", "CASCADE"),
         ("interaction_contents", "interaction_id", "interactions", "id", "NO ACTION", "CASCADE"),
         ("rule_sets", "policy_id", "policies", "id", "NO ACTION", "CASCADE"),

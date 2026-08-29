@@ -80,16 +80,21 @@ def test_every_referential_action_is_pinned(conn):
     assert all(count == 1 for count in observed.values()), observed
 
 
-def test_ten_relationships_of_which_six_write_on_delete(conn):
+def test_twelve_relationships_of_which_eight_write_on_delete(conn):
     """The count is stated because 'exactly the six' was ambiguous.
 
     RESTRICT and NO ACTION are inside the pin and outside the cascade map:
     pinned because a change to one is schema drift worth failing on, excluded
     because neither modifies a child value.
+
+    Ten became twelve when device refresh credentials and vault ownership each
+    added a CASCADE. Both are deliberate and both are argued at the pin. This
+    test failing is the pin working: a relationship arriving without a decision
+    about what happens to its children is exactly what it is for.
     """
     observed = referential_actions(conn)
-    assert len(observed) == 10
-    assert len([a for a in observed if a[5] in WRITING_ACTIONS]) == 6
+    assert len(observed) == 12
+    assert len([a for a in observed if a[5] in WRITING_ACTIONS]) == 8
 
 
 def test_on_update_is_pinned_too(conn):
