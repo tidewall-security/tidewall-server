@@ -183,3 +183,57 @@ def test_protected_route_rejects_every_construction_path():
         with pytest.raises(HTTPException) as exc:
             asyncio.run(require_role(role_name)(request))
         assert exc.value.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# A declared setting an operator can set and nothing reads
+#
+# Three of fifteen were in that state: PREWARM (set by CI and by bench/, read
+# by nothing), MAX_PENDING_PER_TOKEN (shadowed by an identical module constant,
+# so the environment variable was inert) and PENDING_DEVICE_TTL_HOURS (named a
+# reaper that was never scheduled).
+#
+# PREWARM is the one that shows why this needs a test rather than care. CI set
+# it with a comment crediting it for skipping model loading; the job is fast
+# because detectors are constructed lazily. A knob that appears to work because
+# something ELSE produces the effect is invisible until that something changes.
+
+
+def test_every_declared_setting_is_read_somewhere():
+    """A field an operator can set must reach code that reads it.
+
+    Grep-based, and deliberately so: the alternative is to trust that a name
+    appearing in `Settings` means something consumes it, which is the exact
+    assumption that was false three times.
+
+    Matching is on ATTRIBUTE ACCESS -- `.FIELD` -- not on the bare name.
+    `MAX_PENDING_PER_TOKEN` matched a plain name search all along, because
+    `device_service` defined its own constant called the same thing. A name
+    search would have reported this file clean while the setting did nothing.
+    """
+    import pathlib
+    import re
+
+    from app.config import Settings
+
+    app_dir = pathlib.Path(__file__).resolve().parents[1] / "app"
+    # config.py is INCLUDED. `PREF64` is consumed by a computed field on the
+    # settings object itself (`parse_pref64(self.PREF64)`), which is a genuine
+    # read, and excluding the file would report it dead. Including it costs
+    # nothing: the three fields that really were dead had no attribute access
+    # anywhere, config.py included. The declaration `PREF64: str | None = None`
+    # is not an attribute access, so it does not match.
+    sources = {path: path.read_text() for path in app_dir.rglob("*.py") if ".venv" not in str(path)}
+    assert len(sources) > 50, f"only {len(sources)} sources scanned; the walk is wrong"
+
+    unread = []
+    for field in Settings.model_fields:
+        pattern = re.compile(rf"\.{re.escape(field)}\b")
+        if not any(pattern.search(text) for text in sources.values()):
+            unread.append(field)
+
+    assert not unread, (
+        f"declared in Settings and read by nothing in app/: {sorted(unread)}. "
+        "Either wire it up or delete it -- a setting an operator can set and "
+        "nothing consumes is a promise the deployment cannot keep."
+    )

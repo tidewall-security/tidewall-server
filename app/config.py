@@ -26,7 +26,6 @@ class Settings(BaseModel):
     POLICY_FILE: str = "policy.yaml"
     DB_URL: str = "sqlite:///data/tidewall.db"
     LOG_LEVEL: str = "info"
-    PREWARM: bool = True
     # Bind address and port. Launch configuration, not an authorization
     # control: authentication is unconditional, so where the server listens no
     # longer decides who may administer it.
