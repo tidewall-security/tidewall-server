@@ -212,6 +212,10 @@ async def enrol_device(body: DeviceEnrolRequest, request: Request, response: Res
             ext_version=body.extension_version,
             fingerprint=body.fingerprint,
             recovery_secret=body.recovery_secret,
+            # The deployment's quota, not the module default. Read off app
+            # state for the same reason the enrolment rate limit is: settings
+            # are resolved once at startup, never per request.
+            max_pending=getattr(request.app.state, "max_pending_per_token", None),
         )
         if result["status"] != "Success":
             status_code = _ENROL_FAILURE_STATUS.get(result["status"])

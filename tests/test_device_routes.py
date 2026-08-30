@@ -1139,3 +1139,70 @@ def test_the_schema_publishes_the_reason_taxonomy_itself():
 
     assert set(_reason_enum(schema, "EnrolFailure")) == set(_ENROL_FAILURE_STATUS)
     assert set(_reason_enum(schema, "RefreshFailure")) == set(_REFRESH_FAILURE_STATUS)
+
+
+# ---------------------------------------------------------------------------
+# The route's half of the quota wiring
+#
+# Two mutations survived the first pass here: removing the route's `max_pending`
+# argument, and removing the line in `create_app` that publishes it. Both left
+# 56 tests green, because the service-level test calls `enrol_device` directly
+# and the route tests hand-build their app.
+#
+# That is the same defect this file keeps finding one layer down: the mechanism
+# worked and nothing connected it. A service test cannot see whether the route
+# passes the value, and a hand-built app cannot see whether startup sets it.
+
+
+def test_the_route_enforces_the_quota_it_is_configured_with(setup):
+    """Over HTTP, with the app state a deployment would have.
+
+    Two, not the default fifty, and the third enrolment must be refused --
+    which holds only if the route reads the state and passes it down.
+    """
+    client, admin_key, _ = setup
+    client.app.state.max_pending_per_token = 2
+
+    # NOT `_create_rt_token`: that helper sets `pre_authorized`, and the quota
+    # branch only runs for tokens that leave devices pending. Using it made
+    # this test pass three enrolments and look like broken wiring.
+    rt_token = client.post(
+        "/v1/registration-tokens",
+        json={
+            "name": "configured-quota",
+            "policy_id": TEST_POLICY_ID,
+            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        },
+        headers={"Authorization": f"Bearer {admin_key}"},
+    ).json()["token"]
+
+    for n in range(2):
+        assert _enrol_device(client, rt_token, installation_id=_iid(f"quota{n}")).status_code == 201
+
+    over = _enrol_device(client, rt_token, installation_id=_iid("quota-over"))
+
+    assert over.status_code == 429
+    assert over.json()["reason"] == "PendingQuotaExceeded"
+
+
+def test_startup_publishes_the_configured_quota(tmp_path):
+    """The other half, through the real create_app.
+
+    A hand-built app would test the test's wiring. This asserts the value an
+    operator sets in the environment reaches the state the route reads --
+    which is the entire claim of the setting existing.
+    """
+    import os
+    from unittest.mock import patch
+
+    from app.main import create_app
+
+    env = {
+        "DB_URL": f"sqlite:///{tmp_path / 'quota.db'}",
+        "MAX_PENDING_PER_TOKEN": "7",
+        "BOOTSTRAP_KEY": "ak_test_bootstrap_key_0000000000001",
+    }
+    with patch.dict(os.environ, env, clear=False):
+        app = create_app()
+
+    assert app.state.max_pending_per_token == 7

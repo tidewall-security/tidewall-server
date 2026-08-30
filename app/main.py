@@ -451,6 +451,7 @@ def create_app() -> FastAPI:
     # attributes are the class and not its values.
     app_settings = Settings.from_env()
     app.state.enrolment_limits = EnrolmentLimits(app_settings.ENROLMENT_RATE_PER_MINUTE)
+    app.state.max_pending_per_token = app_settings.MAX_PENDING_PER_TOKEN
     app.state.trusted_proxy_hops = app_settings.TRUSTED_PROXY_HOPS
     app.add_middleware(EnrolmentRateLimitMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)

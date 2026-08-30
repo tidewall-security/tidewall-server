@@ -367,3 +367,28 @@ def test_the_limiter_runs_outside_authentication():
     assert installed.index(EnrolmentRateLimitMiddleware) < installed.index(
         AuthMiddleware
     ), "the limiter runs inside auth, so a flood costs a credential lookup each"
+
+
+def test_the_configured_quota_is_the_one_that_applies(db_session):
+    """MAX_PENDING_PER_TOKEN was declared in Settings and read by nothing.
+
+    The enrolment query compared against a module constant of the same name
+    and the same value, so the two agreed and the environment variable did
+    nothing -- silently, with no error and no log line.
+
+    Pinning the default proves nothing: a hard-coded value gives that too.
+    This configures a quota of 2 and asserts the THIRD enrolment is refused,
+    which holds only if the passed value reaches the comparison.
+    """
+    raw, _rt = _key(db_session)
+    service = DeviceService(db_session)
+
+    for n in range(2):
+        result = service.enrol_device(rt_token_hash=hash_key(raw), installation_id=f"cfg{n}", max_pending=2, **_META)
+        assert result["status"] == "Success", result
+
+    refused = service.enrol_device(rt_token_hash=hash_key(raw), installation_id="cfg-over", max_pending=2, **_META)
+
+    assert refused["status"] == "PendingQuotaExceeded", refused
+    # Two, not the default fifty: the quota that applied was the one passed in.
+    assert db_session.query(Device).count() == 2

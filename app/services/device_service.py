@@ -236,8 +236,16 @@ class DeviceService:
         ext_version: str,
         fingerprint: str | None = None,
         recovery_secret: str | None = None,
+        max_pending: int | None = None,
     ) -> dict[str, Any]:
         """Enrol a NEW device against a registration token.
+
+        `max_pending` is the deployment's per-token quota. It is a parameter
+        because `Settings.MAX_PENDING_PER_TOKEN` was declared and read by
+        nothing: this comparison used the module constant of the same name and
+        the same value, so the two agreed and nobody noticed the environment
+        variable did nothing at all. The constant remains the default, which is
+        the value Settings declares.
 
         Enrolment only ever creates. It never selects an existing row, because
         the only values a caller can offer at this point — a shared onboarding
@@ -324,6 +332,7 @@ class DeviceService:
                 return {"status": "RegistrationTokenExhausted", "result": None}
 
         if not rt.pre_authorized:
+            limit = max_pending if max_pending is not None else MAX_PENDING_PER_TOKEN
             # Conditional claim, same shape as the use counter: counting pending
             # rows and then inserting is check-then-act, and SQLite serialises
             # the writes but not the reads that preceded them.
@@ -331,7 +340,7 @@ class DeviceService:
                 self._session.query(RegistrationToken)
                 .filter(
                     RegistrationToken.id == rt.id,
-                    RegistrationToken.pending_count < MAX_PENDING_PER_TOKEN,
+                    RegistrationToken.pending_count < limit,
                 )
                 .update(
                     {"pending_count": RegistrationToken.pending_count + 1},
