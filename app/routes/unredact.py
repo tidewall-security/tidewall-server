@@ -40,6 +40,15 @@ async def unredact(body: UnredactRequest, request: Request) -> UnredactResponse:
     # second identifier for it. It used to be minted after the base64 decode, so
     # a malformed context had no attempt id at all.
     request_id = f"tw_{uuid.uuid4().hex[:16]}"
+    # Published so the middleware records the SAME attempt this handler is
+    # serving. Deleting this line breaks no test and cannot: a refusal response
+    # carries no request id, so whether the two agree is not observable through
+    # the API, and the middleware mints its own when the state is absent.
+    #
+    # Kept because one attempt should have one identifier the moment that
+    # becomes visible -- if the id is ever added to an error body or an
+    # application log, two ids for one request is a correlation bug that would
+    # have to be found rather than avoided.
     request.state.unredact_request_id = request_id
     request_time = _now_iso()
 
