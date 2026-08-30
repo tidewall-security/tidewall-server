@@ -35,14 +35,27 @@ router = APIRouter()
     dependencies=[Depends(require_role("api")), Depends(deny_device_credentials)],
 )
 async def unredact(body: UnredactRequest, request: Request) -> UnredactResponse:
-    # Decode fpe_context to determine type
+    # Minted BEFORE the first exit, and published on request.state so the audit
+    # middleware records the SAME attempt this handler is serving rather than a
+    # second identifier for it. It used to be minted after the base64 decode, so
+    # a malformed context had no attempt id at all.
+    request_id = f"tw_{uuid.uuid4().hex[:16]}"
+    # Published so the middleware records the SAME attempt this handler is
+    # serving. Deleting this line breaks no test and cannot: a refusal response
+    # carries no request id, so whether the two agree is not observable through
+    # the API, and the middleware mints its own when the state is absent.
+    #
+    # Kept because one attempt should have one identifier the moment that
+    # becomes visible -- if the id is ever added to an error body or an
+    # application log, two ids for one request is a correlation bug that would
+    # have to be found rather than avoided.
+    request.state.unredact_request_id = request_id
+    request_time = _now_iso()
+
     try:
         ctx_json = json.loads(base64.b64decode(body.fpe_context))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid fpe_context") from None
-
-    request_time = _now_iso()
-    request_id = f"tw_{uuid.uuid4().hex[:16]}"
 
     # The FPE branch accepted a caller-supplied algorithm, tweak and radix and
     # decrypted under a single global key — an unauthenticated decryption
@@ -87,7 +100,46 @@ async def unredact(body: UnredactRequest, request: Request) -> UnredactResponse:
             detail="Vault holds no redaction mapping; the original data cannot be recovered",
         )
 
-    restored = vault.unredact(str(body.redacted_data))
+    submitted = str(body.redacted_data)
+    restored = vault.unredact(submitted)
+
+    # DISCLOSED, not merely "returned 200". `unredact` replaces the placeholders
+    # it finds and returns the text unchanged when it finds none -- a caller can
+    # hold a valid vault id and submit text containing none of its placeholders,
+    # and that request succeeds having revealed nothing. Recording it as a
+    # reversal would attest to a plaintext recovery that did not happen, and an
+    # audit trail that overstates is worse than one that is merely incomplete.
+    disclosed = restored != submitted
+
+    # A disclosure is recorded before it leaves, or it does not leave. The
+    # plaintext exists here and has NOT yet reached the caller, which is the only
+    # moment this choice is available -- middleware sees the response with the
+    # data already in it. The vault outlives this request, so a caller who
+    # retries after the database recovers gets their data.
+    #
+    # When nothing was disclosed the record is best-effort, like any other
+    # outcome that revealed nothing: refusing here would deny a caller a response
+    # that gave them nothing anyway.
+    from app.services.unredact_audit import record_unredact
+
+    # Claim the record for this attempt BEFORE trying it. One attempt gets at
+    # most one row: if this write fails the route answers 500 and the middleware
+    # must not add a second, contradictory row. In the worst case -- a commit
+    # that succeeded and then raised -- an `unredact` row is already on disk
+    # while the plaintext was withheld, and a middleware `unredact_refused`
+    # beside it would have the trail asserting both.
+    #
+    # A failed write here is therefore an unrecorded attempt, logged at error.
+    # That is the honest outcome: nothing was disclosed, so there is nothing the
+    # trail is failing to attest.
+    request.state.unredact_recorded = True
+
+    if not record_unredact(request, request_id, ok=disclosed) and disclosed:
+        raise HTTPException(
+            status_code=500,
+            detail="the reversal could not be recorded, so it was not completed",
+        )
+
     return UnredactResponse(
         request_id=request_id,
         request_time=request_time,
