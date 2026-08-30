@@ -421,6 +421,14 @@ def create_app() -> FastAPI:
     # requests (which have no Authorization header) before auth runs.
     from app.security_headers import SecurityHeadersMiddleware
 
+    # Added BEFORE auth, which makes it the INNER of the two: Starlette treats
+    # the last-added as outermost, so authentication runs first and every audit
+    # row has an actor. An authentication failure is refused before this and
+    # stays out of scope -- there is no authenticated caller to name, and naming
+    # one would mean recording a credential this row never carries.
+    from app.unredact_audit_middleware import UnredactAuditMiddleware
+
+    app.add_middleware(UnredactAuditMiddleware)
     app.add_middleware(AuthMiddleware)
     # Added AFTER auth, so it runs OUTSIDE it: a flood must be refused before
     # any credential lookup, not after one. Starlette processes middleware in

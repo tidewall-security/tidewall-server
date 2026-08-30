@@ -35,14 +35,18 @@ router = APIRouter()
     dependencies=[Depends(require_role("api")), Depends(deny_device_credentials)],
 )
 async def unredact(body: UnredactRequest, request: Request) -> UnredactResponse:
-    # Decode fpe_context to determine type
+    # Minted BEFORE the first exit, and published on request.state so the audit
+    # middleware records the SAME attempt this handler is serving rather than a
+    # second identifier for it. It used to be minted after the base64 decode, so
+    # a malformed context had no attempt id at all.
+    request_id = f"tw_{uuid.uuid4().hex[:16]}"
+    request.state.unredact_request_id = request_id
+    request_time = _now_iso()
+
     try:
         ctx_json = json.loads(base64.b64decode(body.fpe_context))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid fpe_context") from None
-
-    request_time = _now_iso()
-    request_id = f"tw_{uuid.uuid4().hex[:16]}"
 
     # The FPE branch accepted a caller-supplied algorithm, tweak and radix and
     # decrypted under a single global key — an unauthenticated decryption
@@ -88,6 +92,20 @@ async def unredact(body: UnredactRequest, request: Request) -> UnredactResponse:
         )
 
     restored = vault.unredact(str(body.redacted_data))
+
+    # The disclosure is recorded before it leaves, or it does not leave. The
+    # plaintext exists here and has NOT yet reached the caller, which is the only
+    # moment this choice is available -- middleware sees the response with the
+    # data already in it. The vault outlives this request, so a caller who
+    # retries after the database recovers gets their data.
+    from app.services.unredact_audit import record_unredact
+
+    if not record_unredact(request, request_id, ok=True):
+        raise HTTPException(
+            status_code=500,
+            detail="the reversal could not be recorded, so it was not completed",
+        )
+
     return UnredactResponse(
         request_id=request_id,
         request_time=request_time,
