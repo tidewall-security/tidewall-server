@@ -40,14 +40,10 @@ def upgrade() -> None:
     # changes what happens when a policy is deleted, not what any row holds.
     with op.batch_alter_table("api_keys", naming_convention=_NAMING) as batch:
         batch.drop_constraint("fk_api_keys_policy_id", type_="foreignkey")
-        batch.create_foreign_key(
-            "fk_api_keys_policy_id", "policies", ["policy_id"], ["id"], ondelete="RESTRICT"
-        )
+        batch.create_foreign_key("fk_api_keys_policy_id", "policies", ["policy_id"], ["id"], ondelete="RESTRICT")
 
 
 def downgrade() -> None:
     with op.batch_alter_table("api_keys", naming_convention=_NAMING) as batch:
         batch.drop_constraint("fk_api_keys_policy_id", type_="foreignkey")
-        batch.create_foreign_key(
-            "fk_api_keys_policy_id", "policies", ["policy_id"], ["id"], ondelete="SET NULL"
-        )
+        batch.create_foreign_key("fk_api_keys_policy_id", "policies", ["policy_id"], ["id"], ondelete="SET NULL")

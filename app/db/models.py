@@ -177,9 +177,7 @@ class APIKey(Base):
     #: The service check stays. It names what is still bound, where a bare
     #: IntegrityError would not -- the friendly half of a rule the database now
     #: also enforces.
-    policy_id: Mapped[str | None] = mapped_column(
-        String, ForeignKey("policies.id", ondelete="RESTRICT"), nullable=True
-    )
+    policy_id: Mapped[str | None] = mapped_column(String, ForeignKey("policies.id", ondelete="RESTRICT"), nullable=True)
     collector_type: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
