@@ -678,3 +678,150 @@ def test_shutdown_waits_for_a_settlement_that_starts_after_stop(tmp_path):
         "shutdown-returned"
     ), f"shutdown returned while a settlement worker was still running: {timeline}"
     assert not app.state.export_settlements, "a settlement task outlived shutdown"
+
+
+# ---------------------------------------------------------------------------
+# The reaper, which existed and was never called
+#
+# `DeviceService.reap_pending_devices` was tested and invoked by nothing outside
+# the test suite. Enrolment claims a per-token quota slot and releases it on
+# approval, on a terminal transition, or by that reaper -- so without it the
+# counter only ever fell when a human acted, and a token collecting abandoned
+# enrolments refused every further one permanently.
+#
+# The route's comment beside PendingQuotaExceeded says "the quota frees as
+# devices are approved or reaped. 429 tells the client to come back rather than
+# to give up." Half of that mechanism did not run, so the advice could not work.
+
+
+def _device_fixtures():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from app.db.models import Base
+
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine)
+
+
+def _pending_device(factory, *, age_hours: int):
+    """A pending device that claimed a quota slot, aged as requested."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.db.models import Device, Policy, RegistrationToken
+
+    session = factory()
+    policy = Policy(id="pol-reap", name="pol-reap", type="application")
+    token = RegistrationToken(
+        id="rt-reap",
+        name="reap",
+        token_hash="h",
+        token_prefix="rt_reapxx",
+        policy_id="pol-reap",
+        expires_at=datetime.now(UTC) + timedelta(days=1),
+        pending_count=1,
+    )
+    device = Device(
+        id="dev-reap",
+        installation_id="11111111-1111-4111-8111-111111111111",
+        status="pending",
+        policy_id="pol-reap",
+        reg_token_id="rt-reap",
+        device_name="reaped-laptop",
+        user_name="j",
+        user_email="j@example.com",
+        created_at=datetime.now(UTC) - timedelta(hours=age_hours),
+    )
+    session.add_all([policy, token, device])
+    session.commit()
+    session.close()
+
+
+def test_the_pending_reaper_runs_and_returns_the_quota_slot():
+    """End to end through the real job, like its siblings above.
+
+    Asserting the quota counter, not only the row: the counter is what refuses
+    the next enrolment, and a reaper that deleted devices without releasing
+    slots would leave the token just as dead.
+    """
+    from app.db.models import Device, RegistrationToken
+    from app.services.scheduler import pending_device_job
+
+    factory = _device_fixtures()
+    _pending_device(factory, age_hours=100)
+
+    async def _main() -> None:
+        await pending_device_job(factory, ttl_hours=72, interval_seconds=3600).run()
+
+    asyncio.run(_main())
+
+    session = factory()
+    try:
+        assert session.query(Device).count() == 0
+        assert session.get(RegistrationToken, "rt-reap").pending_count == 0
+    finally:
+        session.close()
+
+
+def test_the_reaper_leaves_a_device_inside_its_ttl_alone():
+    """The other half. Without this, a reaper that deleted everything passes."""
+    from app.db.models import Device, RegistrationToken
+    from app.services.scheduler import pending_device_job
+
+    factory = _device_fixtures()
+    _pending_device(factory, age_hours=1)
+
+    async def _main() -> None:
+        await pending_device_job(factory, ttl_hours=72, interval_seconds=3600).run()
+
+    asyncio.run(_main())
+
+    session = factory()
+    try:
+        assert session.query(Device).count() == 1
+        assert session.get(RegistrationToken, "rt-reap").pending_count == 1
+    finally:
+        session.close()
+
+
+def test_the_configured_ttl_is_the_one_that_applies():
+    """The setting was declared and read by nothing.
+
+    A device 10 hours old survives the 72-hour default and must NOT survive a
+    deployment configured to 4 -- which is the whole claim of the setting
+    existing. Pinning the default alone would pass against a hard-coded value.
+    """
+    from app.db.models import Device
+    from app.services.scheduler import pending_device_job
+
+    factory = _device_fixtures()
+    _pending_device(factory, age_hours=10)
+
+    async def _main() -> None:
+        await pending_device_job(factory, ttl_hours=4, interval_seconds=3600).run()
+
+    asyncio.run(_main())
+
+    session = factory()
+    try:
+        assert session.query(Device).count() == 0
+    finally:
+        session.close()
+
+
+def test_the_reaper_is_actually_scheduled_at_startup():
+    """The defect was never the job -- it was that nothing called it.
+
+    So this asserts the wiring rather than the behaviour: the job list the
+    lifespan hands to the scheduler must contain it by name. A test of the job
+    alone would have passed for the entire period nothing ran it.
+    """
+    import inspect
+
+    from app import main
+
+    source = inspect.getsource(main.lifespan)
+    assert "pending_device_job(" in source, "the reaper is defined but not scheduled"
+    assert "PENDING_DEVICE_TTL_HOURS" in source, "the reaper is scheduled but not configured"

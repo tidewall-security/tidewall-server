@@ -274,6 +274,52 @@ def retention_job(
     return Job(name="content-retention", interval_seconds=interval_seconds, run=_run)
 
 
+def pending_device_job(
+    session_factory: Callable[[], object],
+    *,
+    ttl_hours: int,
+    interval_seconds: float = DEFAULT_INTERVAL_SECONDS,
+    scheduler: Scheduler | None = None,
+) -> Job:
+    """Delete unapproved devices past their TTL, as a scheduled job.
+
+    `DeviceService.reap_pending_devices` existed, was tested, and was called by
+    nothing outside the test suite -- so no deployment has ever reaped a
+    pending device.
+
+    That is not only untidy. Enrolment claims a quota slot per registration
+    token and releases it on approval, on a terminal transition, or by this
+    reaper. Without the reaper the counter only ever falls when someone acts,
+    so a token accumulating abandoned enrolments reaches its limit and refuses
+    every further enrolment permanently. The route's own comment beside
+    `PendingQuotaExceeded` -- "the quota frees as devices are approved or
+    reaped. 429 tells the client to come back rather than to give up" -- was
+    describing a mechanism that did not run, so "come back later" was advice
+    that could not work.
+
+    `ttl_hours` is passed in rather than read here, matching how the enrolment
+    rate limit is wired: the composition root reads settings, the machinery
+    takes values.
+    """
+
+    async def _run() -> None:
+        from datetime import timedelta
+
+        from app.services.device_service import DeviceService
+
+        def _reap() -> int:
+            with session_factory() as session:  # type: ignore[attr-defined]
+                return DeviceService(session).reap_pending_devices(ttl=timedelta(hours=ttl_hours))
+
+        # Off the event loop, like its siblings: synchronous database work on
+        # the loop would stall every in-flight guard request.
+        reaped = await (scheduler.run_in_worker(_reap) if scheduler else asyncio.to_thread(_reap))
+        if reaped:
+            report(logger, "info", f"Reaped {reaped} pending device(s) past their TTL")
+
+    return Job(name="pending-device-reaper", interval_seconds=interval_seconds, run=_run)
+
+
 def vault_retention_job(
     session_factory: Callable[[], object],
     *,
