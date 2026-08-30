@@ -163,7 +163,21 @@ class APIKey(Base):
     #
     # Inert until step 6: nothing reads this yet.
     grants: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
-    policy_id: Mapped[str | None] = mapped_column(String, ForeignKey("policies.id", ondelete="SET NULL"), nullable=True)
+    #: RESTRICT, matching `devices` and `registration_tokens`, which are the
+    #: other two things bound to a policy.
+    #:
+    #: It was SET NULL, and `PolicyService.delete_policy` counted bound keys and
+    #: refused -- so nothing could reach the bad state through the application.
+    #: But that made api_keys the only one of the three whose guarantee was a
+    #: convention rather than a constraint: an unbound admin reads and deletes
+    #: globally, so silently unbinding one would promote a policy-scoped
+    #: administrator to an organisation-wide one, and any future path that
+    #: deleted a policy without going through that method would do it.
+    #:
+    #: The service check stays. It names what is still bound, where a bare
+    #: IntegrityError would not -- the friendly half of a rule the database now
+    #: also enforces.
+    policy_id: Mapped[str | None] = mapped_column(String, ForeignKey("policies.id", ondelete="RESTRICT"), nullable=True)
     collector_type: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

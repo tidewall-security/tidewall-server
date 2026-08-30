@@ -57,7 +57,12 @@ REFERENTIAL_ACTIONS: frozenset[tuple[str, str, str, str, str, str]] = frozenset(
         ("access_tokens", "device_id", "devices", "id", "NO ACTION", "CASCADE"),
         ("interaction_contents", "interaction_id", "interactions", "id", "NO ACTION", "CASCADE"),
         ("rule_sets", "policy_id", "policies", "id", "NO ACTION", "CASCADE"),
-        ("api_keys", "policy_id", "policies", "id", "NO ACTION", "SET NULL"),
+        # RESTRICT, matching devices and registration_tokens. It was SET NULL,
+        # which made api_keys the only one of the three bound to a policy whose
+        # guarantee was a service check rather than a constraint -- and an
+        # unbound admin reads and deletes globally, so silently unbinding one
+        # promotes a policy-scoped administrator to an organisation-wide one.
+        ("api_keys", "policy_id", "policies", "id", "NO ACTION", "RESTRICT"),
         ("devices", "reg_token_id", "registration_tokens", "id", "NO ACTION", "SET NULL"),
         ("devices", "policy_id", "policies", "id", "NO ACTION", "RESTRICT"),
         ("registration_tokens", "policy_id", "policies", "id", "NO ACTION", "RESTRICT"),
