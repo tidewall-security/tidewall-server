@@ -95,12 +95,16 @@ _ENROL_FAILURE_STATUS = {
 }
 
 
+#: The enrolment table above learned this the expensive way; this one is its
+#: sibling and had none of the same protection. It is pinned to the service by
+#: a test, an unmapped outcome is handled deliberately rather than by KeyError,
+#: and "InactiveDevice" is gone -- nothing produced it, no test named it, and
+#: no client had heard of it. A dead row is a claim that an outcome exists.
 _REFRESH_FAILURE_STATUS = {
     "device_revoked": 403,
     "credential_unknown": 401,
     "credential_expired": 401,
     "device_pending": 202,
-    "InactiveDevice": 403,
 }
 
 
@@ -210,7 +214,15 @@ async def refresh_device(device_id: str, body: DeviceRefreshRequest, request: Re
         # `dict | JSONResponse` return annotation makes FastAPI try to build a
         # Pydantic response model from the union and fail at import time,
         # taking every route in this module with it.
-        response.status_code = _REFRESH_FAILURE_STATUS[result["status"]]
+        status_code = _REFRESH_FAILURE_STATUS.get(result["status"])
+        if status_code is None:
+            # Matching the enrolment route. A bare KeyError here would also end
+            # as a 500, so the disposition is the same -- but it arrives as an
+            # unhandled exception with no line naming the outcome, and it reads
+            # to the next person as a crash rather than as a case nobody mapped.
+            logger.error("Unmapped refresh outcome %r", result["status"])
+            raise HTTPException(status_code=500, detail="Unhandled refresh outcome")
+        response.status_code = status_code
         return {"status": result["status"], "reason": result["status"], "result": None}
     finally:
         session.close()

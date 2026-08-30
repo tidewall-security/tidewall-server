@@ -977,3 +977,81 @@ def test_an_unmapped_enrolment_outcome_answers_500_not_201(setup, monkeypatch):
 
     assert resp.status_code == 500, "an unrecognised outcome answered as if it had created a device"
     assert resp.json()["detail"] == "Unhandled enrolment outcome"
+
+
+# ---------------------------------------------------------------------------
+# The refresh table gets what the enrolment table already had
+#
+# `_ENROL_FAILURE_STATUS` is pinned to its service and handles an unmapped
+# outcome deliberately, because it reached production without either and
+# answered "201 Created" for two failures. `_REFRESH_FAILURE_STATUS` is the
+# same shape of table on the same module and had neither -- the sibling-branch
+# omission this codebase keeps making.
+
+
+def test_every_refresh_outcome_the_service_can_return_is_mapped():
+    """The enrolment test's twin, and it was missing.
+
+    A refresh outcome with no entry used to raise KeyError. That is a 500 too,
+    so the disposition was never wrong -- but nothing named the outcome, and
+    nothing failed until a request happened to hit it in production.
+    """
+    import inspect
+
+    from app.routes.devices import _REFRESH_FAILURE_STATUS
+    from app.services import device_service
+
+    source = inspect.getsource(device_service.DeviceService.refresh_device)
+    returned = set(re.findall(r'"status": "(\w+)"', source))
+    unmapped = returned - set(_REFRESH_FAILURE_STATUS) - {"ok"}
+
+    assert not unmapped, f"refresh can return {unmapped}, which the route does not map"
+
+
+def test_the_refresh_table_claims_no_outcome_the_service_cannot_produce():
+    """The other direction, which no test in this file asserted for either table.
+
+    `InactiveDevice` sat in the table with nothing producing it, no test naming
+    it, and no client having heard of it. A dead row is a claim that an outcome
+    exists: it invites a client branch that can never run, and it hides the
+    fact that the real inactive-device path answers something else entirely.
+    """
+    import inspect
+
+    from app.routes.devices import _REFRESH_FAILURE_STATUS
+    from app.services import device_service
+
+    source = inspect.getsource(device_service.DeviceService.refresh_device)
+    returned = set(re.findall(r'"status": "(\w+)"', source))
+    phantom = set(_REFRESH_FAILURE_STATUS) - returned
+
+    assert not phantom, f"the table maps {phantom}, which refresh_device never returns"
+
+
+def test_an_unmapped_refresh_outcome_answers_500_with_a_named_reason(setup, monkeypatch):
+    """Not about the status code -- KeyError already produced 500.
+
+    It is about arriving there deliberately. An unhandled exception reads to
+    the next person as a crash, and leaves no line saying which outcome nobody
+    mapped; this leaves both.
+    """
+    from app.services.device_service import DeviceService
+
+    client, admin_key, _ = setup
+    rt_token = _create_rt_token(client, admin_key)
+    enrolled = _enrol_device(client, rt_token, installation_id=_iid("inst-refresh-unmapped")).json()["result"]
+
+    monkeypatch.setattr(
+        DeviceService,
+        "refresh_device",
+        lambda self, **kwargs: {"status": "SomethingNobodyMapped", "result": None},
+    )
+
+    resp = client.post(
+        f"/v1/devices/{enrolled['device_id']}/refresh",
+        json={},
+        headers={"Authorization": f"Bearer {enrolled['refresh_token']['token']}"},
+    )
+
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == "Unhandled refresh outcome"
