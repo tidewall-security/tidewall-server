@@ -256,6 +256,15 @@ jobs:
         with:
           repository: tidewall-security/tidewall-browser-extension
           path: extension
+      # The demo spans three repositories and its menu names scripts and
+      # environment variables that live in this one. `make demo` printed three
+      # paths that could not work -- two naming scripts that were never in the
+      # repository -- because nothing read what it prints. tests/test_demo_paths
+      # does, and needs the sibling present to do it.
+      - uses: actions/checkout@v4
+        with:
+          repository: tidewall-security/tidewall-otel
+          path: tidewall-otel
       - uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
@@ -321,6 +330,23 @@ jobs:
       # sets openapi_url=None so the stock docs page is not left permanently
       # broken by unconditional auth. The document still exists on the app
       # object, which is where the extension's pin reads it from.
+      # Skipped in `Backend Tests`, where the sibling is absent. Run here, with
+      # a check that it did NOT skip: a guarded test that silently skips in the
+      # only job able to run it is worth nothing.
+      - name: The demo menu names things that exist
+        working-directory: server
+        run: |
+          uv run pytest ../server/tests/test_demo_paths.py -q -p no:randomly \
+            --junitxml=/tmp/demo.xml
+          python -c "
+          import xml.etree.ElementTree as ET, sys
+          s = ET.parse('/tmp/demo.xml').getroot()
+          suite = s if s.tag == 'testsuite' else s[0]
+          skipped, tests = int(suite.get('skipped', 0)), int(suite.get('tests', 0))
+          print(f'demo-path tests: {tests} run, {skipped} skipped')
+          sys.exit('the sibling checkout did not take effect: tests skipped' if skipped else 0)
+          "
+
       - name: Export the OpenAPI document for the extension to assert against
         working-directory: server
         run: |
