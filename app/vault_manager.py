@@ -243,9 +243,14 @@ class VaultManager:
             # Nothing was sealed and nothing can be opened. Not a quiet branch
             # an attacker can select: it turns on the deployment's own
             # configuration, not on any field in the row.
+            # The id is deliberately absent. It is caller-supplied here, and
+            # naming it in a log would let one policy's administrator learn
+            # that another's vault id exists -- the exact discrimination the
+            # uniform 404 and the unredact audit are both built to refuse.
+            # `save` logs its id freely, because that one was minted by
+            # `create_vault` for the request doing the logging.
             logger.error(
-                "vault %s was requested but %s, so no vault can be opened",
-                vault_id,
+                "a vault was requested but %s, so no vault can be opened",
                 self._no_keyring_reason,
             )
             return None
@@ -272,7 +277,13 @@ class VaultManager:
         except LegacyRow:
             # Caught by its own type. UnknownKey and AuthenticationFailed share
             # a base class with this one and must travel on.
-            logger.info("vault %s predates the sealed format and holds no mapping", vault_id)
+            # Sharper than the branch above, and the id is omitted for a
+            # sharper reason: this fires only when a row genuinely EXISTS, so
+            # logging the id would distinguish "exists but is legacy" from
+            # "no such vault" -- turning the log into the existence oracle the
+            # response is careful not to be. An operator can act on "this
+            # deployment still holds legacy rows" without being handed one.
+            logger.info("a vault row predates the sealed format and holds no mapping")
             return None
 
         # The plaintext authenticated, so anything wrong with it now is
