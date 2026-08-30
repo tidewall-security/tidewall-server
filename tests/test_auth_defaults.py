@@ -1,4 +1,4 @@
-"""P0-1: authentication was off by default and bypasses minted admins.
+"""Authentication was off by default, and bypasses minted admins.
 
 `AUTH_ENABLED` defaulted to False, docker-compose set it false explicitly, and
 the middleware handled that state by assigning `role = "admin"`. So the shipped
@@ -28,7 +28,7 @@ def test_public_paths_are_minimal():
 
 
 def test_unauthenticated_requests_get_no_role():
-    """The core of P0-1: "skip auth" must not mean "become admin"."""
+    """The core of it: "skip auth" must not mean "become admin"."""
     from starlette.requests import Request
 
     from app.auth.middleware import AuthMiddleware

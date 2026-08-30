@@ -8,7 +8,7 @@ configured long enough to break the Docker build.
 
 Pinning matters beyond availability: an unpinned reference lets an upstream
 commit change a model's labels, licence or weights with no change in this
-repository. The label mismatch in P0-3 and the identity-label scoring bug in
+repository. The prompt-injection label mismatch and the identity-label scoring bug in
 the toxicity detector were both label problems, and a floating revision can
 reintroduce either without warning.
 

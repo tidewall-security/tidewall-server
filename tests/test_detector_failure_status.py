@@ -1,4 +1,4 @@
-"""Failure-injection matrix for P0-2.
+"""Failure-injection matrix: a detector that cannot run must not read as clean.
 
 Every test here injects a specific failure and asserts it is *visible* as a
 failure rather than silently becoming a clean verdict.

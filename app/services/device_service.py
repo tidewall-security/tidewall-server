@@ -245,7 +245,7 @@ class DeviceService:
         one. The previous combined flow looked a device up by fingerprint and
         refreshed it, so any holder of any registration token could revoke a
         victim's session and obtain an access token bound to their device and
-        policy (P0-11).
+        policy, which is how a token holder took over another device.
 
         A client that has lost its stored credentials enrols again with a new
         installation ID and becomes a new device. That leaves a stale row for

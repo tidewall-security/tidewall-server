@@ -1,6 +1,6 @@
 """Prompt-list routes: a rejected pattern must be a 400.
 
-These exist because the P0-12 fix validated patterns in the service and then
+These exist because the safe-regex fix validated patterns in the service and then
 mistranslated the result at the HTTP boundary. Create had no catch, so a
 rejected pattern surfaced as a 500. Update caught `ValueError` and returned
 404 — and `PolicyValidationError` is a `ValueError`, so an administrator

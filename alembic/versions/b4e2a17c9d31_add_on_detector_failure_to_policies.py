@@ -2,8 +2,8 @@
 
 Persists the enforcement decision for a detector that cannot run. Without this
 the setting lived only on the transient PolicyConfig, so a normally constructed
-engine always took the default and every enforcing detector failure was allowed
-(P0-2).
+engine always took the default and every enforcing detector failure was
+allowed through.
 
 Defaults to "report" rather than "block": until the activation preflight exists
 and refuses to serve a policy whose required detectors cannot construct,

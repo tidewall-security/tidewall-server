@@ -139,7 +139,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         Only allowed for enrolment. A registration token is a shared onboarding
         secret: it can create a device but must never be able to act on an
-        existing one, which is what /v1/devices/check allowed (P0-11).
+        existing one, which is what the removed device-check endpoint allowed.
         """
         if request.url.path != "/v1/devices/enrol":
             return JSONResponse(

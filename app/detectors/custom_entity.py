@@ -65,7 +65,7 @@ class CustomEntityDetector(BaseDetector):
                 # The linear engine, never `re`: these patterns are supplied by
                 # an administrator and run against caller-supplied text, which
                 # with a backtracking engine is a denial of service waiting to
-                # be configured (P0-12).
+                # be configured.
                 self._patterns.append(compile_pattern(raw))
             except UnsafePatternError:
                 # A bad pattern is operator error, but skipping it silently

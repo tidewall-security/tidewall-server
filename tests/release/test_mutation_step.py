@@ -293,18 +293,13 @@ def test_the_runner_proves_the_whole_suite_ran():
 
     # And the check it calls genuinely refuses a short run.
     import json
-    import pathlib
 
     from tests.release.gate_report import DECLARED_COUNTS, SuiteResult, check_counts
 
     declared = json.loads(DECLARED_COUNTS.read_text())["release"]
     assert check_counts(SuiteResult(name="release", counts={"selected": 0}, declared=declared))
-    assert check_counts(
-        SuiteResult(name="release", counts={"selected": declared, "skipped": 1}, declared=declared)
-    )
-    assert not check_counts(
-        SuiteResult(name="release", counts={"selected": declared}, declared=declared)
-    )
+    assert check_counts(SuiteResult(name="release", counts={"selected": declared, "skipped": 1}, declared=declared))
+    assert not check_counts(SuiteResult(name="release", counts={"selected": declared}, declared=declared))
 
 
 def test_the_baseline_is_complete_over_the_families_it_covers():

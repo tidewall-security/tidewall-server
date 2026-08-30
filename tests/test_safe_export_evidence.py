@@ -1,4 +1,4 @@
-"""Exports must not carry the content the product exists to protect (P0-6 step 2).
+"""Exports must not carry the content the product exists to protect.
 
 `ScanResult.detectors` was passed straight into every export format, and
 detector payloads carry the matched value (`custom_entity`), the unmodified URL

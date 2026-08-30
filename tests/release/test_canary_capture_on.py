@@ -346,7 +346,6 @@ def test_the_persisted_vault_is_populated_and_sealed(tmp_path: Path):
     the empty form, and not plaintext either.
     """
     from app.vault import TidewallVault
-
     from tests.release.persistence import save_vault_via_production
 
     db = tmp_path / "vault.db"

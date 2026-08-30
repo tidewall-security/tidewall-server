@@ -212,7 +212,7 @@ def test_the_parametrised_family_genuinely_changes_the_planted_input():
     executed its own representation seven times under seven different labels.
     """
     from tests.release.execution import decode_at_boundary, encode_for
-    from tests.release.leaves import captured_value, detector_config, shape
+    from tests.release.leaves import shape
 
     case = CASES[0]
     manifest_case = MANIFEST_CASES[case.case_id]

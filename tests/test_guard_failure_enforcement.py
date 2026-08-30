@@ -1,4 +1,4 @@
-"""Route-level failure enforcement for P0-2.
+"""Route-level enforcement when a detector cannot run.
 
 The detector-status tests assert that failures become *values*. These assert
 that those values reach the HTTP response — which is where the fail-open was
@@ -236,7 +236,8 @@ def test_updating_the_policy_invalidates_cached_engines(guard_client):
     behaviour change until restart. The PATCH route performs exactly the two
     calls below: the write on a request-scoped PolicyService, then invalidation
     on the application-scoped one — because the throwaway service's cache is
-    not the live one. That split is P0-5's root cause and the activation
+    not the live one. That split is why a policy change did not reach the live
+    engine, and the activation
     protocol replaces it wholesale; this only covers the field added here.
     """
     from app.config import OnDetectorFailure
@@ -273,7 +274,7 @@ def test_degraded_report_does_not_claim_a_clean_scan(guard_client):
     With on_detector_failure=report (the shipped default until the preflight
     exists) a failed detector does not block. The response must still say so:
     "No threats detected." is false when part of the scan did not run, and it
-    was the exact string the original P0-2 finding quoted.
+    was the exact string the original finding quoted.
     """
     client, key, session_factory = guard_client
     det = _FailingBlocker({"action": "block"})

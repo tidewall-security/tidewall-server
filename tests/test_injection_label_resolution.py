@@ -1,4 +1,4 @@
-"""P0-3: the flagship blocking detector never recognised a positive label.
+"""The flagship blocking detector never recognised a positive label.
 
 `policy.yaml` shipped `injection_label: 1` (an int) against a HF
 text-classification pipeline that returns `{"label": "LABEL_1", ...}`. The
@@ -62,7 +62,7 @@ def _detector(label, score):
     """A detector wired to a pipeline returning the REAL response shape.
 
     A list of dicts with string labels and float scores — not whatever the
-    test finds convenient, which is what let P0-3 through.
+    test finds convenient, which is what let the defect through.
     """
     d = MaliciousPromptDetector({"generic_injection_detection": False, "action": "block", "threshold": 0.9})
     d.action = "block"

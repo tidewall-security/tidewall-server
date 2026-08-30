@@ -1,4 +1,4 @@
-"""The guard response must not carry exact matched values (P0-6 step 3b).
+"""The guard response must not carry exact matched values.
 
 `GuardResult.detectors` was the raw detector payload, so a response returned
 custom_entity's matched value and its start_pos, and malicious_entity's

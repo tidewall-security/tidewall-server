@@ -1,6 +1,6 @@
 """device installation identity, registration token scope, token rotation
 
-P0-11: device refresh looked a device up by client-supplied fingerprint and
+Device refresh looked a device up by client-supplied fingerprint and
 authorised the refresh on the strength of holding *a* registration token. Any
 token holder plus a guessed fingerprint could revoke a victim's session and
 obtain an access token bound to their device and policy.
@@ -108,7 +108,7 @@ def upgrade() -> None:
         batch.add_column(sa.Column("installation_id", sa.String(), nullable=False))
         batch.alter_column("fingerprint", existing_type=sa.String(), nullable=True)
         # Fingerprint stops being unique, not just stops being identity. Leaving
-        # the constraint would keep the denial-of-enrolment half of P0-11: two
+        # the constraint would keep the denial-of-enrolment half of it: two
         # installations reporting the same fingerprint — explicitly allowed now
         # — could not both enrol, and the loser would get an IntegrityError.
         if fingerprint_unique:

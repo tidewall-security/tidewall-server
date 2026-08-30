@@ -600,7 +600,7 @@ class Device(Base):
     installation_id: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     # Advisory metadata only, deliberately NOT unique. It was previously the
     # unique key AND the lookup used to authorise a refresh, which is what made
-    # P0-11 possible: a client-supplied, guessable value is neither identity
+    # device takeover possible: a client-supplied, guessable value is neither identity
     # nor proof. Being unique also let one client deny enrolment to another
     # simply by claiming its fingerprint.
     fingerprint: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
