@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, field_validator
@@ -108,6 +109,60 @@ _REFRESH_FAILURE_STATUS = {
 }
 
 
+#: The taxonomy the clients key on, declared so it reaches the generated
+#: OpenAPI document. Before this, both routes were annotated `-> dict` and set
+#: their status code on the injected Response, so the schema recorded only the
+#: declared success code: an extension asserting against the schema could see
+#: that /enrol exists and what it accepts, and nothing at all about the four
+#: ways it refuses. A client keys on `reason`, never on the status alone --
+#: 401 covers two refresh outcomes that call for different behaviour, and 202
+#: is not an error -- so `reason` is the field that had to become expressible.
+EnrolFailureReason = Literal[
+    "RegistrationTokenExhausted",
+    "InstallationIdAlreadyEnrolled",
+    "InstallationTombstoned",
+    "PendingQuotaExceeded",
+]
+
+RefreshFailureReason = Literal[
+    "device_revoked",
+    "credential_unknown",
+    "credential_expired",
+    "device_pending",
+]
+
+
+class EnrolFailure(BaseModel):
+    """`status` and `reason` carry the same value; both are declared.
+
+    The duplication is in the wire format already. Typing only one of them
+    would put half the taxonomy in the schema and leave a reader guessing
+    whether the other field is free-form.
+    """
+
+    status: EnrolFailureReason
+    reason: EnrolFailureReason
+    result: None = None
+
+
+class RefreshFailure(BaseModel):
+    status: RefreshFailureReason
+    reason: RefreshFailureReason
+    result: None = None
+
+
+#: DERIVED from the tables, never written out. A hand-written responses dict is
+#: a fourth place to update when an outcome is added, and this module's whole
+#: history is places that did not get updated.
+_ENROL_FAILURE_RESPONSES: dict[int | str, dict] = {
+    code: {"model": EnrolFailure} for code in sorted(set(_ENROL_FAILURE_STATUS.values()))
+}
+
+_REFRESH_FAILURE_RESPONSES: dict[int | str, dict] = {
+    code: {"model": RefreshFailure} for code in sorted(set(_REFRESH_FAILURE_STATUS.values()))
+}
+
+
 def _device_to_dict(device) -> dict:
     return {
         "id": device.id,
@@ -130,7 +185,7 @@ def _device_to_dict(device) -> dict:
     }
 
 
-@router.post("/enrol", status_code=201)
+@router.post("/enrol", status_code=201, responses=_ENROL_FAILURE_RESPONSES)
 async def enrol_device(body: DeviceEnrolRequest, request: Request, response: Response) -> dict:
     """Enrol a new device. Requires an rt_ registration token.
 
@@ -176,7 +231,7 @@ async def enrol_device(body: DeviceEnrolRequest, request: Request, response: Res
         session.close()
 
 
-@router.post("/{device_id}/refresh")
+@router.post("/{device_id}/refresh", responses=_REFRESH_FAILURE_RESPONSES)
 async def refresh_device(device_id: str, body: DeviceRefreshRequest, request: Request, response: Response) -> dict:
     """Refresh a device, proving ownership with its own dr_ refresh token.
 

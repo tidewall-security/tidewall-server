@@ -1055,3 +1055,87 @@ def test_an_unmapped_refresh_outcome_answers_500_with_a_named_reason(setup, monk
 
     assert resp.status_code == 500
     assert resp.json()["detail"] == "Unhandled refresh outcome"
+
+
+# ---------------------------------------------------------------------------
+# The taxonomy reaches the schema
+#
+# The extension asserts against the server's generated OpenAPI document. That
+# catches endpoint existence and request shape -- the break that prompted it
+# was a client calling a deleted route for eleven days with a green suite --
+# but it could see nothing about how a route REFUSES, because both routes were
+# annotated `-> dict` and set their status code on the injected Response.
+#
+# There is now a chain: the service returns a status, the table maps it, a
+# Literal declares it, and the schema publishes it. Each link is pinned below,
+# in both directions. A chain checked in one direction only is how a phantom
+# entry survives.
+
+
+def _openapi():
+    from app.main import create_app
+
+    return create_app().openapi()
+
+
+def _reason_enum(schema, model_name):
+    components = schema["components"]["schemas"]
+    reason = components[model_name]["properties"]["reason"]
+    if "$ref" in reason:
+        return components[reason["$ref"].split("/")[-1]]["enum"]
+    return reason["enum"]
+
+
+def test_the_declared_reasons_are_exactly_the_tables():
+    """Literal against table, both directions.
+
+    The tables are already pinned to the services. This closes the next link,
+    so a status the service grows cannot reach a client through a route whose
+    schema never mentioned it.
+    """
+    from typing import get_args
+
+    from app.routes.devices import (
+        _ENROL_FAILURE_STATUS,
+        _REFRESH_FAILURE_STATUS,
+        EnrolFailureReason,
+        RefreshFailureReason,
+    )
+
+    assert set(get_args(EnrolFailureReason)) == set(_ENROL_FAILURE_STATUS)
+    assert set(get_args(RefreshFailureReason)) == set(_REFRESH_FAILURE_STATUS)
+
+
+def test_the_schema_publishes_every_failure_status_code():
+    """Read out of the GENERATED document, not out of the decorator.
+
+    Asserting the decorator would prove the argument was passed. This proves
+    FastAPI did something with it -- which is the only form of the claim the
+    extension can actually consume.
+    """
+    from app.routes.devices import _ENROL_FAILURE_STATUS, _REFRESH_FAILURE_STATUS
+
+    schema = _openapi()
+    enrol = set(schema["paths"]["/v1/devices/enrol"]["post"]["responses"])
+    refresh = set(schema["paths"]["/v1/devices/{device_id}/refresh"]["post"]["responses"])
+
+    assert {str(c) for c in _ENROL_FAILURE_STATUS.values()} <= enrol
+    assert {str(c) for c in _REFRESH_FAILURE_STATUS.values()} <= refresh
+    # The success codes still there: declaring failures must not displace them.
+    assert "201" in enrol and "200" in refresh
+
+
+def test_the_schema_publishes_the_reason_taxonomy_itself():
+    """The status code alone is not the contract.
+
+    401 covers two refresh outcomes calling for different client behaviour, and
+    202 is not an error at all -- so a client keys on `reason`. If only the
+    codes reached the schema, the part clients actually branch on would still
+    be invisible.
+    """
+    from app.routes.devices import _ENROL_FAILURE_STATUS, _REFRESH_FAILURE_STATUS
+
+    schema = _openapi()
+
+    assert set(_reason_enum(schema, "EnrolFailure")) == set(_ENROL_FAILURE_STATUS)
+    assert set(_reason_enum(schema, "RefreshFailure")) == set(_REFRESH_FAILURE_STATUS)
