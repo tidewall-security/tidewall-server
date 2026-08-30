@@ -100,16 +100,29 @@ async def unredact(body: UnredactRequest, request: Request) -> UnredactResponse:
             detail="Vault holds no redaction mapping; the original data cannot be recovered",
         )
 
-    restored = vault.unredact(str(body.redacted_data))
+    submitted = str(body.redacted_data)
+    restored = vault.unredact(submitted)
 
-    # The disclosure is recorded before it leaves, or it does not leave. The
+    # DISCLOSED, not merely "returned 200". `unredact` replaces the placeholders
+    # it finds and returns the text unchanged when it finds none -- a caller can
+    # hold a valid vault id and submit text containing none of its placeholders,
+    # and that request succeeds having revealed nothing. Recording it as a
+    # reversal would attest to a plaintext recovery that did not happen, and an
+    # audit trail that overstates is worse than one that is merely incomplete.
+    disclosed = restored != submitted
+
+    # A disclosure is recorded before it leaves, or it does not leave. The
     # plaintext exists here and has NOT yet reached the caller, which is the only
     # moment this choice is available -- middleware sees the response with the
     # data already in it. The vault outlives this request, so a caller who
     # retries after the database recovers gets their data.
+    #
+    # When nothing was disclosed the record is best-effort, like any other
+    # outcome that revealed nothing: refusing here would deny a caller a response
+    # that gave them nothing anyway.
     from app.services.unredact_audit import record_unredact
 
-    if not record_unredact(request, request_id, ok=True):
+    if not record_unredact(request, request_id, ok=disclosed) and disclosed:
         raise HTTPException(
             status_code=500,
             detail="the reversal could not be recorded, so it was not completed",

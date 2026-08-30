@@ -42,22 +42,35 @@ class UnredactAuditMiddleware(BaseHTTPMiddleware):
         if request.url.path != UNREDACT_PATH:
             return await call_next(request)
 
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except BaseException:
+            # An exception UNWINDS through here on its way to the error
+            # middleware, which turns it into a 500 further out -- so waiting for
+            # a response never sees it. `get_vault` deliberately propagates
+            # AuthenticationFailed and UnknownKey, which is a caller presenting a
+            # vault this server cannot open: exactly the case the enumeration
+            # drafts kept missing, and it would have been missed again.
+            self._record_refusal(request)
+            raise
 
         # 200 is the disclosure path, recorded inside the route so it can refuse
         # when it cannot record. Recording it here as well would double-count.
         if response.status_code != 200:
-            from app.services.unredact_audit import record_unredact
-
-            request_id = getattr(request.state, "unredact_request_id", None)
-            if request_id is None:
-                # The request never reached the handler, so no attempt id was
-                # minted -- a schema rejection or a dependency refusal. The row
-                # still names the caller, the action and the time, which is the
-                # part an operator acts on.
-                import uuid
-
-                request_id = f"tw_{uuid.uuid4().hex[:16]}"
-            record_unredact(request, request_id, ok=False)
+            # No attempt id means the request never reached the handler -- a
+            # schema rejection or a dependency refusal. The row still names the
+            # caller, the action and the time, which is what an operator acts on.
+            self._record_refusal(request)
 
         return response
+
+    @staticmethod
+    def _record_refusal(request) -> None:
+        from app.services.unredact_audit import record_unredact
+
+        request_id = getattr(request.state, "unredact_request_id", None)
+        if request_id is None:
+            import uuid
+
+            request_id = f"tw_{uuid.uuid4().hex[:16]}"
+        record_unredact(request, request_id, ok=False)

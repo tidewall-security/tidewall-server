@@ -66,9 +66,14 @@ def actor_for(state: Any) -> tuple[str, str]:
 def record_unredact(request: Any, request_id: str, *, ok: bool) -> bool:
     """Record one reversal attempt. True if it was durably recorded.
 
-    Never raises. The refusal path has already decided the caller gets nothing
-    and must still return the status it earned; only the success path reads the
-    return value, because a disclosure that cannot be recorded must not happen.
+    `ok` means DISCLOSED, not "succeeded". A request can return 200 having
+    revealed nothing -- a valid vault id with text containing none of its
+    placeholders -- and recording that as a reversal would attest to a recovery
+    that did not happen.
+
+    Never raises. The non-disclosing paths have already decided the caller
+    learns nothing and must still get the status they earned; only a disclosure
+    reads the return value, because one that cannot be recorded must not happen.
     """
     kind, actor_id = actor_for(request.state)
     session = None
@@ -91,5 +96,13 @@ def record_unredact(request: Any, request_id: str, *, ok: bool) -> bool:
         logger.exception("failed to record an unredact attempt")
         return False
     finally:
+        # `close()` can raise -- a connection failing during cleanup -- and a
+        # raise from `finally` happens AFTER the except above, so it would not
+        # be swallowed. On a refusal that replaces the response the middleware
+        # promised not to touch; on success it escapes the handler instead of
+        # producing the deliberate 500. "Never raises" has to include this.
         if session is not None:
-            session.close()
+            try:
+                session.close()
+            except Exception:
+                logger.exception("failed to close the audit session")

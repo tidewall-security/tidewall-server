@@ -285,3 +285,113 @@ def test_the_vault_survives_so_a_retry_succeeds(sealed, monkeypatch):
     retry = _post(client, key, {"fpe_context": _ctx(vault_id), "redacted_data": placeholder})
     assert retry.status_code == 200
     assert retry.json()["result"]["data"] == SECRET
+
+
+# --- the three a review found ----------------------------------------------
+
+
+def test_an_exception_escaping_the_route_is_still_recorded(sealed, monkeypatch):
+    """The case the design named and the first implementation missed.
+
+    `get_vault` deliberately propagates AuthenticationFailed and UnknownKey --
+    a caller presenting a vault this server cannot open must be loud, not
+    silent. That exception UNWINDS through the audit middleware on its way to
+    the error handler, which turns it into a 500 further out, so middleware that
+    waits for a response never sees it.
+    """
+    client, key, session_factory, vault_id, placeholder = sealed
+    from app.vault_crypto import AuthenticationFailed
+    from app.vault_manager import VaultManager
+
+    monkeypatch.setattr(
+        VaultManager,
+        "get_vault",
+        lambda *a, **k: (_ for _ in ()).throw(AuthenticationFailed("altered row")),
+    )
+    before = len(_audit_rows(session_factory))
+
+    response = _post(client, key, {"fpe_context": _ctx(vault_id), "redacted_data": placeholder})
+
+    assert response.status_code == 500
+    rows = _audit_rows(session_factory)
+    assert len(rows) == before + 1, "an escaping exception went unrecorded"
+    assert rows[-1].action == "unredact_refused"
+
+
+def test_the_helper_survives_a_session_that_will_not_close():
+    """A raise from `finally` happens AFTER the except that swallows it, so
+    without its own guard it escapes -- replacing a refusal the middleware
+    promised not to touch, or turning the handler's deliberate 500 into an
+    unhandled one.
+
+    Asserted on the helper directly. Two attempts to prove this through a
+    request failed for the same reason twice: `AuthMiddleware` opens and closes
+    a session from the same factory, so breaking `close` at any level a request
+    can see also breaks authentication, and the test then turns on somebody
+    else's cleanup. The helper is the only thing that can be isolated here, and
+    it is the thing the claim is about.
+    """
+    from app.db.engine import get_engine, get_session_factory
+    from app.db.models import Base
+    from app.services.unredact_audit import record_unredact
+
+    engine = get_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = get_session_factory(engine)
+
+    class _RefusesToClose:
+        def __init__(self, real):
+            self._real = real
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+        def close(self):
+            raise RuntimeError("connection gone")
+
+    class _Request:
+        class state:
+            device_id = None
+            api_key_id = "ak_1"
+            policy_id = "pol_a"
+
+        class app:
+            class state:
+                session_factory = staticmethod(lambda: _RefusesToClose(factory()))
+
+    # Returns rather than raises, and reports the row it did write.
+    assert record_unredact(_Request, "tw_abc", ok=False) is True
+
+
+def test_a_reversal_that_reveals_nothing_is_not_recorded_as_one(sealed):
+    """200 does not mean disclosed.
+
+    A caller can hold a valid vault id and submit text containing none of its
+    placeholders. That request succeeds having revealed nothing, and recording
+    it as a reversal would attest to a plaintext recovery that did not happen.
+    An audit trail that overstates is worse than one that is merely incomplete.
+    """
+    client, key, session_factory, vault_id, placeholder = sealed
+
+    response = _post(client, key, {"fpe_context": _ctx(vault_id), "redacted_data": "nothing to replace here"})
+
+    assert response.status_code == 200
+    assert response.json()["result"]["data"] == "nothing to replace here"
+    rows = _audit_rows(session_factory)
+    assert rows, "the attempt was not recorded at all"
+    assert rows[-1].action == "unredact_refused", "a request that revealed nothing was recorded as a reversal"
+
+
+def test_a_reversal_that_reveals_nothing_is_not_refused_when_the_audit_fails(sealed, monkeypatch):
+    """Fail-closed applies to disclosure, not to every 200.
+
+    Refusing here would deny a caller a response that gave them nothing anyway.
+    """
+    client, key, session_factory, vault_id, placeholder = sealed
+    from app.services.activity_service import ActivityService
+
+    monkeypatch.setattr(ActivityService, "log", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db down")))
+
+    response = _post(client, key, {"fpe_context": _ctx(vault_id), "redacted_data": "nothing to replace here"})
+
+    assert response.status_code == 200
