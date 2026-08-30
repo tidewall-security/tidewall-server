@@ -80,7 +80,7 @@ def test_every_referential_action_is_pinned(conn):
     assert all(count == 1 for count in observed.values()), observed
 
 
-def test_twelve_relationships_of_which_eight_write_on_delete(conn):
+def test_twelve_relationships_of_which_seven_write_on_delete(conn):
     """The count is stated because 'exactly the six' was ambiguous.
 
     RESTRICT and NO ACTION are inside the pin and outside the cascade map:
@@ -94,7 +94,10 @@ def test_twelve_relationships_of_which_eight_write_on_delete(conn):
     """
     observed = referential_actions(conn)
     assert len(observed) == 12
-    assert len([a for a in observed if a[5] in WRITING_ACTIONS]) == 8
+    # Eight became seven when api_keys.policy_id went from SET NULL to RESTRICT.
+    # SET NULL writes to the child; RESTRICT refuses the parent's deletion and
+    # touches nothing, which is the point of the change.
+    assert len([a for a in observed if a[5] in WRITING_ACTIONS]) == 7
 
 
 def test_on_update_is_pinned_too(conn):
@@ -141,9 +144,18 @@ def test_the_cascade_map_covers_exactly_the_writing_actions(conn):
 
 
 def test_deleting_a_policy_is_mapped_to_its_cascading_children(conn):
+    """The map holds what a policy deletion WRITES, and api_keys is no longer
+    among them.
+
+    It used to be there with SET NULL, which is a write: deleting a policy
+    reached into every key bound to it and blanked the binding. api_keys is
+    RESTRICT now, so the deletion is refused instead and nothing is touched --
+    which is why it belongs outside this map rather than inside it with a
+    different action.
+    """
     by_policy_id = cascade_map(conn)[("policies", "id")]
     assert ("rule_sets", "policy_id", "DELETE", "CASCADE") in by_policy_id
-    assert ("api_keys", "policy_id", "DELETE", "SET NULL") in by_policy_id
+    assert not any(child == "api_keys" for child, *_ in by_policy_id), sorted(by_policy_id)
 
 
 def test_the_copy_map_finds_the_unique_index_holding_a_policy_name(conn):

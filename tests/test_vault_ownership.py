@@ -170,7 +170,7 @@ def test_deleting_a_policy_takes_its_vaults(vault_manager, policies, session_fac
 # looks correctly migrated.
 
 
-def _alembic(url: str, target: str) -> None:
+def _alembic(url: str, target: str, *, down: bool = False) -> None:
     """Drive a migration against `url`, and mean it.
 
     `alembic/env.py` prefers the DB_URL environment variable over the config's
@@ -188,7 +188,10 @@ def _alembic(url: str, target: str) -> None:
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", url)
     with patch.dict(os.environ, {"DB_URL": url}):
-        command.upgrade(cfg, target) if target != "-1" else command.downgrade(cfg, "-1")
+        if down:
+            command.downgrade(cfg, target)
+        else:
+            command.upgrade(cfg, target)
 
 
 _POLICY_SQL = (
@@ -255,11 +258,19 @@ def test_the_migrated_schema_enforces_ownership(tmp_path):
 
 
 def test_the_migration_round_trips(tmp_path):
+    """Down to the revision BELOW this one by name, not by "-1".
+
+    `-1` means "undo whatever is on top", which was this migration only while it
+    happened to be head. The moment anything landed above it, `-1` reverted that
+    instead and this test asserted the absence of a column nothing had removed.
+    Naming the target makes the test about this migration rather than about its
+    position in the chain.
+    """
     from sqlalchemy import inspect
 
     url = f"sqlite:///{tmp_path}/m.db"
     _alembic(url, "head")
-    _alembic(url, "-1")
+    _alembic(url, "d5e91a3c7b40", down=True)
     assert "policy_id" not in {c["name"] for c in inspect(get_engine(url)).get_columns("vaults")}
     _alembic(url, "head")
     cols = {c["name"] for c in inspect(get_engine(url)).get_columns("vaults")}
