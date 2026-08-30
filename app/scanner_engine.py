@@ -111,6 +111,11 @@ class ScanResult:
 # 2. Redactors mutate text
 # 3. Reporters only observe
 _DETECTOR_ORDER: list[str] = [
+    # FIRST, ahead of the injection classifier, because it changes what that
+    # classifier sees. It strips instructions the sender could not see, so
+    # everything downstream scans the text the model will actually receive --
+    # which is what the pipeline always assumed it was doing.
+    "hidden_instructions",
     "malicious_prompt",
     "mcp_validation",  # only runs on tool_listing
     "confidential_and_pii_entity",
@@ -126,6 +131,7 @@ _DETECTOR_ORDER: list[str] = [
 
 # Map policy detector names to (module, class) pairs
 _DETECTOR_REGISTRY: dict[str, tuple[str, str]] = {
+    "hidden_instructions": ("app.detectors.hidden_instructions", "HiddenInstructionsDetector"),
     "malicious_prompt": ("app.detectors.malicious_prompt", "MaliciousPromptDetector"),
     "mcp_validation": ("app.detectors.mcp_validation", "MCPValidationDetector"),
     "confidential_and_pii_entity": ("app.detectors.pii", "PIIDetector"),

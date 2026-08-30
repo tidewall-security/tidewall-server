@@ -88,6 +88,7 @@ BRANCHES: tuple[str, ...] = (
 #: "Every branch" and "every detector" are different claims: BRANCHES lists
 #: outcomes, this lists the components that produce them.
 DETECTORS: tuple[str, ...] = (
+    "hidden_instructions",
     "malicious_prompt",
     "mcp_validation",
     "confidential_and_pii_entity",
