@@ -16,6 +16,7 @@ from zero and admit another full quota.
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "d5e91a3c7b40"

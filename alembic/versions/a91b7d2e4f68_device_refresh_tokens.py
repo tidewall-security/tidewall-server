@@ -16,6 +16,7 @@ agreed to hold one would be worse than the single re-enrolment.
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "a91b7d2e4f68"

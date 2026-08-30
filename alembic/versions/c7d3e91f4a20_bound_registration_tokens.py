@@ -16,6 +16,7 @@ days from migration matches the ceiling the service now enforces on creation.
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "c7d3e91f4a20"

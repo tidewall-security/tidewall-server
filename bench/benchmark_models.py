@@ -13,6 +13,7 @@ Usage:
     .venv/bin/python bench/benchmark_models.py --thresholds 0.5
     .venv/bin/python bench/benchmark_models.py --models vijil_dome --thresholds 0.5 0.9
 """
+
 from __future__ import annotations
 
 import argparse
@@ -112,6 +113,7 @@ THRESHOLDS = [0.5, 0.9]
 # Server lifecycle
 # ---------------------------------------------------------------------------
 
+
 def write_policy(detector_config: dict[str, Any], threshold: float) -> Path:
     """Write a policy YAML with only malicious_prompt enabled."""
     cfg = {**detector_config, "threshold": threshold}
@@ -142,9 +144,16 @@ def start_server(policy_path: Path) -> subprocess.Popen:
     }
     proc = subprocess.Popen(
         [
-            str(TIDEWALL_DIR / ".venv" / "bin" / "python"), "-m", "uvicorn",
-            "app.main:app", "--port", str(PORT), "--host", "127.0.0.1",
-            "--log-level", "warning",
+            str(TIDEWALL_DIR / ".venv" / "bin" / "python"),
+            "-m",
+            "uvicorn",
+            "app.main:app",
+            "--port",
+            str(PORT),
+            "--host",
+            "127.0.0.1",
+            "--log-level",
+            "warning",
         ],
         cwd=str(TIDEWALL_DIR),
         env=env,
@@ -178,6 +187,7 @@ def stop_server(proc: subprocess.Popen) -> None:
 # Run tidewall-aiguard-lab
 # ---------------------------------------------------------------------------
 
+
 def run_tidewall_lab(
     model_key: str,
     model_cfg: dict[str, Any],
@@ -200,19 +210,28 @@ def run_tidewall_lab(
     }
 
     cmd = [
-        sys.executable, "aiguard_lab.py",
-        "--input_file", str(DATASET),
-        "--service", "tidewall",
-        "--detectors", "malicious-prompt",
-        "--rps", str(rps),
-        "--report_title", f"{label} @ threshold={threshold}",
-        "--summary_report_file", str(summary_file),
-        "--fps_out_csv", str(fps_file),
-        "--fns_out_csv", str(fns_file),
+        sys.executable,
+        "aiguard_lab.py",
+        "--input_file",
+        str(DATASET),
+        "--service",
+        "tidewall",
+        "--detectors",
+        "malicious-prompt",
+        "--rps",
+        str(rps),
+        "--report_title",
+        f"{label} @ threshold={threshold}",
+        "--summary_report_file",
+        str(summary_file),
+        "--fps_out_csv",
+        str(fps_file),
+        "--fns_out_csv",
+        str(fns_file),
         "--print_label_stats",
     ]
 
-    print(f"\n  Running tidewall-aiguard-lab...", flush=True)
+    print("\n  Running tidewall-aiguard-lab...", flush=True)
     result = subprocess.run(
         cmd,
         cwd=str(TIDEWALL_LAB_DIR),
@@ -242,6 +261,7 @@ def run_tidewall_lab(
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark prompt injection models via tidewall-aiguard-lab")
@@ -291,7 +311,7 @@ def main() -> None:
             print(f"{'='*60}", flush=True)
 
             policy_path = write_policy(cfg["detector_config"], threshold)
-            print(f"  Starting Tidewall server...", flush=True)
+            print("  Starting Tidewall server...", flush=True)
 
             try:
                 proc = start_server(policy_path)
@@ -302,7 +322,7 @@ def main() -> None:
             try:
                 run_tidewall_lab(model_key, cfg, threshold, output_dir, rps=args.rps)
             except subprocess.TimeoutExpired:
-                print(f"  TIMEOUT after 600s", flush=True)
+                print("  TIMEOUT after 600s", flush=True)
             finally:
                 stop_server(proc)
 

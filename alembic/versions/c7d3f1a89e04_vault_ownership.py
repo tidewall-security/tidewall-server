@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "c7d3f1a89e04"
@@ -32,9 +33,7 @@ def upgrade() -> None:
     with op.batch_alter_table("vaults") as batch:
         batch.add_column(sa.Column("policy_id", sa.String(), nullable=False))
         batch.add_column(sa.Column("created_by_key_id", sa.String(), nullable=True))
-        batch.create_foreign_key(
-            "fk_vaults_policy_id", "policies", ["policy_id"], ["id"], ondelete="CASCADE"
-        )
+        batch.create_foreign_key("fk_vaults_policy_id", "policies", ["policy_id"], ["id"], ondelete="CASCADE")
         batch.create_index("ix_vaults_policy_id", ["policy_id"])
 
 

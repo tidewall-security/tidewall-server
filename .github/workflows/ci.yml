@@ -33,8 +33,12 @@ jobs:
           key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
           restore-keys: uv-${{ runner.os }}-
       - run: uv sync --group dev
-      - run: uv run ruff check app/
-      - run: uv run ruff format --check app/
+      # `.`, not `app/`. Scoped to app/ this job reported a clean repo while
+      # 193 of its 275 Python files -- every test, every migration, seed_data
+      # and bench -- were never looked at, and two migrations sat on main
+      # carrying a format ruff rejects.
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
       # Ruff lints neither shell nor Markdown, and the operator runbook
       # publishes both -- a script the test suite executes and two blocks
       # operators paste.

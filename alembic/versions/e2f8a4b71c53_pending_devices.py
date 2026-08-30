@@ -20,6 +20,7 @@ Existing rows take the safe direction deliberately:
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "e2f8a4b71c53"
