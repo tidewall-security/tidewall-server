@@ -24,6 +24,19 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
+          # Skipped on every job in this repository. The runner is ephemeral, so
+          # pruning saves nothing that outlives the job -- and its failure fails
+          # the job AFTER every real step has passed. The contract job went red
+          # exactly that way, with all thirteen of its steps green, and the
+          # extension's mirror of it was red on every run from creation until
+          # 2026-08-30 for the same reason.
+          #
+          # Set uniformly rather than only where a failure has been observed:
+          # the two jobs that failed both check out two repositories and run uv
+          # from a subdirectory, which is a plausible-but-unproven cause. A rule
+          # applied by a theory nobody can evaluate is how four blocks came to
+          # sit silently outside it.
+          prune-cache: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -74,6 +87,19 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
+          # Skipped on every job in this repository. The runner is ephemeral, so
+          # pruning saves nothing that outlives the job -- and its failure fails
+          # the job AFTER every real step has passed. The contract job went red
+          # exactly that way, with all thirteen of its steps green, and the
+          # extension's mirror of it was red on every run from creation until
+          # 2026-08-30 for the same reason.
+          #
+          # Set uniformly rather than only where a failure has been observed:
+          # the two jobs that failed both check out two repositories and run uv
+          # from a subdirectory, which is a plausible-but-unproven cause. A rule
+          # applied by a theory nobody can evaluate is how four blocks came to
+          # sit silently outside it.
+          prune-cache: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
