@@ -113,7 +113,7 @@ def test_detection_survives_a_failed_sibling_and_is_marked_degraded():
     r = d.scan("text")
     # Toxicity blew up but topics found something. The detection is real and is
     # kept; it is also incomplete, and says so. Discarding it would delete a
-    # true positive and report "nothing found" — the exact defect P0-2 is.
+    # true positive and report "nothing found" — the fail-open exactly.
     assert r.detected is True
     assert r.degraded is True
     assert r.data["topics"] == [{"topic": "violence", "confidence": 0.9}]

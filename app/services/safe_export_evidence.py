@@ -1,4 +1,4 @@
-"""What an export is allowed to carry (P0-6, step 2).
+"""What an export is allowed to carry.
 
 `ScanResult.detectors` was passed straight into every export format. It goes
 verbatim into OCSF `unmapped.tidewall.findings`, AIDR `Vendor.findings` and the

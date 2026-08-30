@@ -160,7 +160,7 @@ class ExportService:
         Detector payloads are projected here rather than by the caller. Doing
         it at the call site left the invariant one edit away from being lost:
         any future caller could pass the raw structure and nothing would fail.
-        The service owns what may cross this boundary (P0-6).
+        The service owns what may cross this boundary.
         """
         kwargs["detectors"] = project_detectors(kwargs.get("detectors"))
         # Every textual field, not just detectors. Normalising at one call site

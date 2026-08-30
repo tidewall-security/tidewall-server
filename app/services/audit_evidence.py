@@ -1,6 +1,6 @@
 """The internal channel by which a detector reports what it actually matched.
 
-P0-6: Tidewall stores every prompt verbatim and serves it to any viewer. The
+Tidewall stored every prompt verbatim and served it to any viewer. The
 fix keeps a *tiered* record instead — type-and-count evidence at viewer level,
 exact matched values behind a separate grant, whole prompts behind another.
 

@@ -1,4 +1,4 @@
-"""P0-12: administrator-supplied regexes must not be able to hang the server.
+"""Administrator-supplied regexes must not be able to hang the server.
 
 Custom-entity patterns and regex prompt-list entries are written by an
 administrator and matched against text supplied by whoever calls the guard.
@@ -163,7 +163,8 @@ def test_the_compiled_object_is_not_a_stdlib_re_pattern():
     compiled = compile_pattern(r"(a+)+$")
 
     assert not isinstance(compiled, re.Pattern), (
-        "supplied patterns are being compiled with the backtracking stdlib engine; " "this is P0-12 reintroduced"
+        "supplied patterns are being compiled with the backtracking stdlib engine; "
+        "the denial-of-service hazard is reintroduced"
     )
 
 
@@ -322,7 +323,7 @@ def test_no_backtracking_engine_runs_a_supplied_pattern():
     assert not offenders, (
         "a backtracking regex engine is being handed a pattern that is not written in the source at: "
         + ", ".join(offenders)
-        + ". Administrator-supplied patterns must go through app/services/safe_regex.py (P0-12)."
+        + ". Administrator-supplied patterns must go through app/services/safe_regex.py."
     )
 
 

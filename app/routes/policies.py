@@ -144,7 +144,8 @@ async def update_policy(policy_id: str, body: UpdatePolicyRequest, request: Requ
         # enforcement gets a 200 and no behaviour change until restart.
         #
         # This is a targeted fix, not a general one: the throwaway-service
-        # pattern is P0-5's root cause and every other policy-mutating route has
+        # pattern is why a policy change did not reach the live engine, and every
+        # other policy-mutating route has
         # the same problem. The activation protocol replaces this wholesale.
         live_svc = getattr(request.app.state, "policy_service", None)
         if live_svc is not None:

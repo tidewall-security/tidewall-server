@@ -132,7 +132,7 @@ async def enrol_device(body: DeviceEnrolRequest, request: Request, response: Res
 
     Split from refresh deliberately. The combined endpoint took a registration
     token plus a client-supplied fingerprint and refreshed whatever device
-    matched, which let any token holder take over any device (P0-11).
+    matched, which let any token holder take over any device.
     """
     rt_token_hash = getattr(request.state, "rt_token_hash", None)
     if rt_token_hash is None:

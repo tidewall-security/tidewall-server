@@ -1,4 +1,4 @@
-"""The periodic job runner (P0-6, step 5).
+"""The periodic job runner.
 
 Retention previously ran at startup, after writes, and as a read gate — three
 partial mechanisms standing in for one missing thing. Each had a real gap:

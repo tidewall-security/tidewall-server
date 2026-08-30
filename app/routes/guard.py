@@ -420,7 +420,7 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
                 guard_output["tools"] = safe_tools
                 scan_result.transformed = True
 
-    # Detector failure enforcement (P0-2).
+    # Detector failure enforcement.
     #
     # A blocking or redacting detector that could not run means the request was
     # never actually protected. Allowing it here — which is what happened before

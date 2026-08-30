@@ -1,6 +1,6 @@
 """safe interaction storage
 
-P0-6: every guard evaluation stored the prompt verbatim and served it to any
+Every guard evaluation stored the prompt verbatim and served it to any
 viewer credential. Four columns on `interactions` carried content:
 
 - `input_messages` — the prompt;

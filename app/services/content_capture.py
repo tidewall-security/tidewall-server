@@ -1,4 +1,4 @@
-"""Optional raw content capture and its retention (P0-6, step 5).
+"""Optional raw content capture and its retention.
 
 Capture and retention land together deliberately. A configuration flag that
 can say "capture is on" before anything honours it is a lie the operator has

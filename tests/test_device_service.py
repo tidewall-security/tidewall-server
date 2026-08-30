@@ -1,6 +1,6 @@
 """Device enrolment and refresh.
 
-P0-11: refresh looked a device up by caller-supplied `fingerprint` alone. It
+Refresh looked a device up by caller-supplied `fingerprint` alone. It
 checked the caller held *a* registration token but never that the token owned
 that device, so any token holder plus a guessed fingerprint could revoke the
 victim's session and obtain an access token bound to their device and policy.
@@ -81,7 +81,7 @@ def _enrol(session, raw_rt, installation_id, **kw):
 
 
 def test_a_registration_token_cannot_refresh_someone_elses_device(db_session):
-    """The P0-11 regression, stated as the attack.
+    """The device-takeover regression, stated as the attack.
 
     Mallory holds a valid onboarding token and learns Alice's fingerprint.
     Previously that was enough to revoke Alice's session and receive an access

@@ -7,7 +7,8 @@ made `devices.fingerprint` nullable but never dropped the unnamed
 `UNIQUE (fingerprint)` constraint the original table was created with, because
 Alembic's batch mode silently carries forward a constraint it cannot name. A
 migrated deployment therefore still refused a second device reporting the same
-fingerprint — the denial-of-enrolment half of P0-11 — while the tests were
+fingerprint — the denial-of-enrolment half of the device-takeover finding —
+while the tests were
 green.
 
 These tests run alembic against a real file database and inspect the result.
@@ -48,7 +49,7 @@ def migrated_db(tmp_path):
 
 
 def test_fingerprint_is_no_longer_unique_in_a_migrated_database(migrated_db):
-    """Two devices may report the same fingerprint. That is the point of P0-11.
+    """Two devices may report the same fingerprint. That is the whole point.
 
     Asserted by inserting, not by reading DDL: the constraint that broke this
     was invisible to the ORM and to `create_all`.

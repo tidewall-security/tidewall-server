@@ -30,7 +30,8 @@ def _resolve_injection_label(configured: Any, model: Any) -> str | None:
     text-classification pipeline that returns ``{"label": "LABEL_1", ...}``.
     The comparison was ``r["label"] == 1``, which is never true, so the
     flagship blocking detector scored every prompt at 0.0 and detected nothing
-    on every clean install. That is P0-3.
+    on every clean install. The flagship blocking detector recognised no
+    positive label at all.
 
     Both sides are canonicalised to the model's own vocabulary here rather than
     compared as written, so ``1``, ``"1"``, ``"LABEL_1"`` and ``"INJECTION"``
@@ -471,7 +472,8 @@ class MaliciousPromptDetector(BaseDetector):
         # Nothing detected. Any sub-detector that failed is now load-bearing:
         # it is precisely the one that might have caught something, and there
         # is no positive verdict to make its absence immaterial. Reporting
-        # "clean" here is the fail-open P0-2 describes.
+        # "clean" here is the fail-open: a detector that could not run must not
+        # read as one that ran and found nothing.
         failed = [c for c in components.values() if c.status is DetectorStatus.FAILED]
         if failed:
             return DetectorResult(

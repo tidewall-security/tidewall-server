@@ -28,7 +28,7 @@ still occupies on disk, and what that reclamation does and does not achieve.
   good as the declaration, which can be false, incomplete, or stale after a
   network change.
 
-- **Device takeover via fingerprint (P0-11).** `POST /v1/devices/check`
+- **Device takeover via fingerprint.** `POST /v1/devices/check`
   looked a device up by the caller-supplied `fingerprint` and authorised the
   refresh on the strength of holding *a* registration token. Any holder of
   any registration token who learned or guessed a fingerprint could revoke

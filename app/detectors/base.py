@@ -33,7 +33,7 @@ class DetectorStatus(str, Enum):
     ``DetectorResult(detected=False)`` — indistinguishable from one that ran
     and found nothing. A broken scanner therefore looked exactly like a clean
     scan and the request was allowed through with "No threats detected". That
-    is P0-2, and this enum is the value that makes the two cases separable.
+    is the fail-open, and this enum is the value that makes the two cases separable.
     """
 
     OK = "ok"

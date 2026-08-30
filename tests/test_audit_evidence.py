@@ -1,4 +1,4 @@
-"""The internal exact-match channel (P0-6, step 1).
+"""The internal exact-match channel.
 
 This decides what exact content gets stored under the middle role tier. If a
 match can be recorded without being verified against the text it claims to come

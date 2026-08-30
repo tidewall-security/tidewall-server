@@ -6,7 +6,7 @@ the guard. Python's `re` backtracks, so that combination is a denial of service
 waiting to be configured: `(a+)+$` against 41 characters of `"a"*40 + "!"` runs
 for over three seconds and does not stop. It needs no crafted megabyte payload
 and no malice from the administrator — an ordinary-looking pattern is enough,
-and any caller can then take the guard offline (P0-12).
+and any caller can then take the guard offline.
 
 RE2 cannot backtrack. Matching is linear in the length of the input, so the
 same pattern and input return in about 0.1ms. That guarantee is a property of
@@ -81,7 +81,7 @@ def compile_pattern(pattern: str, *, case_insensitive: bool = False):
 
     Every caller matching a supplied pattern against request content must come
     through here. Calling `re.compile` on such a pattern anywhere else
-    reintroduces P0-12 at that site.
+    reintroduces the catastrophic-backtracking hazard at that site.
     """
     if not isinstance(pattern, str):
         raise UnsafePatternError(f"pattern must be a string, got {type(pattern).__name__}")

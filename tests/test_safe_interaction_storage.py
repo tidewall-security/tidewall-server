@@ -1,4 +1,4 @@
-"""P0-6 step 4: the audit record stores no prompt, and reads are scoped.
+"""The audit record stores no prompt, and reads are scoped.
 
 Four columns on `interactions` carried content: `input_messages`,
 `output_messages`, `detectors_json` and `summary`. The last is the one worth

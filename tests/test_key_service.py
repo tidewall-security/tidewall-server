@@ -113,7 +113,7 @@ def test_bootstrap_installs_operator_supplied_key_when_empty(db_session):
 
 
 def test_bootstrap_key_never_reaches_logs(db_session, caplog):
-    """P0-7 canary: the raw key must not appear in any log record.
+    """The raw key must not appear in any log record.
 
     The previous implementation logged it at warning level, putting a
     permanent administrator bearer token into whatever collects container
