@@ -275,12 +275,25 @@ jobs:
           TIDEWALL_ADMIN_KEY: ak_ci_contract_bootstrap_key_00000001
         run: uv run python ../extension/tests/integration/seed.py
 
+      # In-process, because the schema is deliberately not served: create_app
+      # sets openapi_url=None so the stock docs page is not left permanently
+      # broken by unconditional auth. The document still exists on the app
+      # object, which is where the extension's pin reads it from.
+      - name: Export the OpenAPI document for the extension to assert against
+        working-directory: server
+        run: |
+          uv run python -c "import json; from app.main import create_app; \
+            print(json.dumps(create_app().openapi()))" > /tmp/openapi.json
+          python -c "import json; d=json.load(open('/tmp/openapi.json')); \
+            assert d['components']['schemas']['EnrolFailure'], 'no failure models in the export'"
+
       - name: Client HTTP layer against the running server
         working-directory: extension
         env:
           TIDEWALL_INTEGRATION: "1"
           TIDEWALL_ADMIN_KEY: ak_ci_contract_bootstrap_key_00000001
-        run: npx vitest run tests/integration/live-server.test.ts
+          TIDEWALL_OPENAPI: /tmp/openapi.json
+        run: npx vitest run tests/integration/live-server.test.ts tests/integration/schema-pin.test.ts
 
       - name: The extension itself, in a real browser
         working-directory: extension
