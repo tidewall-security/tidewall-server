@@ -122,6 +122,18 @@ async def unredact(body: UnredactRequest, request: Request) -> UnredactResponse:
     # that gave them nothing anyway.
     from app.services.unredact_audit import record_unredact
 
+    # Claim the record for this attempt BEFORE trying it. One attempt gets at
+    # most one row: if this write fails the route answers 500 and the middleware
+    # must not add a second, contradictory row. In the worst case -- a commit
+    # that succeeded and then raised -- an `unredact` row is already on disk
+    # while the plaintext was withheld, and a middleware `unredact_refused`
+    # beside it would have the trail asserting both.
+    #
+    # A failed write here is therefore an unrecorded attempt, logged at error.
+    # That is the honest outcome: nothing was disclosed, so there is nothing the
+    # trail is failing to attest.
+    request.state.unredact_recorded = True
+
     if not record_unredact(request, request_id, ok=disclosed) and disclosed:
         raise HTTPException(
             status_code=500,

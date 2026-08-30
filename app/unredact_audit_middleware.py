@@ -66,6 +66,13 @@ class UnredactAuditMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _record_refusal(request) -> None:
+        # The handler records its own outcome and marks the attempt as claimed.
+        # Recording again would give one attempt two rows -- and when a
+        # disclosure audit fails after committing, the two rows would say
+        # opposite things about a request that disclosed nothing.
+        if getattr(request.state, "unredact_recorded", False):
+            return
+
         from app.services.unredact_audit import record_unredact
 
         request_id = getattr(request.state, "unredact_request_id", None)

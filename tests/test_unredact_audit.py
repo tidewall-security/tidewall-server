@@ -395,3 +395,50 @@ def test_a_reversal_that_reveals_nothing_is_not_refused_when_the_audit_fails(sea
     response = _post(client, key, {"fpe_context": _ctx(vault_id), "redacted_data": "nothing to replace here"})
 
     assert response.status_code == 200
+
+
+def test_one_attempt_never_produces_two_rows(sealed, monkeypatch):
+    """The handler records its own outcome; the middleware must not record again.
+
+    A failed disclosure audit makes the route answer 500, which the middleware
+    then sees as a non-200 and would record as a refusal -- for the same attempt
+    the handler had just tried to record as a disclosure. In the worst case the
+    commit succeeded and then raised, so an `unredact` row is already on disk
+    while the plaintext was withheld, and an `unredact_refused` beside it has
+    the trail asserting both about a request that disclosed nothing.
+    """
+    client, key, session_factory, vault_id, placeholder = sealed
+    from app.services.activity_service import ActivityService
+
+    committed: list[str] = []
+    real_log = ActivityService.log
+
+    def commits_then_fails(self, **kwargs):
+        real_log(self, **kwargs)  # the row lands
+        committed.append(kwargs["action"])
+        raise RuntimeError("connection lost after commit")
+
+    monkeypatch.setattr(ActivityService, "log", commits_then_fails)
+    before = len(_audit_rows(session_factory))
+
+    response = _post(client, key, {"fpe_context": _ctx(vault_id), "redacted_data": placeholder})
+
+    assert response.status_code == 500
+    assert SECRET not in response.text
+    rows = _audit_rows(session_factory)
+    assert (
+        len(rows) - before == 1
+    ), f"one attempt produced {len(rows) - before} rows: {[r.action for r in rows[before:]]}"
+
+
+def test_a_request_the_handler_never_reached_is_still_recorded(env):
+    """The claim is only made by the handler, so an attempt refused before it --
+    a schema rejection, a dependency -- is still the middleware's to record.
+
+    Without this, deferring to the handler would silently drop every refusal
+    that never got there.
+    """
+    client, key, session_factory = env
+    before = len(_audit_rows(session_factory))
+    assert _post(client, key, {"fpe_context": 123}).status_code == 422
+    assert len(_audit_rows(session_factory)) == before + 1
