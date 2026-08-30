@@ -574,15 +574,20 @@ class DeviceService:
         logger.info("Authorised recovery for device %s", device_id)
         return raw
 
-    def reap_pending_devices(self, *, now: datetime | None = None) -> int:
+    def reap_pending_devices(self, *, now: datetime | None = None, ttl: timedelta | None = None) -> int:
         """Delete unapproved devices past their TTL. Returns how many.
 
         No tombstone. A reaped device was never approved, so it was never told
         to stop -- entombing it would make that installation permanently
         unrecoverable for an enrolment nobody ever acted on.
+
+        `ttl` is a parameter because the deployment sets it. The module default
+        below is the value `Settings.PENDING_DEVICE_TTL_HOURS` declares, and
+        the scheduler passes the configured one in; leaving the constant as the
+        only source is how that setting came to be read by nothing at all.
         """
         moment = now or datetime.now(UTC)
-        cutoff = moment - PENDING_DEVICE_TTL
+        cutoff = moment - (ttl if ttl is not None else PENDING_DEVICE_TTL)
         stale = [
             d for d in self._session.query(Device).filter_by(status="pending").all() if as_utc(d.created_at) < cutoff
         ]

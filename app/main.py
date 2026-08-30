@@ -209,6 +209,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from app.services.scheduler import (
             Scheduler,
             export_abandon_job,
+            pending_device_job,
             retention_job,
             vault_retention_job,
         )
@@ -229,6 +230,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 # Resolves export attempts left pending by a process that is
                 # gone. It never sends anything.
                 export_abandon_job(SessionLocal, boot_id=process_lock.boot_id, scheduler=scheduler),
+                # Deletes unapproved devices past their TTL and gives their
+                # quota slots back. Without it the per-token pending counter
+                # only ever falls when a human acts, so a token collecting
+                # abandoned enrolments refuses every further one permanently.
+                pending_device_job(
+                    SessionLocal,
+                    ttl_hours=settings.PENDING_DEVICE_TTL_HOURS,
+                    scheduler=scheduler,
+                ),
             ]
         )
         scheduler_started = True
