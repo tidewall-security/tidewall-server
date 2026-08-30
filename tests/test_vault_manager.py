@@ -400,3 +400,78 @@ def test_encode_decode_fpe_context(session_factory):
     vault_id, _ = mgr.create_vault()
 
     assert mgr.decode_fpe_context(mgr.encode_fpe_context(vault_id)) == vault_id
+
+
+# ---------------------------------------------------------------------------
+# What the logs may name
+#
+# `/v1/activity` is admin-role and globally unfiltered, so the unredact audit
+# records the caller and never the vault. Application logs are operator-facing
+# rather than caller-facing, but they are shipped and aggregated far more
+# widely than the control plane, so the same rule applies to the same values.
+#
+# The rule is PROVENANCE, not "no vault ids in logs". An id minted by
+# `create_vault` for the request doing the logging discloses nothing -- the
+# caller has not seen it and no one else can ask about it. An id that ARRIVED
+# from a caller is a question being asked, and answering it in a log is the
+# existence oracle the 404 refuses to be. `save` logs its id; `get_vault` must
+# not log the one it was handed.
+
+
+_TELLTALE = "vlt_a_caller_supplied_this"
+
+
+def test_a_missing_keyring_is_reported_without_the_id_it_was_asked_for(session_factory, caplog):
+    """The operator learns the deployment cannot open vaults, not which one was asked for."""
+    with caplog.at_level("ERROR"):
+        assert VaultManager(session_factory, keyring=None).get_vault(_TELLTALE, POLICY) is None
+
+    assert "no vault can be opened" in caplog.text
+    assert _TELLTALE not in caplog.text
+
+
+def test_a_legacy_row_is_reported_without_the_id_that_found_it(session_factory, caplog):
+    """The sharper of the two: this fires only when a row EXISTS.
+
+    Logging the id here would separate "exists but is legacy" from "no such
+    vault" for anyone reading the logs, which is precisely the distinction the
+    uniform absent-vault answer is built to withhold. "This deployment still
+    holds legacy rows" is the actionable part, and it survives the omission.
+    """
+    with session_factory() as session:
+        session.add(
+            VaultModel(
+                id=_TELLTALE,
+                data=b'{"placeholders": {}, "counters": {}}',
+                created_at=datetime.now(UTC),
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+                policy_id=POLICY,
+            )
+        )
+        session.commit()
+
+    with caplog.at_level("INFO"):
+        assert _manager(session_factory).get_vault(_TELLTALE, POLICY) is None
+
+    assert "predates the sealed format" in caplog.text
+    assert _TELLTALE not in caplog.text
+
+
+def test_a_failed_save_still_names_its_own_id(session_factory, caplog):
+    """The positive control, and the reason the two above are about provenance.
+
+    Without this, both would pass against a manager that had simply stopped
+    logging -- or against one that logged nothing at all. This id came from
+    `create_vault` microseconds earlier and has never left the process, so
+    naming it tells a reader which write failed and tells an attacker nothing.
+    """
+    mgr = VaultManager(session_factory, keyring=None)
+    _ensure_policy(mgr)
+    vault_id, vault = mgr.create_vault()
+    vault.store("EMAIL", SECRET)
+
+    with caplog.at_level("ERROR"):
+        assert mgr.save(vault_id, vault, POLICY) is False
+
+    assert "redaction is irreversible" in caplog.text
+    assert vault_id in caplog.text
