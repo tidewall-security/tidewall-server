@@ -19,6 +19,7 @@ re-enrol; there is no record of them to reconstruct one from.
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "b83f2c5a91d7"
@@ -37,9 +38,7 @@ def upgrade() -> None:
         sa.Column("recovery_secret_hash", sa.String(), nullable=True),
         sa.Column("consumed_at", sa.DateTime(), nullable=True),
     )
-    op.create_index(
-        "ix_device_tombstones_installation_id", "device_tombstones", ["installation_id"]
-    )
+    op.create_index("ix_device_tombstones_installation_id", "device_tombstones", ["installation_id"])
 
 
 def downgrade() -> None:

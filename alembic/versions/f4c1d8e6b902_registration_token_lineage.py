@@ -17,6 +17,7 @@ can drop them.
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "f4c1d8e6b902"
