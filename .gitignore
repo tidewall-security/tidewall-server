@@ -39,6 +39,8 @@ data/
 # Demo helpers
 .demo.pid
 .demo.log
+# A real admin credential for as long as the demo database exists.
+.demo.key
 
 # Editors / OS
 .idea/
