@@ -9773,3 +9773,31 @@ operation = "guard"
 grant = "api"
 representation = "plain"
 collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "random-canary"
+placement = "message-content"
+branch = "report"
+detector = "hidden_instructions"
+event = "input"
+component = "hidden_instructions"
+sub_path = "pattern_match"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "random-canary"
+placement = "message-content"
+branch = "report"
+detector = "hidden_instructions"
+event = "input"
+component = "hidden_instructions"
+sub_path = "reported"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]

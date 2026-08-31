@@ -8,6 +8,20 @@ raw_content_enabled: false
 raw_content_retention_days: null
 
 detectors:
+  # FIRST, and enabled by default, because without it every detector below
+  # scans text the model will not receive. Instructions encoded in the Unicode
+  # Tag Block are invisible in every font and fully readable to a model: the
+  # injection classifier blocks them as plain text and saw nothing at all when
+  # they were smuggled behind innocent cover text.
+  #
+  # `redact` rather than `block`: the hidden characters are stripped and the
+  # user's visible prompt goes through untouched, so a legitimate request is
+  # not refused for carrying something the sender could not see. What was
+  # hidden is decoded into the evidence either way.
+  hidden_instructions:
+    enabled: true
+    action: redact
+
   malicious_prompt:
     enabled: true
     action: block

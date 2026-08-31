@@ -55,6 +55,16 @@ source = "app/services/export_transport.py"
 why = "refuses before the URL is parsed"
 
 [[component]]
+identity = "hidden_instructions/pattern_match"
+source = "app/detectors/hidden_instructions.py"
+why = "the ranges ran over the text"
+
+[[component]]
+identity = "hidden_instructions/reported"
+source = "app/detectors/hidden_instructions.py"
+why = "hidden text found and carried out"
+
+[[component]]
 identity = "language/classification"
 source = "app/detectors/language.py"
 why = "the classifier ran and produced a verdict"
