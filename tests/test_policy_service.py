@@ -70,9 +70,13 @@ def test_create_policy(db_session):
     )
     assert policy.id is not None
     assert policy.name == "new-policy"
-    # Should have input and output rule sets
+    # One rule set per event type. Counted against EVENT_TYPES rather than a
+    # literal: this assertion previously read `== 2`, which is how a policy
+    # missing three event types looked correct for as long as it did.
+    from app.models import EVENT_TYPES
+
     rule_sets = db_session.query(RuleSet).filter_by(policy_id=policy.id).all()
-    assert len(rule_sets) == 2
+    assert len(rule_sets) == len(EVENT_TYPES)
 
 
 def test_update_policy(seeded_session):
@@ -282,3 +286,38 @@ def test_deleting_a_policy_bound_to_an_api_key_is_refused(seeded_session):
 
     with pytest.raises(PolicyInUseError, match="API key"):
         svc.delete_policy(scoped.id)
+
+
+def test_create_policy_creates_a_rule_set_for_every_event_type(db_session):
+    """The API path is pinned to the same set as the seed path.
+
+    Seeding and create_policy each held their own copy of ("input", "output"),
+    so fixing one would have left every API-created policy incomplete. Both now
+    read EVENT_TYPES, and both are asserted against it.
+    """
+    from app.models import EVENT_TYPES
+    from app.services.policy_service import PolicyService
+
+    svc = PolicyService(session_factory=lambda: db_session)
+    policy = svc.create_policy(name="p-every-event-type", detectors={})
+
+    rule_sets = db_session.query(RuleSet).filter_by(policy_id=policy.id).all()
+    assert {rs.event_type for rs in rule_sets} == set(EVENT_TYPES)
+
+
+def test_create_policy_tool_rule_sets_carry_no_report_only_or_access_rules(db_session):
+    """Detectors are inherited; report_only and access rules are not.
+
+    Same reasoning as the seed path: the route reads the requested event type's
+    own row for access rules and its report_only override, so populating either
+    on the new rows would change tool-event behaviour rather than preserve it.
+    """
+    from app.services.policy_service import PolicyService
+
+    svc = PolicyService(session_factory=lambda: db_session)
+    policy = svc.create_policy(name="p-tool-rows-clean", detectors={})
+
+    for et in ("tool_input", "tool_output", "tool_listing"):
+        rs = db_session.query(RuleSet).filter_by(policy_id=policy.id, event_type=et).one()
+        assert rs.report_only is None, f"{et} must not carry a report_only override"
+        assert rs.access_rules == [], f"{et} must not carry access rules"

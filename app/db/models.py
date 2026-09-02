@@ -6,7 +6,7 @@ The schema mirrors industry AI security platforms data model with these table gr
     Policy → RuleSet → AccessRule
 
     A Policy is the top-level config unit.  Each policy has one or more
-    RuleSets keyed by event_type ("input", "output", "tool_listing").
+    RuleSets keyed by event_type -- one per member of EVENT_TYPES.
     Each RuleSet contains detector configs (JSON) and optional AccessRules
     that pre-filter requests before detectors run.
 

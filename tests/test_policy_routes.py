@@ -15,6 +15,7 @@ from sqlalchemy.pool import StaticPool
 from app.auth.key_utils import generate_key, hash_key, key_prefix
 from app.auth.middleware import AuthMiddleware
 from app.db.models import APIKey, Base, Policy, RuleSet
+from app.models import EVENT_TYPES
 
 
 def _make_app_and_client():
@@ -144,9 +145,12 @@ def test_create_policy(setup):
     assert data["description"] == "A test policy"
     assert data["report_only"] is True
     assert data["is_default"] is False
-    assert len(data["rule_sets"]) == 2
+    # A rule set per event type, compared against EVENT_TYPES rather than a
+    # literal pair. Asserting {"input", "output"} is how a policy missing three
+    # event types looked correct through the API as well as in the database.
+    assert len(data["rule_sets"]) == len(EVENT_TYPES)
     event_types = {rs["event_type"] for rs in data["rule_sets"]}
-    assert event_types == {"input", "output"}
+    assert event_types == set(EVENT_TYPES)
 
 
 # ------------------------------------------------------------------
@@ -271,7 +275,7 @@ def test_import_policy(setup):
     data = resp.json()
     assert data["name"] == "imported-policy"
     assert data["report_only"] is True
-    assert len(data["rule_sets"]) == 2
+    assert len(data["rule_sets"]) == len(EVENT_TYPES)
 
 
 # ------------------------------------------------------------------
