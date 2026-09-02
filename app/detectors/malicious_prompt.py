@@ -271,6 +271,63 @@ class MaliciousPromptDetector(BaseDetector):
     def name(self) -> str:
         return "malicious_prompt"
 
+    def _usable_window(self) -> int:
+        """Content tokens the classifier can accept without truncating.
+
+        The pipeline is built with ``max_length=512``, and the tokenizer adds
+        special tokens on top of the content -- two for this model. So 510 raw
+        tokens survive intact and 511 loses one. Derived from the tokenizer
+        rather than hardcoded, because a different model pairs with a different
+        overhead and a wrong constant here silently truncates again.
+        """
+        return 512 - self._pipeline.tokenizer.num_special_tokens_to_add()
+
+    def _injection_label_score(self, text: str) -> float:
+        """The resolved injection label's score, not the top label's."""
+        for r in self._pipeline(text):
+            if r["label"] == self._injection_label:
+                return float(r["score"])
+        return 0.0
+
+    def _score_injection(self, text: str) -> float:
+        """Score the head and the tail, existentially.
+
+        The classifier truncates its input and the score was then treated as the
+        verdict for the whole text. Because the route joins every message into
+        one string, a long enough conversation pushed the turn being submitted
+        outside the scanned region -- a clean verdict on text never read.
+
+        Text that fits in one window is passed through unchanged: no
+        re-tokenisation, no decode round trip, so the common case behaves
+        exactly as before. Only longer text costs a second inference.
+
+        This mitigates displacement of recent content. It does not close the
+        gap: an attacker who controls the text can pad both ends and place an
+        injection in the uninspected middle. That limit is asserted by a test
+        rather than left implicit.
+        """
+        tokenizer = getattr(self._pipeline, "tokenizer", None)
+        if tokenizer is None:
+            # No tokenizer to measure with, so windowing is not possible. Score
+            # in one pass, which is exactly the previous behaviour and therefore
+            # never worse -- but say so, because silently reverting to the
+            # truncating path is how this defect existed in the first place.
+            logger.warning(
+                "injection classifier has no accessible tokenizer; scoring in a "
+                "single pass, so text beyond the model's window is not read"
+            )
+            return self._injection_label_score(text)
+
+        ids = tokenizer(text, add_special_tokens=False)["input_ids"]
+        window = self._usable_window()
+
+        if len(ids) <= window:
+            return self._injection_label_score(text)
+
+        head = tokenizer.decode(ids[:window])
+        tail = tokenizer.decode(ids[-window:])
+        return max(self._injection_label_score(head), self._injection_label_score(tail))
+
     def scan(self, text: str, **kwargs: Any) -> DetectorResult:
         """Evaluate text through the 4-step detection pipeline.
 
@@ -398,12 +455,7 @@ class MaliciousPromptDetector(BaseDetector):
         # release:component malicious_prompt/generic_injection_ml -- HF pipeline; not lists or intent
         if self._generic_injection_enabled and self._pipeline:
             try:
-                results = self._pipeline(text)
-                injection_score = 0.0
-                for r in results:
-                    if r["label"] == self._injection_label:
-                        injection_score = r["score"]
-                        break
+                injection_score = self._score_injection(text)
                 components["generic_injection"] = ComponentStatus()
             except Exception as exc:
                 # Covers both inference and malformed output: indexing r["label"]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -106,11 +107,24 @@ def seed_from_yaml(session: Session, yaml_path: str | Path) -> None:
     # event type's own row for both and finds nothing. Copying those would newly
     # apply input's access rules to tool events, which can block before any
     # detector runs.
+    # Per-surface overrides, merged over the base detectors for the named event
+    # type. Validated rather than merely read: an override naming an event type
+    # that does not exist would configure nothing at all, which is the
+    # accepted-but-not-honoured pattern this codebase keeps finding.
+    overrides = raw.get("event_overrides") or {}
+    unknown = set(overrides) - set(EVENT_TYPES)
+    if unknown:
+        raise ValueError(f"event_overrides names event types that do not exist: {sorted(unknown)}")
+
     for event_type in sorted(EVENT_TYPES):
+        merged = deepcopy(detectors) if detectors else {}
+        for det_name, det_override in (overrides.get(event_type) or {}).items():
+            merged.setdefault(det_name, {}).update(det_override)
+        validate_detectors(merged)
         rule_set = RuleSet(
             policy_id=policy.id,
             event_type=event_type,
-            detectors=detectors,
+            detectors=merged,
         )
         session.add(rule_set)
 
