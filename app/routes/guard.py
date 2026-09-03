@@ -180,8 +180,21 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     from app.services.rule_evaluator import evaluate_access_rules
 
     rule_set = policy_svc.get_rule_set(policy_id, event_type)
+    if rule_set is None:
+        # `get_engine` above refuses this same condition. A cached engine can
+        # outlive its rule set, and reaching here with none would evaluate the
+        # request with no access rules at all -- silently, because an absent
+        # rule set is indistinguishable from one that configures none.
+        logger.error(
+            "no rule set for policy=%s event_type=%s after building its engine; "
+            "refusing rather than evaluating with no access rules",
+            policy_id,
+            event_type,
+        )
+        raise HTTPException(status_code=500, detail="No rule set configured for this event type")
+
     effective_report_only = False
-    if rule_set and rule_set.report_only is not None:
+    if rule_set.report_only is not None:
         effective_report_only = rule_set.report_only
     elif policy and policy.report_only:
         effective_report_only = policy.report_only
@@ -190,7 +203,7 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     access_rules_result: dict[str, Any] = {"action": "continue", "matched_rules": [], "blocked": False}
 
     # release:component access_rules/early_block -- blocks before any detector runs
-    if rule_set and rule_set.access_rules:
+    if rule_set.access_rules:
         access_rules_data = [
             {
                 "name": ar.name,
