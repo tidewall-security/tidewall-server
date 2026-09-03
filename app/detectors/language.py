@@ -59,6 +59,16 @@ class LanguageDetector(BaseDetector):
             # release:component language/pipeline_unavailable -- model never loaded; absence proves nothing
             return self.unavailable_result()
 
+        # Nothing to classify. A tool listing carries its content in `tools`,
+        # not in messages, so every one of them arrives here with empty text --
+        # and this returned a detection on no content at all: the classifier
+        # labels the empty string as some language, and that language is then
+        # not on the allow-list.
+        #
+        # An empty scan is vacuous, not a finding and not a failure.
+        if not text.strip():
+            return DetectorResult(detected=False)
+
         try:
             results = self._pipeline(text)
         except Exception as exc:

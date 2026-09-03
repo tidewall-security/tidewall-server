@@ -137,6 +137,40 @@ class TopicDetector(BaseDetector):
         if self._topics_pipeline is None and self._toxicity_pipeline is None:
             return self.unavailable_result()
 
+        # Nothing to classify. A tool listing carries its content in `tools`,
+        # not in messages, so every one of them arrives here with empty text,
+        # and the zero-shot pipeline raises on an empty string -- which marked
+        # every such request degraded over no content at all.
+        #
+        # An empty scan is vacuous: not a finding and not a failure. But it is
+        # not silence either. Returning a bare not-detected here hid a
+        # half-loaded model, because this sits in front of the component
+        # bookkeeping below -- and on the one event type whose text is always
+        # empty, that failure would never have surfaced anywhere.
+        if not text.strip():
+            blank_components = {}
+            for part, pipe in (("toxicity", self._toxicity_pipeline), ("topics", self._topics_pipeline)):
+                load_failure = self._load_failures.get(part)
+                if load_failure is not None:
+                    blank_components[part] = ComponentStatus(status=DetectorStatus.FAILED, failure_code=load_failure)
+                elif pipe is None:
+                    blank_components[part] = ComponentStatus(
+                        status=DetectorStatus.SKIPPED, skip_reason=SkipReason.NOT_ENABLED
+                    )
+                else:
+                    blank_components[part] = ComponentStatus(
+                        status=DetectorStatus.SKIPPED, skip_reason=SkipReason.NO_INPUT
+                    )
+            failed = [c for c in blank_components.values() if c.status is DetectorStatus.FAILED]
+            if failed:
+                return DetectorResult(
+                    detected=False,
+                    status=DetectorStatus.FAILED,
+                    failure_code=failed[0].failure_code,
+                    components=blank_components,
+                )
+            return DetectorResult(detected=False, components=blank_components)
+
         topics_found: list[dict[str, Any]] = []
         detected = False
         # This detector is a composite (toxicity + banned topics), so one

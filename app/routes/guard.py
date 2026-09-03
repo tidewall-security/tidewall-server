@@ -38,7 +38,7 @@ from app.interaction_log import _validated_ip as _safe_ip
 from app.models import GuardRequest, GuardResponse, GuardResult
 from app.services.safe_export_evidence import project_detectors
 from app.services.safe_logging import describe, report
-from app.tool_scan import ToolScanRefusal, decide_listing, scan_tools
+from app.tool_scan import ToolScanRefusal, decide_listing, scan_tools, tool_name
 from app.utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
@@ -496,11 +496,7 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
         # caller-supplied, may duplicate, and are nested differently in MCP and
         # OpenAI tool shapes -- the index is assigned here from the list we
         # received, so it identifies the right tool in either shape.
-        removed = {
-            i
-            for i, t in enumerate(tools)
-            if i in flagged_indices or t.get("function", {}).get("name", "") in filtered_names
-        }
+        removed = {i for i, t in enumerate(tools) if i in flagged_indices or tool_name(t) in filtered_names}
         decision = decide_listing(tools, removed, redaction_failed)
         if decision.blocked:
             logger.error(

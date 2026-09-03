@@ -21,6 +21,8 @@ import logging
 from difflib import SequenceMatcher
 from typing import Any
 
+from app.tool_scan import tool_name
+
 from .base import BaseDetector, DetectorResult
 
 logger = logging.getLogger(__name__)
@@ -37,7 +39,7 @@ class MCPValidationDetector(BaseDetector):
     def name(self) -> str:
         return "mcp_validation"
 
-    # release:component mcp_validation/name_similarity -- reads function.name only
+    # release:component mcp_validation/name_similarity -- compares advertised names in either tool shape
     def scan(self, text: str, **kwargs: Any) -> DetectorResult:
         tools = kwargs.get("tools", [])
         if not tools:
@@ -46,8 +48,7 @@ class MCPValidationDetector(BaseDetector):
         # Extract tool names
         names: list[tuple[str, dict]] = []
         for tool in tools:
-            func = tool.get("function", {}) if isinstance(tool, dict) else {}
-            name = func.get("name", "")
+            name = tool_name(tool)
             if name:
                 names.append((name, tool))
 
