@@ -38,7 +38,7 @@ from app.interaction_log import _validated_ip as _safe_ip
 from app.models import GuardRequest, GuardResponse, GuardResult
 from app.services.safe_export_evidence import project_detectors
 from app.services.safe_logging import describe, report
-from app.tool_scan import ToolScanRefusal, scan_tools
+from app.tool_scan import ToolScanRefusal, decide_listing, scan_tools
 from app.utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
@@ -486,7 +486,7 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     # Handle MCP tool filtering (tool_listing events). Skipped after a failed
     # redaction: rebuilding a guard_output there would re-populate the field the
     # discard just cleared.
-    if event_type == "tool_listing" and tools and not redaction_failed:
+    if event_type == "tool_listing" and tools:
         mcp_det = scan_result.detectors.get("mcp_validation", {})
         filtered_names: set[str] = set()
         if mcp_det.get("detected") and mcp_det.get("data", {}).get("action") == "blocked":
@@ -496,20 +496,23 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
         # caller-supplied, may duplicate, and are nested differently in MCP and
         # OpenAI tool shapes -- the index is assigned here from the list we
         # received, so it identifies the right tool in either shape.
-        if filtered_names or flagged_indices:
-            safe_tools = [
-                t
-                for i, t in enumerate(tools)
-                if i not in flagged_indices and t.get("function", {}).get("name", "") not in filtered_names
-            ]
+        removed = {
+            i
+            for i, t in enumerate(tools)
+            if i in flagged_indices or t.get("function", {}).get("name", "") in filtered_names
+        }
+        decision = decide_listing(tools, removed, redaction_failed)
+        if decision.blocked:
+            logger.error(
+                "tool listing flagged %d definition(s) that cannot be filtered out; refusing",
+                len(removed),
+            )
+            scan_result.blocked = True
+        if decision.safe_tools is not None:
             if guard_output is None:
                 guard_output = {}
-            guard_output["tools"] = safe_tools
+            guard_output["tools"] = decision.safe_tools
             scan_result.transformed = True
-            # Nothing survived inspection, so there is no filtered listing to
-            # serve; that is a refusal, not a transform a caller can apply.
-            if not safe_tools:
-                scan_result.blocked = True
 
     # Detector failure enforcement.
     #

@@ -208,3 +208,52 @@ def test_the_tool_count_is_bounded_where_validation_can_refuse_it():
     GuardInput(messages=[], tools=[{"name": f"t{i}"} for i in range(MAX_TOOLS)])
     with pytest.raises(ValidationError):
         GuardInput(messages=[], tools=[{"name": f"t{i}"} for i in range(MAX_TOOLS + 1)])
+
+
+class TestListingDecision:
+    """The one-sentence invariant: if anything was flagged and no filtered
+    listing can be served, the request must not succeed."""
+
+    def test_a_clean_listing_is_served_unchanged(self):
+        from app.tool_scan import decide_listing
+
+        decision = decide_listing([{"name": "a"}, {"name": "b"}], set(), redaction_failed=False)
+        assert decision.blocked is False
+        assert decision.safe_tools is None, "an untouched listing needs no replacement"
+
+    def test_a_flagged_tool_is_removed_and_the_rest_served(self):
+        from app.tool_scan import decide_listing
+
+        tools = [{"name": "a"}, {"name": "poisoned"}, {"name": "c"}]
+        decision = decide_listing(tools, {1}, redaction_failed=False)
+        assert decision.blocked is False
+        assert decision.safe_tools == [{"name": "a"}, {"name": "c"}]
+
+    def test_a_flagged_tool_blocks_when_redaction_discarded_the_output(self):
+        """The regression.
+
+        Filtering was skipped entirely when message redaction had failed, so
+        the flagged definition went back to the caller with a clean status --
+        the guard found the poisoned tool and served it anyway.
+        """
+        from app.tool_scan import decide_listing
+
+        tools = [{"name": "a"}, {"name": "poisoned"}]
+        decision = decide_listing(tools, {1}, redaction_failed=True)
+        assert decision.blocked is True, "a flagged tool must never be served unfiltered"
+        assert decision.safe_tools is None
+
+    def test_a_listing_where_nothing_survives_is_a_refusal(self):
+        from app.tool_scan import decide_listing
+
+        decision = decide_listing([{"name": "poisoned"}], {0}, redaction_failed=False)
+        assert decision.blocked is True
+        assert decision.safe_tools == []
+
+    def test_redaction_failure_alone_does_not_block(self):
+        """Only a flagged tool forces the refusal; redaction failure is handled
+        by the path that owns it."""
+        from app.tool_scan import decide_listing
+
+        decision = decide_listing([{"name": "a"}], set(), redaction_failed=True)
+        assert decision.blocked is False
