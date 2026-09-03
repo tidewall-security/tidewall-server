@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ import yaml
 from sqlalchemy.orm import Session
 
 from app.db.models import Policy, RuleSet
+from app.models import EVENT_TYPES
 from app.services.policy_validation import validate_detectors
 
 logger = logging.getLogger(__name__)
@@ -90,11 +92,39 @@ def seed_from_yaml(session: Session, yaml_path: str | Path) -> None:
     # silently enforce nothing.
     validate_detectors(detectors or {})
 
-    for event_type in ("input", "output"):
+    # Every event type the schema accepts, read from EVENT_TYPES rather than
+    # restated here. Seeding only "input" and "output" left three event types
+    # with no rule set, and the guard silently resolved them to the input engine
+    # -- so tool surfaces were scanned under the input policy while appearing to
+    # have none of their own. A restated tuple is what let that persist; reading
+    # the set means a sixth event type cannot be added without this loop
+    # covering it.
+    #
+    # Sorted for deterministic ordering: EVENT_TYPES is a frozenset.
+    #
+    # `detectors` only. RuleSet also carries `report_only` and `access_rules`,
+    # and tool events inherit neither today -- the route reads the requested
+    # event type's own row for both and finds nothing. Copying those would newly
+    # apply input's access rules to tool events, which can block before any
+    # detector runs.
+    # Per-surface overrides, merged over the base detectors for the named event
+    # type. Validated rather than merely read: an override naming an event type
+    # that does not exist would configure nothing at all, which is the
+    # accepted-but-not-honoured pattern this codebase keeps finding.
+    overrides = raw.get("event_overrides") or {}
+    unknown = set(overrides) - set(EVENT_TYPES)
+    if unknown:
+        raise ValueError(f"event_overrides names event types that do not exist: {sorted(unknown)}")
+
+    for event_type in sorted(EVENT_TYPES):
+        merged = deepcopy(detectors) if detectors else {}
+        for det_name, det_override in (overrides.get(event_type) or {}).items():
+            merged.setdefault(det_name, {}).update(det_override)
+        validate_detectors(merged)
         rule_set = RuleSet(
             policy_id=policy.id,
             event_type=event_type,
-            detectors=detectors,
+            detectors=merged,
         )
         session.add(rule_set)
 

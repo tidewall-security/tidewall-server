@@ -712,3 +712,159 @@ def test_a_refresh_token_cannot_call_guard(setup):
         headers={"Authorization": f"Bearer {enrolled['access_token']['token']}"},
     )
     assert ok.status_code == 200
+
+
+def test_missing_rule_set_refuses_rather_than_silently_using_the_input_engine():
+    """A missing rule set is control-plane uncertainty, so the request fails.
+
+    This previously fell back to the `input` engine. Because no creation path
+    made rule sets for the tool event types, that fallback ran for every
+    tool_input, tool_output and tool_listing request ever served -- scanning
+    them under the input policy while appearing to have none of their own.
+
+    All three creation paths now produce a rule set per event type and a
+    migration backfills existing databases, so a missing row means genuine
+    misconfiguration. The codebase's stance on control uncertainty is to fail
+    rather than proceed under a different configuration, matching the missing
+    default policy a few lines above.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from app.auth.key_utils import generate_key, hash_key, key_prefix
+    from app.auth.middleware import AuthMiddleware
+    from app.db.models import APIKey, Base, Policy, RuleSet
+    from app.interaction_log import InteractionLog
+    from app.routes import guard as guard_route
+    from app.services.policy_service import PolicyService
+    from app.vault_manager import VaultManager
+
+    eng = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(eng)
+    SL = sessionmaker(bind=eng)
+    s = SL()
+    policy = Policy(name="p", type="application", report_only=False, is_default=True)
+    s.add(policy)
+    s.flush()
+    # Every event type EXCEPT tool_output, which is the missing-row case.
+    for et in ("input", "output", "tool_input", "tool_listing"):
+        s.add(RuleSet(policy_id=policy.id, event_type=et, detectors={}))
+    raw = generate_key(prefix="ak")
+    s.add(
+        APIKey(
+            name="k",
+            key_hash=hash_key(raw),
+            key_prefix=key_prefix(raw),
+            role="admin",
+            policy_id=policy.id,
+        )
+    )
+    s.commit()
+    policy_id = policy.id  # read before the session closes; the instance detaches
+    s.close()
+
+    app = FastAPI()
+    app.add_middleware(AuthMiddleware)
+    app.state.session_factory = SL
+    app.state.policy_service = PolicyService(session_factory=SL)
+    app.state.vault_manager = VaultManager(session_factory=SL)
+    app.state.interaction_log = InteractionLog(session_factory=SL)
+
+    class _NoExport:
+        async def emit(self, **kwargs):
+            return None
+
+    app.state.export_service = _NoExport()
+    app.include_router(guard_route.router)
+
+    resp = TestClient(app, raise_server_exceptions=False).post(
+        "/v1/guard_chat_completions",
+        json={"guard_input": {"messages": [{"role": "user", "content": "hi"}]}, "event_type": "tool_output"},
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+
+    assert resp.status_code == 500, "a missing rule set must not be served under another surface"
+    detail = resp.json().get("detail", "")
+    # HTTPException detail is returned verbatim -- validation_errors.py only
+    # sanitises RequestValidationError -- so it must not name internal state.
+    assert policy_id not in detail, "the error must not disclose the policy id"
+    assert "engine" not in detail.lower(), "the error must not disclose engine internals"
+
+
+def test_a_rule_set_deleted_after_its_engine_was_cached_refuses():
+    """The engine cache can outlive the row it was built from.
+
+    `get_engine` refuses a missing rule set, but it caches on the way through,
+    so a later request answers from the cache without consulting the row again.
+    The route then looked the rule set up a second time and treated absence as
+    "this surface configures no access rules" -- so the request was evaluated
+    with none, silently, rather than refused.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from app.auth.key_utils import generate_key, hash_key, key_prefix
+    from app.auth.middleware import AuthMiddleware
+    from app.db.models import APIKey, Base, Policy, RuleSet
+    from app.interaction_log import InteractionLog
+    from app.routes import guard as guard_route
+    from app.services.policy_service import PolicyService
+    from app.vault_manager import VaultManager
+
+    eng = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(eng)
+    SL = sessionmaker(bind=eng)
+    s = SL()
+    policy = Policy(name="p", type="application", report_only=False, is_default=True)
+    s.add(policy)
+    s.flush()
+    for et in ("input", "output", "tool_input", "tool_output", "tool_listing"):
+        s.add(RuleSet(policy_id=policy.id, event_type=et, detectors={}))
+    raw = generate_key(prefix="ak")
+    s.add(
+        APIKey(
+            name="k",
+            key_hash=hash_key(raw),
+            key_prefix=key_prefix(raw),
+            role="admin",
+            policy_id=policy.id,
+        )
+    )
+    s.commit()
+    policy_id = policy.id
+    s.close()
+
+    app = FastAPI()
+    app.add_middleware(AuthMiddleware)
+    app.state.session_factory = SL
+    app.state.policy_service = PolicyService(session_factory=SL)
+    app.state.vault_manager = VaultManager(session_factory=SL)
+    app.state.interaction_log = InteractionLog(session_factory=SL)
+
+    class _NoExport:
+        async def emit(self, **kwargs):
+            return None
+
+    app.state.export_service = _NoExport()
+    app.include_router(guard_route.router)
+    client = TestClient(app, raise_server_exceptions=False)
+    body = {"guard_input": {"messages": [{"role": "user", "content": "hi"}]}, "event_type": "input"}
+    headers = {"Authorization": f"Bearer {raw}"}
+
+    first = client.post("/v1/guard_chat_completions", json=body, headers=headers)
+    assert first.status_code == 200, "the engine must build and cache before the row is removed"
+
+    s2 = SL()
+    s2.query(RuleSet).filter_by(policy_id=policy_id, event_type="input").delete()
+    s2.commit()
+    s2.close()
+
+    second = client.post("/v1/guard_chat_completions", json=body, headers=headers)
+    assert second.status_code == 500, "a vanished rule set must refuse, not evaluate with no access rules"
+    assert policy_id not in second.json().get("detail", "")

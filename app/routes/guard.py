@@ -148,18 +148,53 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     policy_id = policy.id
     policy_name = policy.name
 
-    # Get or build the ScannerEngine for this (policy, event_type)
+    # Get or build the ScannerEngine for this (policy, event_type).
+    #
+    # A missing rule set used to fall back to the `input` engine. Because no
+    # creation path made rule sets for the tool event types, that fallback ran
+    # for every tool_input, tool_output and tool_listing request ever served:
+    # those surfaces were scanned under the input policy while appearing to
+    # have no configuration of their own, and no per-surface threshold could
+    # exist because there was no row to hold one.
+    #
+    # All three creation paths now produce a rule set per event type and a
+    # migration backfills existing databases, so a missing row is genuine
+    # misconfiguration. Serving it under a different surface's policy would be
+    # silent scope substitution, which is what the fallback was.
+    #
+    # The detail is deliberately generic: `validation_errors.py` sanitises only
+    # RequestValidationError, so an HTTPException detail reaches the caller
+    # verbatim and must not disclose the policy or anything about resolution.
     try:
         engine = policy_svc.get_engine(policy_id, event_type)
     except ValueError:
-        engine = policy_svc.get_engine(policy_id, "input")
+        logger.error(
+            "no rule set for policy=%s event_type=%s; refusing rather than "
+            "evaluating under another surface's configuration",
+            policy_id,
+            event_type,
+        )
+        raise HTTPException(status_code=500, detail="No rule set configured for this event type") from None
 
     # --- Access rule evaluation (runs BEFORE detectors) ---
     from app.services.rule_evaluator import evaluate_access_rules
 
     rule_set = policy_svc.get_rule_set(policy_id, event_type)
+    if rule_set is None:
+        # `get_engine` above refuses this same condition. A cached engine can
+        # outlive its rule set, and reaching here with none would evaluate the
+        # request with no access rules at all -- silently, because an absent
+        # rule set is indistinguishable from one that configures none.
+        logger.error(
+            "no rule set for policy=%s event_type=%s after building its engine; "
+            "refusing rather than evaluating with no access rules",
+            policy_id,
+            event_type,
+        )
+        raise HTTPException(status_code=500, detail="No rule set configured for this event type")
+
     effective_report_only = False
-    if rule_set and rule_set.report_only is not None:
+    if rule_set.report_only is not None:
         effective_report_only = rule_set.report_only
     elif policy and policy.report_only:
         effective_report_only = policy.report_only
@@ -168,7 +203,7 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     access_rules_result: dict[str, Any] = {"action": "continue", "matched_rules": [], "blocked": False}
 
     # release:component access_rules/early_block -- blocks before any detector runs
-    if rule_set and rule_set.access_rules:
+    if rule_set.access_rules:
         access_rules_data = [
             {
                 "name": ar.name,

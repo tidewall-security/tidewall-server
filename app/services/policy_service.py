@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.config import OnDetectorFailure
 from app.db.models import APIKey, Device, Policy, RegistrationToken, RuleSet
+from app.models import EVENT_TYPES
 from app.scanner_engine import ScannerEngine
 from app.services.policy_validation import validate_detectors
 
@@ -148,8 +149,18 @@ class PolicyService:
             session.add(policy)
             session.flush()
 
-            # Create default input + output rule sets
-            for event_type in ("input", "output"):
+            # A rule set for every event type the schema accepts, read from
+            # EVENT_TYPES rather than restated. This loop and the one in
+            # app/db/seed.py were independent copies of ("input", "output"), so
+            # three event types had no rule set and the guard resolved them to
+            # the input engine silently. Fixing only one path would have left
+            # every API-created policy incomplete.
+            #
+            # `detectors` only: report_only and access_rules are deliberately
+            # left unset, because the route reads the requested event type's own
+            # row for both, and populating them would change tool-event
+            # behaviour rather than preserve it.
+            for event_type in sorted(EVENT_TYPES):
                 rs = RuleSet(
                     policy_id=policy.id,
                     event_type=event_type,

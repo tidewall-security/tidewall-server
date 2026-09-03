@@ -89,3 +89,23 @@ detectors:
   emoji:
     enabled: true
     action: report
+
+# Per-surface detector overrides, merged over `detectors` for the named event
+# type. An event type absent here uses `detectors` unchanged.
+#
+# The injection classifier ran at one threshold everywhere, and its false
+# positives concentrate almost entirely on tool_output -- measured at 211 of
+# 221 benign false-positive events on a 303-session corpus. Raising the
+# threshold only where the cost lands keeps detection while removing eight
+# benign sessions from the blocked set: same 18 of 42 sessions caught, 72 of
+# 261 benign blocked rather than 80.
+#
+# These values are an operating point selected against that corpus. They are
+# not a law, and a deployment with different traffic should re-measure.
+event_overrides:
+  output:
+    malicious_prompt:
+      threshold: 0.975
+  tool_output:
+    malicious_prompt:
+      threshold: 0.98
