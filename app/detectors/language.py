@@ -61,7 +61,9 @@ class LanguageDetector(BaseDetector):
 
         # Nothing to classify. A tool listing carries its content in `tools`,
         # not in messages, so every one of them arrives here with empty text --
-        # and this returned a detection -- the classifier labels empty text as some language, which is then not on the allow-list, on no content at all.
+        # and this returned a detection on no content at all: the classifier
+        # labels the empty string as some language, and that language is then
+        # not on the allow-list.
         #
         # An empty scan is vacuous, not a finding and not a failure.
         if not text.strip():

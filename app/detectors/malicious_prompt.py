@@ -271,6 +271,18 @@ class MaliciousPromptDetector(BaseDetector):
     def name(self) -> str:
         return "malicious_prompt"
 
+    def _require_pipeline(self) -> Any:
+        """The classifier, or a clear failure instead of an attribute error.
+
+        Every caller is already gated on the pipeline existing. Stating it here
+        makes that invariant local rather than assumed, so a future caller that
+        forgets the gate gets a named error rather than ``NoneType`` has no
+        attribute -- and the checker can see it too.
+        """
+        if self._pipeline is None:
+            raise RuntimeError("the generic injection classifier is not loaded")
+        return self._pipeline
+
     def _usable_window(self) -> int:
         """Content tokens the classifier can accept without truncating.
 
@@ -280,11 +292,14 @@ class MaliciousPromptDetector(BaseDetector):
         rather than hardcoded, because a different model pairs with a different
         overhead and a wrong constant here silently truncates again.
         """
-        return 512 - self._pipeline.tokenizer.num_special_tokens_to_add()
+        tokenizer = getattr(self._require_pipeline(), "tokenizer", None)
+        if tokenizer is None:
+            raise RuntimeError("the injection classifier has no accessible tokenizer")
+        return 512 - int(tokenizer.num_special_tokens_to_add())
 
     def _injection_label_score(self, text: str) -> float:
         """The resolved injection label's score, not the top label's."""
-        for r in self._pipeline(text):
+        for r in self._require_pipeline()(text):
             if r["label"] == self._injection_label:
                 return float(r["score"])
         return 0.0
@@ -331,7 +346,7 @@ class MaliciousPromptDetector(BaseDetector):
     @property
     def injection_threshold(self) -> float:
         """The score at or above which the generic classifier counts as a hit."""
-        return self._threshold
+        return float(self._threshold)
 
     def tool_text_exceeds_capacity(self, text: str) -> bool | None:
         """Whether ``text`` is longer than the classifier can read in one pass.

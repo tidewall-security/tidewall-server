@@ -37,8 +37,8 @@ from app.interaction_log import _validated as _safe_meta
 from app.interaction_log import _validated_ip as _safe_ip
 from app.models import GuardRequest, GuardResponse, GuardResult
 from app.services.safe_export_evidence import project_detectors
-from app.tool_scan import ToolScanRefusal, scan_tools, tool_name
 from app.services.safe_logging import describe, report
+from app.tool_scan import ToolScanRefusal, scan_tools, tool_name
 from app.utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
@@ -400,9 +400,7 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
             data["entities"] = [{"type": "TOOL"} for f in tool_hits if f.detector == det_name]
             entry["data"] = data
         if tool_hits:
-            scan_result.summary_parts.append(
-                f"{len(tool_hits)} tool definition(s) failed inspection."
-            )
+            scan_result.summary_parts.append(f"{len(tool_hits)} tool definition(s) failed inspection.")
 
     captured_matches = None
     if match_collector is not None:
@@ -487,10 +485,7 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
         # received, so it identifies the right tool in either shape.
         if filtered_names or flagged_indices:
             safe_tools = [
-                t
-                for i, t in enumerate(tools)
-                if i not in flagged_indices
-                and tool_name(t) not in filtered_names
+                t for i, t in enumerate(tools) if i not in flagged_indices and tool_name(t) not in filtered_names
             ]
             if guard_output is None:
                 guard_output = {}

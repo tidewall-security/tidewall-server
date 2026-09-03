@@ -127,9 +127,7 @@ def extract_tool_strings(tool: Any, index: int) -> list[str]:
 
         elif isinstance(node, list):
             if len(node) > MAX_ARRAY_LENGTH:
-                raise ToolScanRefusal(
-                    index, f"definition contains an array longer than {MAX_ARRAY_LENGTH}"
-                )
+                raise ToolScanRefusal(index, f"definition contains an array longer than {MAX_ARRAY_LENGTH}")
             for item in node:
                 stack.append((item, depth + 1))
 
@@ -143,14 +141,10 @@ def extract_tool_strings(tool: Any, index: int) -> list[str]:
 
 def _collect(parts: list[str], text: str, characters: int, index: int) -> int:
     if len(text) > MAX_STRING_LENGTH:
-        raise ToolScanRefusal(
-            index, f"definition contains a string longer than {MAX_STRING_LENGTH} characters"
-        )
+        raise ToolScanRefusal(index, f"definition contains a string longer than {MAX_STRING_LENGTH} characters")
     characters += len(text)
     if characters > MAX_CHARACTERS:
-        raise ToolScanRefusal(
-            index, f"definition extracts more than {MAX_CHARACTERS} characters of text"
-        )
+        raise ToolScanRefusal(index, f"definition extracts more than {MAX_CHARACTERS} characters of text")
     parts.append(text)
     return characters
 
@@ -211,15 +205,12 @@ def scan_tools(
                     _fail("hidden_instructions")
                     break
                 if getattr(result, "detected", False):
-                    findings.append(
-                        ToolFinding(index=index, detected=True, detector="hidden_instructions")
-                    )
+                    findings.append(ToolFinding(index=index, detected=True, detector="hidden_instructions"))
                     decided.add(index)
                     break
 
     if malicious_prompt is None:
-        return ToolScanOutcome(findings=sorted(findings, key=lambda f: f.index),
-                               failed_detectors=failed)
+        return ToolScanOutcome(findings=sorted(findings, key=lambda f: f.index), failed_detectors=failed)
 
     for index, strings in enumerate(per_tool):
         if index in decided:
@@ -230,10 +221,7 @@ def scan_tools(
                 _fail("malicious_prompt")
                 break
             if matched:
-                findings.append(
-                    ToolFinding(index=index, detected=True, detector="malicious_prompt",
-                                confidence=1.0)
-                )
+                findings.append(ToolFinding(index=index, detected=True, detector="malicious_prompt", confidence=1.0))
                 decided.add(index)
                 break
 
@@ -249,13 +237,9 @@ def scan_tools(
             over = malicious_prompt.tool_text_exceeds_capacity(text)
             if over is None:
                 _fail("malicious_prompt")
-                return ToolScanOutcome(
-                    findings=sorted(findings, key=lambda f: f.index), failed_detectors=failed
-                )
+                return ToolScanOutcome(findings=sorted(findings, key=lambda f: f.index), failed_detectors=failed)
             if over:
-                raise ToolScanRefusal(
-                    index, "definition contains text longer than the classifier can read at once"
-                )
+                raise ToolScanRefusal(index, "definition contains text longer than the classifier can read at once")
             unique[text] = 0.0
 
     if unique:
@@ -264,9 +248,7 @@ def scan_tools(
             scores = malicious_prompt.classify_tool_texts(texts, batch_size=batch_size)
         except Exception:
             _fail("malicious_prompt")
-            return ToolScanOutcome(
-                findings=sorted(findings, key=lambda f: f.index), failed_detectors=failed
-            )
+            return ToolScanOutcome(findings=sorted(findings, key=lambda f: f.index), failed_detectors=failed)
         unique.update(dict(zip(texts, scores, strict=True)))
 
         threshold = malicious_prompt.injection_threshold
@@ -275,10 +257,6 @@ def scan_tools(
                 continue
             best = max((unique.get(t, 0.0) for t in strings if t.strip()), default=0.0)
             if best >= threshold:
-                findings.append(
-                    ToolFinding(index=index, detected=True, detector="malicious_prompt",
-                                confidence=best)
-                )
+                findings.append(ToolFinding(index=index, detected=True, detector="malicious_prompt", confidence=best))
 
-    return ToolScanOutcome(findings=sorted(findings, key=lambda f: f.index),
-                           failed_detectors=failed)
+    return ToolScanOutcome(findings=sorted(findings, key=lambda f: f.index), failed_detectors=failed)

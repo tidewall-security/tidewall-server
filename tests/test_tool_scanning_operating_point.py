@@ -25,9 +25,7 @@ INJECTION = (
 def detector():
     policy = yaml.safe_load(open("policy.yaml"))
     config = dict((policy.get("detectors") or {}).get("malicious_prompt") or {})
-    override = (
-        (policy.get("event_overrides") or {}).get("tool_listing", {}).get("malicious_prompt", {})
-    )
+    override = (policy.get("event_overrides") or {}).get("tool_listing", {}).get("malicious_prompt", {})
     config.update(override)
     return MaliciousPromptDetector(config)
 
