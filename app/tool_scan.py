@@ -161,6 +161,40 @@ class ToolScanOutcome:
         return any(f.detected for f in self.findings)
 
 
+@dataclass(frozen=True)
+class ListingDecision:
+    """What to serve for a tool listing once inspection has flagged something.
+
+    ``safe_tools`` is None when there is no filtered listing to serve at all.
+    """
+
+    safe_tools: list[Any] | None
+    blocked: bool
+
+
+def decide_listing(tools: list[Any], removed_indices: set[int], redaction_failed: bool) -> ListingDecision:
+    """Decide the listing outcome. Pure, because this was easy to get wrong.
+
+    The invariant is one sentence -- if anything was flagged and no filtered
+    listing can be served, the request must not succeed -- and the first
+    version broke it. Filtering was skipped entirely when message redaction had
+    failed, so a flagged definition went back to the caller with a clean
+    status: the guard found the poisoned tool and served it anyway.
+    """
+    if not removed_indices:
+        return ListingDecision(safe_tools=None, blocked=False)
+
+    if redaction_failed:
+        # Redaction discarded the guard output, so there is nowhere to put a
+        # filtered listing. Refusing is the only safe answer left.
+        return ListingDecision(safe_tools=None, blocked=True)
+
+    safe = [t for i, t in enumerate(tools) if i not in removed_indices]
+    # Nothing survived, so there is no filtered listing to serve; that is a
+    # refusal, not a transform a caller can apply.
+    return ListingDecision(safe_tools=safe, blocked=not safe)
+
+
 def scan_tools(
     tools: list[Any],
     malicious_prompt: Any | None,

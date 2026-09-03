@@ -113,3 +113,48 @@ class TestPolicyPinsTheOperatingPoint:
         # 0.8 (the code default) flags 7% of real tools. Raising this back
         # without re-measuring reintroduces that.
         assert policy["detectors"]["mcp_validation"]["similarity_threshold"] == 0.95
+
+
+class TestBlankInputStillReportsFailures:
+    """Vacuous is not the same as silent."""
+
+    def test_a_half_loaded_topic_detector_still_reports_the_failure(self, policy):
+        """The blank-input shortcut sits in front of the component bookkeeping.
+
+        Returning a bare not-detected there hid a model that failed to load --
+        and on `tool_listing`, whose text is always empty, that failure would
+        never have surfaced anywhere at all.
+        """
+        from app.detectors.base import DetectorStatus, FailureCode
+        from app.detectors.topic import TopicDetector
+
+        detector = TopicDetector((policy["detectors"]).get("topic") or {})
+        # One pipeline down, the other healthy: the partial case, which is the
+        # one that used to vanish.
+        detector._topics_pipeline = None
+        detector._load_failures["topics"] = FailureCode.MODEL_LOAD_FAILED
+
+        result = detector.scan("")
+
+        assert result.detected is False
+        assert result.status is DetectorStatus.FAILED, "a load failure must not read as a clean scan"
+        assert result.components["topics"].status is DetectorStatus.FAILED
+
+    def test_a_healthy_detector_on_blank_input_is_not_a_failure(self, policy):
+        from app.detectors.base import DetectorStatus
+        from app.detectors.topic import TopicDetector
+
+        result = TopicDetector((policy["detectors"]).get("topic") or {}).scan("")
+        assert result.detected is False
+        assert result.status is DetectorStatus.OK
+        # Skipped for want of input, which is a policy outcome and never degrades.
+        assert all(c.status is DetectorStatus.SKIPPED for c in result.components.values())
+
+
+class TestConflictingToolNames:
+    def test_the_nested_name_wins_and_the_precedence_is_pinned(self):
+        """A definition carrying both shapes is malformed, and something has to
+        win. The nested name does, because that is the shape whose presence
+        signals an OpenAI-style definition; pinning it here means the choice is
+        deliberate rather than incidental to the order of two lookups."""
+        assert tool_name({"function": {"name": "nested"}, "name": "top"}) == "nested"

@@ -323,15 +323,19 @@ class MaliciousPromptDetector(BaseDetector):
         """
         tokenizer = getattr(self._pipeline, "tokenizer", None)
         if tokenizer is None:
-            # No tokenizer to measure with, so windowing is not possible. Score
-            # in one pass, which is exactly the previous behaviour and therefore
-            # never worse -- but say so, because silently reverting to the
-            # truncating path is how this defect existed in the first place.
-            logger.warning(
-                "injection classifier has no accessible tokenizer; scoring in a "
-                "single pass, so text beyond the model's window is not read"
+            # Windowing is impossible without a tokenizer to measure with, and
+            # the single-pass fallback that used to stand here IS the defect
+            # this method exists to fix: the pipeline truncates, and the score
+            # of the surviving prefix becomes the verdict for the whole text.
+            #
+            # Falling back to it returns a clean-looking answer about content
+            # that was never read. A failure says so instead -- the caller
+            # records it as a component failure, which the detector-failure
+            # policy can act on.
+            raise RuntimeError(
+                "the injection classifier has no accessible tokenizer, so its input "
+                "cannot be windowed and would be silently truncated"
             )
-            return self._injection_label_score(text)
 
         ids = tokenizer(text, add_special_tokens=False)["input_ids"]
         window = self._usable_window()
