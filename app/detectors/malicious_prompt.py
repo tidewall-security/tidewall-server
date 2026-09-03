@@ -328,6 +328,68 @@ class MaliciousPromptDetector(BaseDetector):
         tail = tokenizer.decode(ids[-window:])
         return max(self._injection_label_score(head), self._injection_label_score(tail))
 
+    @property
+    def injection_threshold(self) -> float:
+        """The score at or above which the generic classifier counts as a hit."""
+        return self._threshold
+
+    def tool_text_exceeds_capacity(self, text: str) -> bool | None:
+        """Whether ``text`` is longer than the classifier can read in one pass.
+
+        The bound is the classifier's own usable capacity, not a chosen number.
+        A cap above it would let the pipeline truncate silently and score the
+        remainder as the verdict for the whole string — which is the bypass
+        this exists to prevent, so the cap must be derived from the model.
+
+        ``None`` when there is no tokenizer to ask.
+        """
+        tokenizer = getattr(self._pipeline, "tokenizer", None)
+        if tokenizer is None:
+            return None
+        ids = tokenizer(text, add_special_tokens=False)["input_ids"]
+        return len(ids) > self._usable_window()
+
+    def matches_malicious_list(self, text: str) -> bool | None:
+        """Whether the operator's malicious list matches. ``None`` if unavailable.
+
+        The benign list is deliberately not consulted. It is an override
+        calibrated for prompt text, and it short-circuits to not-detected —
+        letting an operator's benign phrase exempt a poisoned tool definition.
+        """
+        if not (self._custom_malicious_enabled and self._prompt_list_svc):
+            return False
+        try:
+            return bool(self._prompt_list_svc.check_match(text, "malicious"))
+        except Exception as exc:
+            logger.warning("Custom malicious list check failed for a tool: %s", describe(exc))
+            return None
+
+    # release:component malicious_prompt/tool_definition_ml -- batched HF pipeline over tool text; no windowing
+    def classify_tool_texts(self, texts: list[str], batch_size: int = 8) -> list[float]:
+        """Score each text through the generic injection classifier, whole.
+
+        No windowing and no truncation. Every text has already been checked
+        against the classifier's usable capacity, so each is classified
+        entire; anything larger was refused before reaching here.
+
+        Batching is explicit — passing a list alone still runs one at a time.
+        """
+        if not self._pipeline:
+            raise RuntimeError("generic injection classifier is not loaded")
+        if not texts:
+            return []
+        outputs = self._pipeline(texts, batch_size=batch_size, top_k=None)
+        scores: list[float] = []
+        for entry in outputs:
+            candidates = entry if isinstance(entry, list) else [entry]
+            score = 0.0
+            for candidate in candidates:
+                if candidate.get("label") == self._injection_label:
+                    score = float(candidate["score"])
+                    break
+            scores.append(score)
+        return scores
+
     def scan(self, text: str, **kwargs: Any) -> DetectorResult:
         """Evaluate text through the 4-step detection pipeline.
 

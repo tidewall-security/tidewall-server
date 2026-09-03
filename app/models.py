@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from app.tool_scan import MAX_TOOLS
 from pydantic import BaseModel, ConfigDict, Field
 
 # ===================================================================
@@ -60,7 +61,10 @@ class GuardInput(BaseModel):
     model_config = {"extra": "allow"}
 
     messages: list[Message] = []
-    tools: list[dict] = []
+    #: Bounded because inference work is proportional to tool count and the
+    #: caller chooses it. Landing the limit here reuses the existing redacted
+    #: 422 handler rather than inventing a second refusal shape.
+    tools: list[dict] = Field(default_factory=list, max_length=MAX_TOOLS)
 
 
 class GuardRequest(BaseModel):

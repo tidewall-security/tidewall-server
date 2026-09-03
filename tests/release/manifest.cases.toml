@@ -9801,3 +9801,91 @@ operation = "guard"
 grant = "api"
 representation = "plain"
 collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+# Tool definitions are extracted field by field and classified per string,
+# so the placements below are the walk's reach: a description, a tool name,
+# and text nested inside the parameter schema each reach the classifier.
+
+[[case]]
+leaf = "mcp-description"
+placement = "tool-description"
+branch = "tool-listing"
+detector = "malicious_prompt"
+event = "tool_listing"
+component = "malicious_prompt"
+sub_path = "tool_definition_ml"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "mcp-name"
+placement = "tool-name"
+branch = "tool-listing"
+detector = "malicious_prompt"
+event = "tool_listing"
+component = "malicious_prompt"
+sub_path = "tool_definition_ml"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "mcp-parameters"
+placement = "tool-parameters"
+branch = "tool-listing"
+detector = "malicious_prompt"
+event = "tool_listing"
+component = "malicious_prompt"
+sub_path = "tool_definition_ml"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "mcp-description"
+placement = "tool-description"
+branch = "allow"
+detector = "malicious_prompt"
+event = "tool_listing"
+component = "malicious_prompt"
+sub_path = "tool_definition_ml"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "mcp-description"
+placement = "tool-description"
+branch = "degraded"
+detector = "malicious_prompt"
+event = "tool_listing"
+component = "malicious_prompt"
+sub_path = "tool_definition_ml"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "plain"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]
+
+[[case]]
+leaf = "mcp-description"
+placement = "tool-description"
+branch = "tool-listing"
+detector = "malicious_prompt"
+event = "tool_listing"
+component = "malicious_prompt"
+sub_path = "tool_definition_ml"
+capture = "capture-off"
+operation = "guard"
+grant = "api"
+representation = "json-escaped"
+collectors = ["app-log", "artifact-bytes", "database", "http-response-body", "http-response-headers", "http-status", "stderr", "uvicorn-access-log", "uvicorn-error-log"]

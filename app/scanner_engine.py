@@ -414,6 +414,18 @@ class ScannerEngine:
     # Full scan (all messages concatenated)
     # -----------------------------------------------------------------------
 
+    def detector(self, name: str):
+        """Return one constructed detector by name, or None if it is not enabled.
+
+        The tool pass needs the instances without the aggregate machinery
+        around them: that machinery keeps a single running text and one merged
+        result, which cannot represent a verdict per tool.
+        """
+        for det_name, det in self._detectors:
+            if det_name == name:
+                return det
+        return None
+
     def scan(
         self,
         text: str,
