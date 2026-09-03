@@ -19,8 +19,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from app.tool_scan import MAX_TOOLS
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.tool_scan import MAX_TOOLS
 
 # ===================================================================
 # Request models

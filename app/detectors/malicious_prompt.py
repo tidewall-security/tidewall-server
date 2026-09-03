@@ -346,7 +346,7 @@ class MaliciousPromptDetector(BaseDetector):
     @property
     def injection_threshold(self) -> float:
         """The score at or above which the generic classifier counts as a hit."""
-        return self._threshold
+        return float(self._threshold)
 
     def tool_text_exceeds_capacity(self, text: str) -> bool | None:
         """Whether ``text`` is longer than the classifier can read in one pass.
