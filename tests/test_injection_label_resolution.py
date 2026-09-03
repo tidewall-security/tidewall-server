@@ -58,6 +58,35 @@ def test_semantic_labels_resolve_when_the_model_uses_them():
     assert _resolve_injection_label(1, _Semantic()) == "INJECTION"
 
 
+class _StubTokenizer:
+    """Enough of a tokenizer for the windowing path to measure with.
+
+    A real pipeline always carries one. A stub that does not is the same class
+    of convenient fiction as a stub returning the wrong response shape, and the
+    windowing path now refuses rather than scoring text it cannot measure.
+    """
+
+    def __call__(self, text, add_special_tokens=True):
+        return {"input_ids": list(range(len(text.split())))}
+
+    def num_special_tokens_to_add(self):
+        return 2
+
+    def decode(self, ids):
+        return " ".join(str(i) for i in ids)
+
+
+class _StubPipeline:
+    """The REAL response shape: a list of dicts, string labels, float scores."""
+
+    def __init__(self, score):
+        self._score = score
+        self.tokenizer = _StubTokenizer()
+
+    def __call__(self, text, **kwargs):
+        return [{"label": "LABEL_1", "score": self._score}]
+
+
 def _detector(label, score):
     """A detector wired to a pipeline returning the REAL response shape.
 
@@ -69,7 +98,7 @@ def _detector(label, score):
     d._generic_injection_enabled = True
     d._injection_label = label
     d._threshold = 0.9
-    d._pipeline = lambda text: [{"label": "LABEL_1", "score": score}]
+    d._pipeline = _StubPipeline(score)
     d._load_failures.clear()
     return d
 
