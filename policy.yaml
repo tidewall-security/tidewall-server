@@ -109,3 +109,11 @@ event_overrides:
   tool_output:
     malicious_prompt:
       threshold: 0.98
+  # Tool definitions are scanned field by field, and a tool description is an
+  # imperative sentence by nature -- the same grammar the classifier is trained
+  # to treat as an instruction. Measured over 849 descriptions reconstructed
+  # from 103 public MCP servers: 3 flag at 0.9, 1 at 0.99, while an outright
+  # injection in a description scores 0.999 and is still caught here.
+  tool_listing:
+    malicious_prompt:
+      threshold: 0.99

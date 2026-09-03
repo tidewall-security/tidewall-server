@@ -121,7 +121,10 @@ def test_event_overrides_are_applied_per_event_type(empty_db):
     assert threshold("output") == 0.975
     assert threshold("tool_output") == 0.98
     # An event type with no override inherits the base block unchanged.
-    assert threshold("tool_listing") == 0.9
+    # Tool definitions are scanned field by field, and a description is an
+    # imperative sentence -- the grammar the classifier reads as an
+    # instruction. Raised to cut that false-positive class.
+    assert threshold("tool_listing") == 0.99
 
 
 def test_an_override_for_an_unknown_event_type_is_refused(empty_db, tmp_path):

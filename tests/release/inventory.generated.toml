@@ -105,6 +105,11 @@ source = "app/detectors/malicious_prompt.py"
 why = "separate method and input from app_intent"
 
 [[component]]
+identity = "malicious_prompt/tool_definition_ml"
+source = "app/detectors/malicious_prompt.py"
+why = "batched HF pipeline over tool text; no windowing"
+
+[[component]]
 identity = "mcp_validation/name_similarity"
 source = "app/detectors/mcp_validation.py"
 why = "reads function.name only"

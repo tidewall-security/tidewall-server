@@ -32,12 +32,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.auth.dependencies import require_role
 from app.config import OnDetectorFailure
-from app.detectors.base import FailureCode
+from app.detectors.base import DetectorStatus, FailureCode
 from app.interaction_log import _validated as _safe_meta
 from app.interaction_log import _validated_ip as _safe_ip
 from app.models import GuardRequest, GuardResponse, GuardResult
 from app.services.safe_export_evidence import project_detectors
 from app.services.safe_logging import describe, report
+from app.tool_scan import ToolScanRefusal, decide_listing, scan_tools
 from app.utils import now_iso as _now_iso
 
 logger = logging.getLogger(__name__)
@@ -373,6 +374,47 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
         engine.scan, all_text, event_type, vault_id, vault, tools, messages, match_collector
     )
 
+    flagged_indices: set[int] = set()
+    # Tool definitions are not part of `all_text` -- the engine scans messages,
+    # and tools arrive alongside them -- so an injection in a description
+    # reached no detector at all. They are evaluated here, one verdict per tool.
+    if event_type == "tool_listing" and tools:
+        try:
+            tool_outcome = await asyncio.to_thread(
+                scan_tools,
+                tools,
+                engine.detector("malicious_prompt"),
+                engine.detector("hidden_instructions"),
+            )
+        except ToolScanRefusal as exc:
+            # A refusal, not a detector failure: detector failures default to
+            # report, which would pass the uninspected definition through.
+            logger.warning("Refusing tool listing: %s", exc)
+            raise HTTPException(
+                status_code=422,
+                detail="A tool definition exceeds the maximum size that can be inspected.",
+            ) from None
+
+        for failed_name in tool_outcome.failed_detectors:
+            # Recorded as enforcing so an inspection that did not happen reaches
+            # on_detector_failure, instead of being reported as a clean listing.
+            scan_result.record_failure(failed_name, FailureCode.SCAN_FAILED, action="block")
+
+        tool_hits = [f for f in tool_outcome.findings if f.detected]
+        flagged_indices = {f.index for f in tool_hits}
+        for det_name in sorted({f.detector for f in tool_hits}):
+            entry = scan_result.detectors.setdefault(det_name, {})
+            entry["detected"] = True
+            entry["status"] = DetectorStatus.OK.value
+            data = dict(entry.get("data") or {})
+            data["action"] = "blocked"
+            # Tool names are caller-supplied, so evidence carries the closed
+            # entity type and a count -- never the name, and never the index.
+            data["entities"] = [{"type": "TOOL"} for f in tool_hits if f.detector == det_name]
+            entry["data"] = data
+        if tool_hits:
+            scan_result.summary_parts.append(f"{len(tool_hits)} tool definition(s) failed inspection.")
+
     captured_matches = None
     if match_collector is not None:
         try:
@@ -444,16 +486,33 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
     # Handle MCP tool filtering (tool_listing events). Skipped after a failed
     # redaction: rebuilding a guard_output there would re-populate the field the
     # discard just cleared.
-    if event_type == "tool_listing" and tools and not redaction_failed:
+    if event_type == "tool_listing" and tools:
         mcp_det = scan_result.detectors.get("mcp_validation", {})
+        filtered_names: set[str] = set()
         if mcp_det.get("detected") and mcp_det.get("data", {}).get("action") == "blocked":
             filtered_names = set(mcp_det["data"].get("filtered_tools", []))
-            if filtered_names:
-                safe_tools = [t for t in tools if t.get("function", {}).get("name", "") not in filtered_names]
-                if guard_output is None:
-                    guard_output = {}
-                guard_output["tools"] = safe_tools
-                scan_result.transformed = True
+
+        # Definitions that failed inspection are removed by *index*. Names are
+        # caller-supplied, may duplicate, and are nested differently in MCP and
+        # OpenAI tool shapes -- the index is assigned here from the list we
+        # received, so it identifies the right tool in either shape.
+        removed = {
+            i
+            for i, t in enumerate(tools)
+            if i in flagged_indices or t.get("function", {}).get("name", "") in filtered_names
+        }
+        decision = decide_listing(tools, removed, redaction_failed)
+        if decision.blocked:
+            logger.error(
+                "tool listing flagged %d definition(s) that cannot be filtered out; refusing",
+                len(removed),
+            )
+            scan_result.blocked = True
+        if decision.safe_tools is not None:
+            if guard_output is None:
+                guard_output = {}
+            guard_output["tools"] = decision.safe_tools
+            scan_result.transformed = True
 
     # Detector failure enforcement.
     #

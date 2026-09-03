@@ -7,9 +7,12 @@ Detects:
 Only runs on tool_listing event type. On block, returns filtered_tools
 listing which tools to remove. On report, logs issues only.
 
-Injection detection in tool descriptions is handled by the existing
-MaliciousPromptDetector when run on tool_listing events — this detector
-only does structural validation.
+Injection detection in tool descriptions is NOT done here. It happens in
+``app/tool_scan.py``, which extracts the text of each definition and
+evaluates it per tool. This claim previously named MaliciousPromptDetector
+on tool_listing events, which did not read tool definitions at all -- the
+detector ran on the message text and found nothing, so the reassurance
+here is why nobody looked.
 """
 
 from __future__ import annotations
