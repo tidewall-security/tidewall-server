@@ -37,7 +37,7 @@ from app.interaction_log import _validated as _safe_meta
 from app.interaction_log import _validated_ip as _safe_ip
 from app.models import GuardRequest, GuardResponse, GuardResult
 from app.services.safe_export_evidence import project_detectors
-from app.tool_scan import ToolScanRefusal, scan_tools
+from app.tool_scan import ToolScanRefusal, scan_tools, tool_name
 from app.services.safe_logging import describe, report
 from app.utils import now_iso as _now_iso
 
@@ -490,7 +490,7 @@ async def guard_chat_completions(body: GuardRequest, request: Request) -> GuardR
                 t
                 for i, t in enumerate(tools)
                 if i not in flagged_indices
-                and t.get("function", {}).get("name", "") not in filtered_names
+                and tool_name(t) not in filtered_names
             ]
             if guard_output is None:
                 guard_output = {}

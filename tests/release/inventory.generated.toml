@@ -112,7 +112,7 @@ why = "batched HF pipeline over tool text; no windowing"
 [[component]]
 identity = "mcp_validation/name_similarity"
 source = "app/detectors/mcp_validation.py"
-why = "reads function.name only"
+why = "compares advertised names in either tool shape"
 
 [[component]]
 identity = "pii/analysis_failure"

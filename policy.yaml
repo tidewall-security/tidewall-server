@@ -90,6 +90,34 @@ detectors:
     enabled: true
     action: report
 
+  # Structural checks on an MCP tool listing: names that duplicate or closely
+  # resemble each other. Runs on tool_listing only.
+  #
+  # `report`, not `block`, and the threshold is 0.95 rather than the code
+  # default of 0.8. Both come from measurement, and neither should be raised
+  # without repeating it.
+  #
+  # Name similarity cannot separate an attack from an ordinary naming scheme,
+  # because the two overlap: `transfer_funds`/`transfer_fund` scores 0.96 and
+  # is an impersonation, while `calculate_distance`/`calculate_distance_km`
+  # scores 0.92 and is a real pair of tools. Across 671 tool names from 103
+  # public MCP servers, the shipped 0.8 flags 7% of all tools -- among them
+  # `excel_add_sheet`/`excel_read_sheet` and
+  # `clear_sql_database`/`create_sql_database`. At 0.95 it flags none of them,
+  # and still catches exact duplicates and a dropped character.
+  #
+  # Blocking would remove BOTH tools in a flagged pair, since nothing here can
+  # tell which one is the impostor. For a signal this ambiguous that is a worse
+  # outcome than surfacing it, so it reports.
+  #
+  # Note also what this cannot see: tool shadowing is usually a *second* server
+  # registering a name that collides with a first one's, and a check that
+  # compares names within a single listing never observes that.
+  mcp_validation:
+    enabled: true
+    action: report
+    similarity_threshold: 0.95
+
 # Per-surface detector overrides, merged over `detectors` for the named event
 # type. An event type absent here uses `detectors` unchanged.
 #

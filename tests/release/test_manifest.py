@@ -237,9 +237,13 @@ def test_every_not_evaluated_key_matches_a_real_case():
 def test_the_not_evaluated_leaves_are_the_ones_production_ignores():
     """Read from the detector, not from this module's opinion of it."""
     source = pathlib.Path("app/detectors/mcp_validation.py").read_text()
-    assert 'func.get("name"' in source
-    assert 'func.get("description"' not in source
-    assert 'func.get("parameters"' not in source
+    # The name is now read through a helper that understands both tool shapes;
+    # what matters here is unchanged -- this detector consults the name and
+    # nothing else, which is why the description and parameter leaves are
+    # excluded from its evaluated set.
+    assert "tool_name(tool)" in source
+    assert "description" not in source.split("def scan")[1]
+    assert "parameters" not in source.split("def scan")[1]
 
     excluded_leaves = {leaf for leaf, _c, _s in NOT_EVALUATED}
     assert excluded_leaves == {"mcp-description", "mcp-parameters"}

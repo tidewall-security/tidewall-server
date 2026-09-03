@@ -64,6 +64,25 @@ class ToolFinding:
     confidence: float | None = None
 
 
+def tool_name(tool: Any) -> str:
+    """The advertised name, in either shape a caller may send.
+
+    OpenAI nests it under ``function``; MCP puts it at the top level. Reading
+    only the nested form returns ``""`` for every MCP-shaped tool, which is
+    what an MCP proxy sends -- so a name-based check silently matched nothing
+    at all rather than reporting that it could not see the tools.
+    """
+    if not isinstance(tool, dict):
+        return ""
+    nested = tool.get("function")
+    if isinstance(nested, dict):
+        name = nested.get("name")
+        if isinstance(name, str) and name:
+            return name
+    name = tool.get("name")
+    return name if isinstance(name, str) else ""
+
+
 def extract_tool_strings(tool: Any, index: int) -> list[str]:
     """Collect every string value and every object key from one definition.
 

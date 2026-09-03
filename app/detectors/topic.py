@@ -137,6 +137,14 @@ class TopicDetector(BaseDetector):
         if self._topics_pipeline is None and self._toxicity_pipeline is None:
             return self.unavailable_result()
 
+        # Nothing to classify. A tool listing carries its content in `tools`,
+        # not in messages, so every one of them arrives here with empty text --
+        # and this returned a failure, because the zero-shot pipeline raises on an empty string, on no content at all.
+        #
+        # An empty scan is vacuous, not a finding and not a failure.
+        if not text.strip():
+            return DetectorResult(detected=False)
+
         topics_found: list[dict[str, Any]] = []
         detected = False
         # This detector is a composite (toxicity + banned topics), so one
