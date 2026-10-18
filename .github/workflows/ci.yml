@@ -236,6 +236,7 @@ jobs:
   contract:
     name: Contract (extension against this server)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Here rather than in the extension's CI, for two reasons.
     #
     # Cost: this job already installs the server's Python dependencies, seven of
@@ -255,6 +256,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: tidewall-security/tidewall-browser-extension
+          # Known-compatible browser suite; this PR tests its own server code.
+          ref: f09cca4cf968f78790e1c373dde8dc01a47b02e0
           path: extension
       # The demo spans three repositories and its menu names scripts and
       # environment variables that live in this one. `make demo` printed three
@@ -292,6 +295,11 @@ jobs:
         working-directory: server
         run: uv sync --group dev
 
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: first-run-models-${{ runner.os }}-${{ hashFiles('server/app/model_registry.py', 'server/policy.yaml') }}
+
       - name: Install and build extension
         working-directory: extension
         run: |
@@ -301,16 +309,14 @@ jobs:
       - name: Start the server
         working-directory: server
         env:
-          # No PREWARM here. It was set for years with a comment crediting it
-          # for skipping model loading; nothing ever read it, and the job is
-          # fast because detectors are constructed lazily and the contract
-          # tests never invoke one. Setting an inert variable and explaining
-          # its effect is worse than not setting it: it sends the next person
-          # debugging a slow job to the wrong place.
+          # Models load on the first guard call in the browser test below.
           DB_URL: sqlite:////tmp/contract.db
           BOOTSTRAP_KEY: ak_ci_contract_bootstrap_key_00000001
+          HOST: "127.0.0.1"
+          PORT: "8099"
         run: |
-          uv run uvicorn app.main:app --port 8099 > /tmp/server.log 2>&1 &
+          uv run python -m app > /tmp/server.log 2>&1 &
+          echo $! > /tmp/server.pid
           for i in $(seq 1 90); do
             curl -sf http://localhost:8099/health > /dev/null && break
             if [ "$i" = "90" ]; then echo "server did not start"; cat /tmp/server.log; exit 1; fi
@@ -372,9 +378,43 @@ jobs:
           npx playwright install chromium --with-deps
           xvfb-run --auto-servernum npx playwright test tests/e2e/live-enrolment.spec.ts
 
+      - name: First-run dashboard and enforcement
+        working-directory: extension
+        env:
+          TIDEWALL_INTEGRATION: "1"
+          TIDEWALL_SERVER: http://127.0.0.1:8099
+          TIDEWALL_ADMIN_KEY: ak_ci_contract_bootstrap_key_00000001
+          PLAYWRIGHT_JSON_OUTPUT_FILE: /tmp/first-run.json
+        run: |
+          npx playwright test tests/e2e/first-run.spec.ts --reporter=line,json
+          python - <<'PY'
+          import json
+          stats = json.load(open('/tmp/first-run.json'))['stats']
+          assert stats['expected'] == 1, stats
+          assert stats['skipped'] == stats['unexpected'] == stats['flaky'] == 0, stats
+          PY
+
+      - name: Retain screenshots and browser results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: first-run-browser-results
+          path: |
+            extension/test-results/
+            /tmp/first-run.json
+            /tmp/server.log
+          retention-days: 7
+
       - name: Server log on failure
         if: failure()
         run: cat /tmp/server.log
+
+      - name: Stop server
+        if: always()
+        run: |
+          if [ -f /tmp/server.pid ]; then
+            kill "$(cat /tmp/server.pid)" 2>/dev/null || true
+          fi
 
   frontend-tests:
     name: Frontend Tests
