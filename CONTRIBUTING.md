@@ -38,10 +38,16 @@ uv run pytest
 Run the server locally:
 
 ```bash
-uv run uvicorn app.main:app --reload --port 8080
+export BOOTSTRAP_KEY="$(python3 -c 'import secrets; print("ak_" + secrets.token_hex(16))')"
+echo "Save this admin key: $BOOTSTRAP_KEY"
+HOST=127.0.0.1 PORT=8080 uv run python -m app
 # Dashboard: http://localhost:8080/ui/visibility
-# Swagger:   http://localhost:8080/docs
 ```
+
+Paste the key into the dashboard's sign-in prompt. `BOOTSTRAP_KEY` installs
+the first administrator key on an empty database; keep using that saved key
+on later starts. Generating a new value does not replace existing keys.
+Interactive Swagger and ReDoc pages are not served.
 
 ## Pull Requests
 
@@ -55,7 +61,8 @@ uv run uvicorn app.main:app --reload --port 8080
 5. Make sure the test suite, lint, and type-check all pass:
    ```bash
    uv run pytest
-   uv run ruff check app/
+   uv run ruff check .
+   uv run ruff format --check .
    uv run mypy app/
    ```
 6. Open the PR with a clear description of the problem and the change.

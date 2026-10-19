@@ -76,14 +76,13 @@
   function renderPresets() {
     presetsEl.innerHTML = PRESETS.map(function (p) {
       return (
-        '<button class="preset-chip" data-text="' + Utils.escAttr(p.text) + '">' +
-          '<span class="preset-dot" style="background:' + p.dotColor + ';"></span>' +
+        '<button class="btn-preset" style="--preset-color:' + p.dotColor + '" data-text="' + Utils.escAttr(p.text) + '">' +
           Utils.escHtml(p.label) +
         '</button>'
       );
     }).join('');
 
-    presetsEl.querySelectorAll('.preset-chip').forEach(function (btn) {
+    presetsEl.querySelectorAll('.btn-preset').forEach(function (btn) {
       btn.addEventListener('click', function () {
         promptInput.value = btn.dataset.text;
         sendMessage();
@@ -132,7 +131,7 @@
   function appendUserBubble(text) {
     var div = document.createElement('div');
     div.className = 'chat-bubble chat-user';
-    div.innerHTML = Utils.escHtml(text);
+    div.innerHTML = '<div class="bubble-content">' + Utils.escHtml(text) + '</div>';
     chatArea.appendChild(div);
   }
 
@@ -145,14 +144,14 @@
     var transformed = result.transformed;
     var status = blocked ? 'blocked' : transformed ? 'transformed' : 'allowed';
 
-    var html = '';
+    var html = '<div class="bubble-content">';
 
     // Status badge (prominent)
-    html += '<div class="chat-system-header">' + Utils.statusBadge(status) + '</div>';
+    html += '<div class="bubble-header">' + Utils.statusBadge(status) + '</div>';
 
     // Summary text
     if (response.summary) {
-      html += '<div class="chat-system-summary">' + Utils.escHtml(response.summary) + '</div>';
+      html += '<div class="bubble-summary">' + Utils.escHtml(response.summary) + '</div>';
     }
 
     // Side-by-side diff view for transformed content
@@ -164,14 +163,14 @@
         redactedText = result.guard_output;
       }
 
-      html += '<div class="chat-diff">';
+      html += '<div class="transform-comparison chat-diff">';
       html += '<div class="chat-diff-side chat-diff-original">';
-      html += '<div class="chat-diff-label">ORIGINAL</div>';
-      html += '<div class="chat-diff-text">' + Utils.escHtml(originalText) + '</div>';
+      html += '<div class="transform-label">ORIGINAL</div>';
+      html += '<div class="transform-text original">' + Utils.escHtml(originalText) + '</div>';
       html += '</div>';
       html += '<div class="chat-diff-side chat-diff-redacted">';
-      html += '<div class="chat-diff-label">REDACTED</div>';
-      html += '<div class="chat-diff-text">' + Utils.escHtml(redactedText) + '</div>';
+      html += '<div class="transform-label">REDACTED</div>';
+      html += '<div class="transform-text redacted">' + Utils.escHtml(redactedText) + '</div>';
       html += '</div>';
       html += '</div>';
     }
@@ -184,7 +183,7 @@
       });
 
       if (firedDetectors.length > 0) {
-        html += '<div class="chat-detector-bar">';
+        html += '<div class="bubble-detectors">';
         firedDetectors.forEach(function (dn) {
           html += Utils.detectorChip(dn);
         });
@@ -192,14 +191,14 @@
       }
     }
 
-    div.innerHTML = html;
+    div.innerHTML = html + '</div>';
     chatArea.appendChild(div);
   }
 
   function appendErrorBubble(msg) {
     var div = document.createElement('div');
-    div.className = 'chat-bubble chat-system';
-    div.innerHTML = Utils.statusBadge('blocked') + ' <span style="color:var(--text-secondary)">' + Utils.escHtml(msg) + '</span>';
+    div.className = 'chat-bubble chat-system chat-bubble-error';
+    div.innerHTML = '<div class="bubble-content">' + Utils.statusBadge('blocked') + ' <span class="bubble-summary">' + Utils.escHtml(msg) + '</span></div>';
     chatArea.appendChild(div);
   }
 

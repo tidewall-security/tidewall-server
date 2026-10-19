@@ -30,12 +30,12 @@
       </div>
     </div>
     <div class="sandbox-input">
-      <select class="sandbox-event-type" id="eventType">
+      <select class="sandbox-event-type" id="eventType" aria-label="Event type">
         <option value="input">Input</option>
         <option value="output">Output</option>
       </select>
-      <input type="text" id="promptInput" placeholder="Type a prompt to test..." />
-      <button class="btn btn-primary sandbox-send" id="sendBtn">&rarr;</button>
+      <input class="chat-input" type="text" id="promptInput" aria-label="Prompt" placeholder="Type a prompt to test..." />
+      <button class="btn btn-primary sandbox-send" id="sendBtn" aria-label="Send prompt">&rarr;</button>
     </div>
   </main>
   <!-- Lib modules -->

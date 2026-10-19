@@ -1143,7 +1143,8 @@ textarea {
 .sandbox-page {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 52px);
+  height: 100vh;
+  height: 100dvh;
   padding-top: 52px;
 }
 
@@ -1186,7 +1187,7 @@ textarea {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--brand);
+  background: var(--preset-color, var(--brand));
   flex-shrink: 0;
 }
 
@@ -1224,6 +1225,9 @@ textarea {
 }
 
 .sandbox-input {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
   border-top: 1px solid var(--border);
   padding: 12px var(--space-lg);
   background: var(--bg-secondary);
@@ -1250,6 +1254,7 @@ textarea {
 
 .chat-input {
   flex: 1;
+  min-width: 0;
   padding: 10px 16px;
   font-size: 14px;
   background: var(--bg-elevated);
@@ -1273,6 +1278,8 @@ textarea {
 /* Chat bubbles */
 .chat-bubble {
   max-width: 85%;
+  min-width: 0;
+  overflow-wrap: anywhere;
   animation: fadeIn 0.2s ease;
 }
 
@@ -1400,6 +1407,22 @@ textarea {
   padding: 10px;
   background: rgba(0, 0, 0, 0.2);
   border-radius: var(--radius-sm);
+}
+
+.chat-diff {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-md);
+}
+
+@media (max-width: 640px) {
+  .sandbox-chat .chat-bubble {
+    max-width: 100%;
+  }
+
+  .chat-diff {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .transform-label {
