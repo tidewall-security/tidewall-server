@@ -2,10 +2,20 @@
 
 import hashlib
 import json
+from collections.abc import Iterable
 from datetime import datetime
 from typing import Annotated, Any, Literal, Self, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 MAX_BATCH_BYTES = 65_536
 MAX_HEARTBEAT_BYTES = 2_048
@@ -30,6 +40,7 @@ _SourceTime = Annotated[
     ),
 ]
 _UpstreamSHA = Literal["7ec2891b0904dad621bb13f24312121d05d4ca03"]
+_Agent = Literal["claude-code"]
 _Kind = Literal["session.start", "prompt", "file.read", "network", "tool.call", "tool.result", "sensor"]
 _HookEvent = Literal["UserPromptSubmit", "PreToolUse", "PostToolUse"]
 
@@ -50,6 +61,12 @@ WireCode = Literal["unsupported_version", "invalid_envelope", "invalid_row"]
 
 _TRANSCRIPT_KINDS = frozenset({"session.start", "prompt", "file.read", "network", "tool.result", "sensor"})
 _HOOK_KINDS = {"UserPromptSubmit": "prompt", "PreToolUse": "tool.call", "PostToolUse": "tool.result"}
+
+_SourceIdentity = tuple[str, str, str]
+_SOURCE_KEY_FIELDS: dict[str, tuple[str, TypeAdapter[str]]] = {
+    "transcript": ("parser_observation_token", TypeAdapter(_HexToken)),
+    "hook": ("collector_observation_id", TypeAdapter(_UUID4)),
+}
 
 
 class _WireModel(BaseModel):
@@ -76,7 +93,7 @@ class Hook(_WireModel):
 
 class Observation(_WireModel):
     source: Annotated[Transcript | Hook, Field(discriminator="channel")]
-    agent: Literal["claude-code"]
+    agent: _Agent
     fixture_profile: Literal["claude-fixture-v1"]
     upstream_sha: _UpstreamSHA
     adapter_version: _AdapterVersion
@@ -136,6 +153,21 @@ class Row(_WireModel):
     observation: Observation
 
 
+def _batch_integrity_error(rows: Iterable[tuple[int, _SourceIdentity | None]]) -> str | None:
+    previous = 0
+    sources: set[_SourceIdentity] = set()
+    for ordinal, source in rows:
+        if ordinal <= previous:
+            return "ordinals must strictly increase"
+        previous = ordinal
+
+        if source is not None:
+            if source in sources:
+                return "source keys must be unique"
+            sources.add(source)
+    return None
+
+
 class Batch(_WireModel):
     version: _Version
     enrollment_id: _UUID4
@@ -144,18 +176,12 @@ class Batch(_WireModel):
 
     @model_validator(mode="after")
     def _unique_ordered_rows(self) -> Self:
-        previous = 0
-        sources = set()
-        for row in self.rows:
-            if row.ordinal <= previous:
-                raise ValueError("ordinals must strictly increase")
-            previous = row.ordinal
-
-            observation = row.observation
-            key = (observation.agent, observation.source.channel, observation.source_key)
-            if key in sources:
-                raise ValueError("source keys must be unique")
-            sources.add(key)
+        error = _batch_integrity_error(
+            (row.ordinal, (row.observation.agent, row.observation.source.channel, row.observation.source_key))
+            for row in self.rows
+        )
+        if error is not None:
+            raise ValueError(error)
         return self
 
 
@@ -311,19 +337,41 @@ def observation_digest(value: Observation) -> str:
     return hashlib.sha256(canonical_observation_bytes(value)).hexdigest()
 
 
+def _read_source_identity(observation: object) -> _SourceIdentity | None:
+    if not isinstance(observation, dict):
+        return None
+    agent = observation.get("agent")
+    source = observation.get("source")
+    if not isinstance(agent, str) or agent not in get_args(_Agent) or not isinstance(source, dict):
+        return None
+    channel = source.get("channel")
+    if not isinstance(channel, str) or channel not in _SOURCE_KEY_FIELDS:
+        return None
+    field, adapter = _SOURCE_KEY_FIELDS[channel]
+    try:
+        key = adapter.validate_python(source.get(field), strict=True)
+    except ValidationError:
+        return None
+    return agent, channel, key
+
+
 def parse_batch(data: bytes) -> Batch:
     envelope = _decode_envelope(data, MAX_BATCH_BYTES)
     try:
         batch = Batch.model_validate(envelope)
     except ValidationError as error:
-        # A batch with invalid framing/ordinals/row wrappers cannot be repaired
-        # by handling a bad observation locally. Classify the envelope first.
-        code = "invalid_row"
+        code = "invalid_envelope"
         for issue in error.errors(include_input=False, include_context=False, include_url=False):
             location = issue["loc"]
             if len(location) < 3 or location[0] != "rows" or location[2] != "observation":
-                code = "invalid_envelope"
                 break
+        else:
+            # Valid row wrappers leave only the observations to classify.
+            # Nested errors skip Batch's after-validator, but valid ordinals
+            # and source keys still determine batch integrity.
+            rows = ((row["ordinal"], _read_source_identity(row.get("observation"))) for row in envelope["rows"])
+            if _batch_integrity_error(rows) is None:
+                code = "invalid_row"
     else:
         for row in batch.rows:
             check_observation_size(canonical_observation_bytes(row.observation))

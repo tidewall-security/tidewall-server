@@ -411,6 +411,47 @@ def test_invalid_middle_observation_has_one_row_refusal():
     assert_refused(body(batch), "invalid_row")
 
 
+@pytest.mark.parametrize("ordinal", [39, 40])
+def test_batch_ordering_error_takes_precedence_over_invalid_observation(ordinal):
+    batch, invalid = batch_with()
+    _, before = batch_with(TRANSCRIPT)
+    _, after = batch_with("transcript_file_read_B")
+    batch["rows"] = [
+        {"ordinal": 40, "observation": before},
+        {"ordinal": ordinal, "observation": invalid | {"content": SENTINEL}},
+        {"ordinal": 42, "observation": after},
+    ]
+    assert_refused(body(batch), "invalid_envelope")
+
+
+@pytest.mark.parametrize(
+    ("name", "source_field"),
+    [(HOOK, "native_event"), (TRANSCRIPT, "byte_position")],
+)
+def test_batch_repeated_source_takes_precedence_over_invalid_observation(name, source_field):
+    batch, original = batch_with(name)
+    invalid = original | {"source": original["source"] | {source_field: None}}
+    batch["rows"].append({"ordinal": 42, "observation": invalid})
+    assert_refused(body(batch), "invalid_envelope")
+
+
+def test_batch_repeated_source_detected_around_invalid_middle_observation():
+    batch, first = batch_with(TRANSCRIPT)
+    _, invalid = batch_with()
+    batch["rows"] = [
+        {"ordinal": 40, "observation": first},
+        {"ordinal": 41, "observation": invalid | {"content": SENTINEL}},
+        {"ordinal": 42, "observation": first},
+    ]
+    assert_refused(body(batch), "invalid_envelope")
+
+
+def test_invalid_agent_has_no_source_key_to_compare():
+    batch, first = batch_with(TRANSCRIPT)
+    batch["rows"].append({"ordinal": 42, "observation": first | {"agent": SENTINEL}})
+    assert_refused(body(batch), "invalid_row")
+
+
 @pytest.mark.parametrize("retain_content", [True, 0, 0.0, "false", None])
 def test_heartbeat_ack_retention_is_exactly_false(retain_content):
     ack = json.loads(VECTORS["responses"]["heartbeat_ack"])
