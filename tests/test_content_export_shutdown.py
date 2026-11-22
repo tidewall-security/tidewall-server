@@ -304,6 +304,9 @@ def test_shutdown_waits_for_a_settlement_that_has_not_reached_a_worker(tmp_path)
     """
 
     async def scenario(app, ctx, harness):
+        # Startup retention jobs share the worker registry. Let their actual
+        # threads finish while the settlement is still behind dispatch_gate.
+        assert await app.state.scheduler.drain_workers(), "startup housekeeping did not drain"
         assert app.state.scheduler._workers_idle.is_set(), (
             "the settlement reached a worker before the scenario began, so this "
             "test would not exercise the pre-dispatch window"

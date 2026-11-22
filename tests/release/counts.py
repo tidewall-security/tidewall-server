@@ -128,13 +128,15 @@ def check_capture_on(
     conn: sqlite3.Connection,
     path: tuple[str, str],
     canonical_count: int,
+    *,
+    rowid: int | None = None,
 ) -> None:
     """Exact cardinality against the canonical live image, from the copy map.
 
     `canonical_count` is the byte-scan total over the checkpointed-and-vacuumed
     image. It must equal the copy map's prediction exactly.
     """
-    predicted = sum(expected_locations(conn, path).values())
+    predicted = sum(expected_locations(conn, path, rowid=rowid).values())
     if canonical_count != predicted:
         direction = "under" if canonical_count < predicted else "over"
         raise CountViolation(

@@ -25,7 +25,8 @@ Cell = tuple[str, int, str]  # (table, rowid, column)
 
 def _live_tables(conn: sqlite3.Connection) -> list[str]:
     rows = conn.execute(
-        "SELECT name FROM pragma_table_list " "WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%'"
+        "SELECT name FROM main.pragma_table_list "
+        "WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%'"
     ).fetchall()
     return sorted(r[0] for r in rows)
 
@@ -33,7 +34,7 @@ def _live_tables(conn: sqlite3.Connection) -> list[str]:
 def _columns(conn: sqlite3.Connection, table: str) -> list[str]:
     # xinfo, not table_info: table_info hides generated columns, and a value
     # written into one is still a value on disk.
-    rows = conn.execute("SELECT name, hidden FROM pragma_table_xinfo(?)", (table,)).fetchall()
+    rows = conn.execute("SELECT name, hidden FROM main.pragma_table_xinfo(?, 'main')", (table,)).fetchall()
     return [name for name, hidden in rows if hidden in (0, 2, 3)]
 
 
@@ -53,7 +54,7 @@ class Snapshot:
             # rowid is the stable address. The invariant already refuses
             # WITHOUT ROWID tables, so every live table has one.
             selected = ", ".join(f'"{c}"' for c in columns)
-            for row in conn.execute(f'SELECT rowid, {selected} FROM "{table}"'):
+            for row in conn.execute(f'SELECT rowid, {selected} FROM main."{table}"'):
                 rowid = row[0]
                 for column, value in zip(columns, row[1:], strict=True):
                     cells[(table, rowid, column)] = value

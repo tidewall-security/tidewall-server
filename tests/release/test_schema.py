@@ -10,6 +10,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -80,24 +81,11 @@ def test_every_referential_action_is_pinned(conn):
     assert all(count == 1 for count in observed.values()), observed
 
 
-def test_twelve_relationships_of_which_seven_write_on_delete(conn):
-    """The count is stated because 'exactly the six' was ambiguous.
-
-    RESTRICT and NO ACTION are inside the pin and outside the cascade map:
-    pinned because a change to one is schema drift worth failing on, excluded
-    because neither modifies a child value.
-
-    Ten became twelve when device refresh credentials and vault ownership each
-    added a CASCADE. Both are deliberate and both are argued at the pin. This
-    test failing is the pin working: a relationship arriving without a decision
-    about what happens to its children is exactly what it is for.
-    """
+def test_twenty_one_relationships_of_which_twelve_write_on_delete(conn):
+    # Composite constraints count once, even when multiple columns carry scope.
     observed = referential_actions(conn)
-    assert len(observed) == 12
-    # Eight became seven when api_keys.policy_id went from SET NULL to RESTRICT.
-    # SET NULL writes to the child; RESTRICT refuses the parent's deletion and
-    # touches nothing, which is the point of the change.
-    assert len([a for a in observed if a[5] in WRITING_ACTIONS]) == 7
+    assert sum(observed.values()) == 21
+    assert sum(count for fk, count in observed.items() if fk[5] in WRITING_ACTIONS) == 12
 
 
 def test_on_update_is_pinned_too(conn):
@@ -135,12 +123,15 @@ def test_an_added_on_update_cascade_is_refused(scratch_path: Path):
 
 
 def test_the_cascade_map_covers_exactly_the_writing_actions(conn):
-    mapped = {e for entries in cascade_map(conn).values() for e in entries}
-    expected = {(t, c, "DELETE", d) for t, c, _p, _pc, _u, d in REFERENTIAL_ACTIONS if d in WRITING_ACTIONS} | {
-        (t, c, "UPDATE", u) for t, c, _p, _pc, u, _d in REFERENTIAL_ACTIONS if u in WRITING_ACTIONS
+    expected = {
+        (parent, pc, table, col, event, action)
+        for table, columns, parent, parent_columns, on_update, on_delete in REFERENTIAL_ACTIONS
+        for col, pc in zip(columns, parent_columns, strict=True)
+        for event, action in (("UPDATE", on_update), ("DELETE", on_delete))
+        if action in WRITING_ACTIONS
     }
+    mapped = {(*parent, *child) for parent, children in cascade_map(conn).items() for child in children}
     assert mapped == expected
-    assert all(action in WRITING_ACTIONS for _, _, _, action in mapped)
 
 
 def test_deleting_a_policy_is_mapped_to_its_cascading_children(conn):
@@ -165,7 +156,7 @@ def test_the_copy_map_finds_the_unique_index_holding_a_policy_name(conn):
     `sqlite_autoindex_policies_2` as well as in the table. A byte count that
     did not know this would read the second copy as an extra occurrence.
     """
-    locations = copy_map(conn)[("policies", "name")]
+    locations = copy_map(conn).locations(("policies", "name"))
     assert locations["policies"] == 1
     assert locations["sqlite_autoindex_policies_2"] == 1, dict(locations)
     assert sum(locations.values()) == 2, "one logical row, two byte copies"
@@ -176,8 +167,8 @@ def test_the_copy_map_covers_every_column(conn):
     tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")]
     for table in tables:
         for column in (r[1] for r in conn.execute(f"PRAGMA table_info('{table}')")):
-            assert (table, column) in mapping, f"{table}.{column} has no declared location"
-            assert mapping[(table, column)][table] == 1
+            assert (table, column) in mapping.slots, f"{table}.{column} has no declared location"
+            assert mapping.slots[(table, column)][table] == 1
 
 
 # --- mutations: each must be caught by its own assertion ------------------
@@ -322,7 +313,7 @@ def test_a_repeated_index_term_is_counted_twice(scratch):
     """
     scratch.execute("CREATE TABLE duplicate_terms (c TEXT)")
     scratch.execute("CREATE INDEX duplicate_terms_i ON duplicate_terms(c, c)")
-    locations = copy_map(scratch)[("duplicate_terms", "c")]
+    locations = copy_map(scratch).locations(("duplicate_terms", "c"))
     assert locations["duplicate_terms_i"] == 2, dict(locations)
     assert sum(locations.values()) == 3, dict(locations)
 
@@ -409,10 +400,10 @@ def test_the_rowid_alias_copies_are_pinned_at_head(conn):
     measured head counts.
     """
     mapping = copy_map(conn)
-    assert sum(mapping[("interactions", "id")].values()) == 6, dict(mapping[("interactions", "id")])
-    assert sum(mapping[("interaction_contents", "id")].values()) == 5
-    assert sum(mapping[("content_access_audit", "id")].values()) == 5
-    assert sum(mapping[("policies", "name")].values()) == 2
+    assert sum(mapping.locations(("interactions", "id")).values()) == 6, dict(mapping.locations(("interactions", "id")))
+    assert sum(mapping.locations(("interaction_contents", "id")).values()) == 5
+    assert sum(mapping.locations(("content_access_audit", "id")).values()) == 5
+    assert sum(mapping.locations(("policies", "name")).values()) == 2
 
 
 def test_a_composite_primary_key_column_is_not_treated_as_a_rowid_alias(scratch):
@@ -427,7 +418,7 @@ def test_a_composite_primary_key_column_is_not_treated_as_a_rowid_alias(scratch)
     scratch.execute("CREATE INDEX composite_b ON composite(b)")
     assert invariant(scratch) == [], "the invariant permits this table"
 
-    locations = copy_map(scratch)[("composite", "a")]
+    locations = copy_map(scratch).locations(("composite", "a"))
     assert "composite_b" not in locations, dict(locations)
     assert locations["composite"] == 1
 
@@ -435,7 +426,7 @@ def test_a_composite_primary_key_column_is_not_treated_as_a_rowid_alias(scratch)
 def test_a_genuine_single_column_alias_is_still_recognised(scratch):
     scratch.execute("CREATE TABLE aliased (id INTEGER PRIMARY KEY, v TEXT)")
     scratch.execute("CREATE INDEX aliased_v ON aliased(v)")
-    locations = copy_map(scratch)[("aliased", "id")]
+    locations = copy_map(scratch).locations(("aliased", "id"))
     assert locations["aliased_v"] == 1, dict(locations)
 
 
@@ -453,7 +444,7 @@ def test_an_integer_primary_key_desc_is_not_a_rowid_alias(scratch):
     assert invariant(scratch) == [], "the invariant permits this table"
     assert scratch.execute("SELECT rowid, id FROM desc_pk").fetchone() == (1, 123)
 
-    locations = copy_map(scratch)[("desc_pk", "id")]
+    locations = copy_map(scratch).locations(("desc_pk", "id"))
     assert "desc_pk_v" not in locations, dict(locations)
     assert locations["desc_pk"] == 1
 
@@ -471,7 +462,7 @@ def test_a_desc_primary_key_with_a_comment_is_not_a_rowid_alias(scratch):
     assert invariant(scratch) == [], "the invariant permits this table"
     assert scratch.execute("SELECT rowid, id FROM desc_comment").fetchone() == (1, 123)
 
-    locations = copy_map(scratch)[("desc_comment", "id")]
+    locations = copy_map(scratch).locations(("desc_comment", "id"))
     assert "desc_comment_v" not in locations, dict(locations)
     assert locations["sqlite_autoindex_desc_comment_1"] == 1, dict(locations)
 
@@ -545,6 +536,151 @@ def test_an_empty_string_column_name_is_still_mapped(scratch):
     scratch.execute('CREATE INDEX empty_identifier_i ON empty_identifier("")')
     assert invariant(scratch) == [], "the invariant permits this table"
 
-    locations = copy_map(scratch)[("empty_identifier", "")]
+    locations = copy_map(scratch).locations(("empty_identifier", ""))
     assert "empty_identifier_i" in locations, dict(locations)
     assert sum(locations.values()) == 2
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        None,
+        "CREATE INDEX uq_collector_successful_ordinal ON collector_outcomes (device_id, ordinal) "
+        "WHERE event_id IS NOT NULL",
+        "CREATE UNIQUE INDEX uq_collector_successful_ordinal ON collector_outcomes (device_id, ordinal)",
+        "CREATE UNIQUE INDEX uq_collector_successful_ordinal ON collector_outcomes (device_id, ordinal) "
+        "WHERE event_id IS NULL",
+        "CREATE UNIQUE INDEX uq_collector_successful_ordinal ON collector_outcomes (device_id, digest) "
+        "WHERE event_id IS NOT NULL",
+    ],
+    ids=["missing", "nonunique", "unconditional", "inverted-predicate", "different-key"],
+)
+def test_receipt_index_drift_is_refused(scratch, replacement):
+    scratch.execute("DROP INDEX uq_collector_successful_ordinal")
+    if replacement:
+        scratch.execute(replacement)
+    assert any(v.detail == "uq_collector_successful_ordinal" for v in invariant(scratch))
+
+
+def test_splitting_the_scoped_receipt_fk_is_refused(scratch):
+    original = scratch.execute("SELECT sql FROM sqlite_schema WHERE name='collector_outcomes'").fetchone()[0]
+    scope = "FOREIGN KEY(event_id, device_id) REFERENCES agent_observations (event_id, device_id) ON DELETE CASCADE"
+    assert scope in original
+    split = ", ".join(
+        f"FOREIGN KEY({column}) REFERENCES agent_observations ({column}) ON DELETE CASCADE"
+        for column in ("event_id", "device_id")
+    )
+    scratch.execute("DROP TABLE collector_outcomes")
+    scratch.execute(original.replace(scope, split))
+    violations = invariant(scratch)
+    assert any(v.kind == "referential-action-removed" and "collector_outcomes" in v.detail for v in violations)
+
+
+def test_receipt_copies_match_row_membership_and_vacuumed_bytes(scratch, scratch_path, tmp_path):
+    from tests.release.attribution import Unattributed, attribute, expected_locations
+    from tests.release.counts import canonical_live_image, check_capture_on
+    from tests.release.store import Snapshot, delta
+
+    before = Snapshot.take(scratch)
+    path = ("collector_outcomes", "device_id")
+    index = "uq_collector_successful_ordinal"
+    rows = [
+        ("accepted-receipt-canary", "accepted", None, "first-event", 4),
+        ("duplicate-receipt-canary", "duplicate", None, "other-event", 4),
+        ("rejected-receipt-canary", "rejected", "retired_ordinal", None, 3),
+    ]
+    # Isolate the receipt bytes from parent tables. This scratch database has
+    # foreign_keys off; receipt CHECK constraints and every index remain live.
+    with scratch:
+        scratch.executemany(
+            "INSERT INTO collector_outcomes (device_id, ordinal, digest, outcome, reason, event_id,"
+            " received_at, expires_at)"
+            " VALUES (?, 1, 'digest', ?, ?, ?, '2026-01-01', '2026-01-02')",
+            [row[:4] for row in rows],
+        )
+    produced = attribute(scratch, delta(before, Snapshot.take(scratch)))
+    image = canonical_live_image(scratch_path, tmp_path / "compact.db").read_bytes()
+    for device_id, _, _, event_id, expected_count in rows:
+        rowid = scratch.execute("SELECT rowid FROM collector_outcomes WHERE device_id=?", (device_id,)).fetchone()[0]
+        indexed = event_id is not None
+        for column in ("device_id", "ordinal"):
+            assert (
+                any(
+                    a.path == ("collector_outcomes", column) and a.rowid == rowid and a.location == index
+                    for a in produced
+                )
+                == indexed
+            )
+            assert (index in expected_locations(scratch, ("collector_outcomes", column), rowid=rowid)) == indexed
+        actual_count = image.count(device_id.encode())
+        assert actual_count == expected_count
+        check_capture_on(scratch, path, actual_count, rowid=rowid)
+
+    with pytest.raises(Unattributed, match="rowid"):
+        expected_locations(scratch, path)
+    with pytest.raises(Unattributed, match="rowid"):
+        expected_locations(scratch, path, rowid=-1)
+
+
+def test_a_receipt_becoming_indexed_attributes_even_unchanged_key_columns(scratch):
+    from tests.release.attribution import attribute
+    from tests.release.store import Snapshot, delta
+
+    scratch.execute(
+        "INSERT INTO collector_outcomes (device_id, ordinal, digest, outcome, reason, received_at, expires_at) "
+        "VALUES ('device', 1, 'digest', 'rejected', 'retired_ordinal', '2026-01-01', '2026-01-02')"
+    )
+    before = Snapshot.take(scratch)
+    scratch.execute("UPDATE collector_outcomes SET outcome='accepted', event_id='event', reason=NULL, ordinal=2")
+    copies = attribute(scratch, delta(before, Snapshot.take(scratch)))
+    assert sorted(a.path for a in copies if a.location == "uq_collector_successful_ordinal") == [
+        ("collector_outcomes", "device_id"),
+        ("collector_outcomes", "ordinal"),
+    ]
+
+
+@pytest.mark.parametrize("shadow", ["table", "index"])
+def test_temp_names_do_not_hide_main_receipt_copies(scratch, shadow):
+    from tests.release.attribution import Unattributed, expected_locations
+    from tests.release.store import Snapshot
+
+    scratch.execute(
+        "INSERT INTO main.collector_outcomes (device_id, ordinal, digest, outcome, event_id, received_at, expires_at) "
+        "VALUES ('main-device', 1, 'digest', 'accepted', 'event', '2026-01-01', '2026-01-02')"
+    )
+    if shadow == "table":
+        scratch.execute("CREATE TEMP TABLE collector_outcomes (device_id TEXT, other TEXT)")
+        scratch.execute("INSERT INTO temp.collector_outcomes VALUES ('temp-device', 'temp-only')")
+    else:
+        scratch.execute("CREATE TEMP TABLE unrelated (other TEXT)")
+        scratch.execute("CREATE INDEX temp.uq_collector_successful_ordinal ON unrelated(other)")
+
+    path = ("collector_outcomes", "device_id")
+    assert invariant(scratch) == []
+    assert Snapshot.take(scratch).cells[("collector_outcomes", 1, "device_id")] == "main-device"
+    assert expected_locations(scratch, path, rowid=1)["uq_collector_successful_ordinal"] == 1
+    with pytest.raises(Unattributed, match="rowid"):
+        expected_locations(scratch, path)
+
+
+def test_entering_a_receipt_index_accounts_for_its_implicit_rowid_slot():
+    from tests.release.attribution import attribute
+    from tests.release.store import Snapshot, delta
+
+    with closing(sqlite3.connect(":memory:")) as db:
+        db.execute(
+            "CREATE TABLE collector_outcomes (id INTEGER PRIMARY KEY, device_id TEXT, ordinal INT, event_id TEXT)"
+        )
+        db.execute(
+            "CREATE UNIQUE INDEX uq_collector_successful_ordinal ON collector_outcomes (device_id, ordinal) "
+            "WHERE event_id IS NOT NULL"
+        )
+        db.execute("INSERT INTO collector_outcomes VALUES (1, 'device', 1, NULL)")
+        before = Snapshot.take(db)
+        db.execute("UPDATE collector_outcomes SET event_id='event'")
+        copies = attribute(db, delta(before, Snapshot.take(db)))
+        assert sorted(a.path[1] for a in copies if a.location == "uq_collector_successful_ordinal") == [
+            "device_id",
+            "id",
+            "ordinal",
+        ]
