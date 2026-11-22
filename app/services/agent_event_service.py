@@ -146,16 +146,9 @@ def _record_row(
             return Rejected.model_validate(
                 dict(ordinal=row.ordinal, digest=digest, outcome="rejected", reason=previous.reason)
             )
-        # Before purge the primary key can still be occupied. Never revive the
-        # event or extend the lifetime of an already-recorded retired replay.
-        result = Rejected(ordinal=row.ordinal, digest=digest, outcome="rejected", reason="retired_ordinal")
-        if previous.reason != "retired_ordinal":
-            previous.outcome = result.outcome
-            previous.reason = result.reason
-            previous.event_id = None
-            previous.received_at = received
-            previous.expires_at = received + DETAIL_LIFETIME
-        return result
+        # The expired row remains eligible for purge. Its ordinal is already
+        # retired by the enrollment's durable high-water mark.
+        return Rejected(ordinal=row.ordinal, digest=digest, outcome="rejected", reason="retired_ordinal")
 
     occupied = (
         select(CollectorOutcome)

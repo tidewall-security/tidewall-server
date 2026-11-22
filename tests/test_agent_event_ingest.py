@@ -19,7 +19,7 @@ from sqlalchemy.exc import OperationalError
 from app.agent_events import Batch, Heartbeat
 from app.auth.key_utils import hash_key
 from app.db.engine import get_engine, get_session_factory
-from app.db.models import AccessToken, Base, Device, Policy
+from app.db.models import AccessToken, Base, CollectorOutcome, Device, Policy
 from app.main import create_app
 from app.services.collector_identity import CollectorPrincipal
 
@@ -177,6 +177,15 @@ def test_ordinal_retirement_and_duplicate_expiry_before_purge(store):
         assert len(expiry) == 2 and all(datetime.fromisoformat(x) == datetime(2026, 1, 31) for x in expiry)
     for ordinal in [8, 9]:
         assert submit(ordinal, one, 30).reason == "retired_ordinal"
+    with sessions() as session:
+        dates = []
+        for ordinal in [8, 9]:
+            outcome = session.get(CollectorOutcome, (DEVICE, ordinal, first.digest))
+            dates.append((outcome.received_at, outcome.expires_at))
+        assert dates == [
+            (datetime(2026, 1, 1), datetime(2026, 1, 31)),
+            (datetime(2026, 1, 30), datetime(2026, 1, 31)),
+        ]
     fresh = submit(10, one, 30)
     assert fresh.outcome == "accepted" and fresh.event_id != first.event_id
 
@@ -390,3 +399,8 @@ def test_retired_ordinal_stays_retired_with_live_rejection_after_original_event_
         session.execute(text("DELETE FROM agent_observations WHERE device_id=:device"), {"device": DEVICE})
     assert submit(original, 30).reason == "retired_ordinal"
     assert submit(conflict, 30).reason == "identity_conflict"
+    expired = submit(conflict, 59)
+    assert expired.reason == "retired_ordinal"
+    with sessions() as session:
+        outcome = session.get(CollectorOutcome, (DEVICE, 1, expired.digest))
+        assert (outcome.received_at, outcome.expires_at) == (datetime(2026, 1, 30), datetime(2026, 3, 1))
