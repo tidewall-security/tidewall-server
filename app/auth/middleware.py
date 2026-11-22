@@ -6,6 +6,7 @@ import re
 from datetime import UTC
 
 from fastapi import HTTPException
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -250,6 +251,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
             request.state.at_token_hash = hashed
             request.state.device_id = device.id
             request.state.api_key_id = None
+        except SQLAlchemyError:
+            if request.method == "POST" and request.url.path in _COLLECTOR_WRITES:
+                return JSONResponse(
+                    status_code=503, content={"detail": "Collector storage unavailable"}, headers={"Retry-After": "1"}
+                )
+            raise
         finally:
             session.close()
 

@@ -468,6 +468,7 @@ def create_app() -> FastAPI:
 
     from app.routes import (
         activity,
+        collector_ingest,
         content,
         content_export,
         content_export_admin,
@@ -483,6 +484,7 @@ def create_app() -> FastAPI:
         unredact,
     )
 
+    app.include_router(collector_ingest.router)
     app.include_router(guard.router)
     app.include_router(unredact.router)
     app.include_router(logs.router)
