@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import UTC
 
+from fastapi import HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -13,12 +14,15 @@ from app.auth.dependencies import KNOWN_ROLES
 from app.auth.grants import GrantError, validate_grants
 from app.auth.key_utils import hash_key
 from app.db.models import AccessToken, APIKey, Device, RegistrationToken
+from app.services.collector_identity import authorize_collector
 from app.utils import as_utc
 
 # Paths served without a credential. Deliberately minimal: /docs, /redoc and
 # /openapi.json used to be here, which published the full surface of a security
 # control plane to anyone who could reach the port. The schema is still
 # retrievable with a bearer token.
+_COLLECTOR_WRITES = {"/v1/collector/observations", "/v1/collector/heartbeat"}
+
 _PUBLIC_PATHS = {"/health", "/favicon.ico"}
 
 
@@ -230,8 +234,18 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if device is None or device.status != "active":
                 return JSONResponse(status_code=401, content={"detail": "Device inactive or not found"})
 
+            if device.purpose == "collector_write":
+                try:
+                    principal = authorize_collector(session, hashed, device.id, datetime.now(UTC))
+                except HTTPException as exc:
+                    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+                if request.method != "POST" or request.url.path not in _COLLECTOR_WRITES:
+                    return JSONResponse(status_code=403, content={"detail": "Collector write endpoint required"})
+                request.state.collector_principal = principal
+                request.state.role = None
+            else:
+                request.state.role = "api"
             request.state.grants = frozenset()
-            request.state.role = "api"
             request.state.policy_id = device.policy_id
             request.state.at_token_hash = hashed
             request.state.device_id = device.id

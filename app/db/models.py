@@ -561,6 +561,14 @@ class ModelIntent(Base):
 class RegistrationToken(Base):
     __tablename__ = "registration_tokens"
 
+    purpose: Mapped[str] = mapped_column(
+        String,
+        CheckConstraint("purpose IN ('guard_device', 'collector_write')", name="ck_registration_tokens_purpose"),
+        nullable=False,
+        default="guard_device",
+        server_default="guard_device",
+    )
+
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String, nullable=False)
     token_hash: Mapped[str] = mapped_column(String, unique=True, nullable=False)
@@ -606,6 +614,15 @@ class RegistrationToken(Base):
 
 class Device(Base):
     __tablename__ = "devices"
+
+    purpose: Mapped[str] = mapped_column(
+        String,
+        CheckConstraint("purpose IN ('guard_device', 'collector_write')", name="ck_devices_purpose"),
+        nullable=False,
+        default="guard_device",
+        server_default="guard_device",
+    )
+    collector_approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     # UUID the client generates once and stores. This is the device's identity.
@@ -662,6 +679,10 @@ class DeviceTombstone(Base):
     """
 
     __tablename__ = "device_tombstones"
+
+    # Snapshot survives device and policy deletion. NULL identifies historical
+    # guard tombstones, which retain the existing recovery procedure.
+    collector_policy_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
     device_id: Mapped[str] = mapped_column(String, primary_key=True)
     installation_id: Mapped[str] = mapped_column(String, nullable=False, index=True)

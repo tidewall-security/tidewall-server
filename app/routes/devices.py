@@ -6,9 +6,10 @@ import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.auth.dependencies import require_role
+from app.services.device_service import CollectorScopeError, DeviceService
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,15 @@ class DeviceEnrolRequest(BaseModel):
     os: str = ""
     extension_version: str = ""
     fingerprint: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_authority_fields(cls, value):
+        if isinstance(value, dict) and {"purpose", "policy_id", "tenant_id"}.intersection(value):
+            # A Pydantic model-level validation error includes its entire input,
+            # which can contain the single-use recovery secret.
+            raise HTTPException(status_code=422, detail="Enrollment authority is assigned by the registration token")
+        return value
 
     @field_validator("installation_id")
     @classmethod
@@ -165,6 +175,7 @@ _REFRESH_FAILURE_RESPONSES: dict[int | str, dict] = {
 
 def _device_to_dict(device) -> dict:
     return {
+        **({"purpose": device.purpose} if device.purpose == "collector_write" else {}),
         "id": device.id,
         "installation_id": device.installation_id,
         "fingerprint": device.fingerprint,
@@ -199,8 +210,6 @@ async def enrol_device(body: DeviceEnrolRequest, request: Request, response: Res
 
     session = request.app.state.session_factory()
     try:
-        from app.services.device_service import DeviceService
-
         result = DeviceService(session).enrol_device(
             rt_token_hash=rt_token_hash,
             installation_id=body.installation_id,
@@ -250,8 +259,6 @@ async def refresh_device(device_id: str, body: DeviceRefreshRequest, request: Re
 
     session = request.app.state.session_factory()
     try:
-        from app.services.device_service import DeviceService
-
         result = DeviceService(session).refresh_device(
             device_id=device_id,
             refresh_token_hash=token_hash,
@@ -292,9 +299,9 @@ async def approve_device(device_id: str, body: ApproveDeviceRequest, request: Re
     """Activate a pending device by matching the code it displayed."""
     session = request.app.state.session_factory()
     try:
-        from app.services.device_service import DeviceService
-
-        device = DeviceService(session).approve_device(device_id=device_id, confirmation_code=body.confirmation_code)
+        device = DeviceService(session, actor_policy_id=request.state.policy_id).approve_device(
+            device_id=device_id, confirmation_code=body.confirmation_code
+        )
         return _device_to_dict(device)
     except LookupError:
         raise HTTPException(status_code=404, detail="Device not found") from None
@@ -318,14 +325,14 @@ async def authorise_device_recovery(device_id: str, request: Request) -> dict:
     """
     session = request.app.state.session_factory()
     try:
-        from app.services.device_service import DeviceService
-
-        secret = DeviceService(session).authorise_recovery(device_id)
+        secret = DeviceService(session, actor_policy_id=request.state.policy_id).authorise_recovery(device_id)
         # Returned once and never stored in the clear, like every other
         # credential this service mints.
         return {"device_id": device_id, "recovery_secret": secret}
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e)) from None
+    except CollectorScopeError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from None
     except PermissionError as e:
         raise HTTPException(status_code=409, detail=str(e)) from None
     finally:
@@ -336,10 +343,8 @@ async def authorise_device_recovery(device_id: str, request: Request) -> dict:
 async def list_devices(request: Request) -> list[dict]:
     session = request.app.state.session_factory()
     try:
-        from app.services.device_service import DeviceService
-
-        svc = DeviceService(session)
-        return [_device_to_dict(d) for d in svc.list_devices()]
+        svc = DeviceService(session, actor_policy_id=request.state.policy_id)
+        return [_device_to_dict(d) for d in svc.list_devices(role=request.state.role)]
     finally:
         session.close()
 
@@ -348,11 +353,11 @@ async def list_devices(request: Request) -> list[dict]:
 async def update_device_status(device_id: str, body: UpdateDeviceStatusRequest, request: Request) -> dict:
     session = request.app.state.session_factory()
     try:
-        from app.services.device_service import DeviceService
-
-        svc = DeviceService(session)
+        svc = DeviceService(session, actor_policy_id=request.state.policy_id)
         device = svc.update_device_status(device_id, body.status)
         return _device_to_dict(device)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from None
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     finally:
@@ -363,10 +368,10 @@ async def update_device_status(device_id: str, body: UpdateDeviceStatusRequest, 
 async def delete_device(device_id: str, request: Request) -> None:
     session = request.app.state.session_factory()
     try:
-        from app.services.device_service import DeviceService
-
-        svc = DeviceService(session)
+        svc = DeviceService(session, actor_policy_id=request.state.policy_id)
         svc.delete_device(device_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from None
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     finally:
