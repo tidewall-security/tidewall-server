@@ -22,6 +22,8 @@ import pytest
 from sqlalchemy import create_engine, text
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+PRE_BACKFILL = "e4b8c2a71f95"
+BACKFILL = "fb6a694ad1fa"
 
 
 def _alembic(db_path: Path, *args: str) -> None:
@@ -90,10 +92,7 @@ def test_backfill_gives_every_policy_a_rule_set_per_event_type(migrated_db):
     # inherit: an access rule and a non-null report_only override on `input`.
     pid = _legacy_policy(engine, report_only_on_input=True, with_access_rule=True)
 
-    _alembic(migrated_db, "upgrade", "head")  # no-op; rows inserted after head
-
-    # Re-run the backfill explicitly by downgrading one and upgrading again.
-    _alembic(migrated_db, "downgrade", "-1")
+    _alembic(migrated_db, "downgrade", PRE_BACKFILL)
     _alembic(migrated_db, "upgrade", "head")
 
     with engine.begin() as conn:
@@ -126,9 +125,12 @@ def test_backfill_is_idempotent(migrated_db):
     engine = create_engine(f"sqlite:///{migrated_db}")
     pid = _legacy_policy(engine, report_only_on_input=None, with_access_rule=False)
 
-    for _ in range(2):
-        _alembic(migrated_db, "downgrade", "-1")
-        _alembic(migrated_db, "upgrade", "head")
+    _alembic(migrated_db, "downgrade", PRE_BACKFILL)
+    _alembic(migrated_db, "upgrade", BACKFILL)
+    # Replay the data migration with its first pass still in place. Its
+    # downgrade would delete those rows and exercise an empty backfill again.
+    _alembic(migrated_db, "stamp", PRE_BACKFILL)
+    _alembic(migrated_db, "upgrade", "head")
 
     with engine.begin() as conn:
         n = conn.execute(text("SELECT count(*) FROM rule_sets WHERE policy_id = :p"), {"p": pid}).scalar()

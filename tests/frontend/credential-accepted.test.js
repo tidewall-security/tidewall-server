@@ -67,3 +67,47 @@ describe('a key accepted through the prompt', () => {
     expect(localStorage.getItem('tidewall_api_key')).toBe('ak_the_same_key_every_time');
   });
 });
+
+describe('overlapping credential submissions', () => {
+  const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+
+  async function submitTwo() {
+    document.body.replaceChildren();
+    localStorage.clear();
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 401 });
+    new Function(readFileSync(join(__dirname, '../../app/static/js/auth.js'), 'utf8'))();
+    await tick();
+
+    const pending = [];
+    const accepted = [];
+    const auth = window.TidewallAuth;
+    auth.onCredentialChange(() => accepted.push(auth.getKey()));
+    globalThis.fetch = () => new Promise((resolve, reject) => pending.push({ resolve, reject }));
+    for (const value of ['first', 'second']) {
+      document.getElementById('auth-key-input').value = value;
+      document.getElementById('auth-key-submit').click();
+    }
+    return { pending, accepted };
+  }
+
+  it.each([[0, 1], [1, 0]])('keeps the latest valid submission with response order %i, %i', async (a, b) => {
+    const { pending, accepted } = await submitTwo();
+    for (const index of [a, b]) {
+      pending[index].resolve({ ok: true, status: 200 });
+      await tick();
+    }
+    expect(accepted).toEqual(['second']);
+    expect(localStorage.getItem('tidewall_api_key')).toBe('second');
+  });
+
+  it.each(['refused', 'offline'])('ignores an earlier %s result while the latest key is pending', async failure => {
+    const { pending, accepted } = await submitTwo();
+    if (failure === 'refused') pending[0].resolve({ ok: false, status: 403 });
+    else pending[0].reject(new Error());
+    await tick();
+    expect(document.getElementById('auth-error').textContent).toBe('');
+    pending[1].resolve({ ok: true, status: 200 });
+    await tick();
+    expect(accepted).toEqual(['second']);
+  });
+});

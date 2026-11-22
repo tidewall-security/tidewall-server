@@ -11,6 +11,7 @@
   var _readyCallbacks = [];
   var _isReady = false;
   var _credentialCallbacks = [];
+  var _credentialRevision = 0;
 
   // Anything holding data fetched under one credential needs to know when the
   // credential changes, because a value read as one principal must not be shown
@@ -19,6 +20,7 @@
   // fire for same-tab writes, and re-entering the same key emits nothing at
   // all. So every mutation routes through here.
   function _notifyCredentialChange() {
+    _credentialRevision++;
     _credentialCallbacks.forEach(function (cb) {
       try { cb(); } catch (e) { /* one listener must not stop the others */ }
     });
@@ -49,7 +51,10 @@
 
   // Another tab replacing or clearing the key.
   window.addEventListener('storage', function (e) {
-    if (e.key === STORAGE_KEY) _notifyCredentialChange();
+    if (e.key === STORAGE_KEY || e.key === null) {
+      _notifyCredentialChange();
+      checkAuth();
+    }
   });
 
   function _notifyReady() {
@@ -85,15 +90,19 @@
     var input = document.getElementById('auth-key-input');
     var btn = document.getElementById('auth-key-submit');
     var errEl = document.getElementById('auth-error');
+    var latestSubmission = 0;
 
     function tryAuth() {
       var key = input.value.trim();
       if (!key) return;
 
+      var revision = _credentialRevision;
+      var submission = ++latestSubmission;
       // Test the key against /v1/logs/stats (needs viewer+)
       fetch('/v1/logs/stats', {
         headers: { 'Authorization': 'Bearer ' + key }
       }).then(function (resp) {
+        if (submission !== latestSubmission || revision !== _credentialRevision) return;
         if (resp.ok) {
           setStoredKey(key);
           overlay.remove();
@@ -106,6 +115,7 @@
           errEl.style.display = 'block';
         }
       }).catch(function () {
+        if (submission !== latestSubmission || revision !== _credentialRevision) return;
         errEl.textContent = 'Connection error';
         errEl.style.display = 'block';
       });
@@ -121,18 +131,22 @@
   // Check if auth is needed by testing a protected endpoint
   function checkAuth() {
     var key = getStoredKey();
+    var revision = _credentialRevision;
     var headers = key ? { 'Authorization': 'Bearer ' + key } : {};
 
     fetch('/v1/logs/stats', { headers: headers }).then(function (resp) {
+      if (revision !== _credentialRevision || key !== getStoredKey()) return;
       if (resp.status === 401) {
         clearStoredKey();
         showKeyPrompt();
         // Don't notify ready — wait for user to enter key
       } else {
+        if (resp.ok) document.getElementById('auth-overlay')?.remove();
         // 200 or 403 means auth is fine (or disabled)
         _notifyReady();
       }
     }).catch(function () {
+      if (revision !== _credentialRevision || key !== getStoredKey()) return;
       // Server down — notify ready anyway (pages will show errors)
       _notifyReady();
     });
