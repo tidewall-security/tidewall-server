@@ -1,6 +1,6 @@
 """Collector authority at registration, the HTTP boundary, and transaction time."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -363,3 +363,134 @@ def test_cascade_and_new_collector_enrollment_serialize(tmp_path):
         assert {d.status for d in check.query(Device).all()} == {"revoked"}
         assert check.query(AccessToken).count() == 0
     engine.dispose()
+
+
+@pytest.mark.parametrize("lost_policy", [None, "missing-policy"])
+@pytest.mark.parametrize("terminal", ["revoke_then_delete", "delete"])
+def test_collector_with_lost_scope_cannot_recover_as_guard(fleet, lost_policy, terminal):
+    client, keys, sessions = fleet
+    admin = keys["deployment"]
+    rt = register(client, admin).json()["token"]
+    installation = str(uuid4())
+    device = enrol(client, rt, installation).json()["result"]
+    assert approve(client, admin, device).status_code == 200
+    device_id = device["device_id"]
+    path = f"{DEVICES}/{device_id}"
+    with sessions.begin() as session:
+        session.get(Device, device_id).policy_id = lost_policy
+    if terminal == "revoke_then_delete":
+        assert client.patch(path, headers=bearer(admin), json={"status": "revoked"}).status_code == 200
+    assert client.delete(path, headers=bearer(admin)).status_code == 204
+    for actor in (keys["a-admin"], admin):
+        assert client.post(f"{path}/authorise-recovery", headers=bearer(actor)).status_code == 403
+    # An outstanding grant cannot override the absent binding either.
+    with sessions.begin() as session:
+        tombstone = session.get(DeviceTombstone, device_id)
+        assert tombstone.recovery_secret_hash is None
+        tombstone.recovery_secret_hash = hash_key("synthetic-test-grant")
+    for purpose in ("guard_device", "collector_write"):
+        fresh = register(client, admin, purpose=purpose).json()["token"]
+        response = enrol(client, fresh, installation, recovery_secret="synthetic-test-grant")
+        assert response.status_code == 403
+    with sessions() as session:
+        tombstone = session.get(DeviceTombstone, device_id)
+        assert tombstone.purpose == "collector_write"
+        assert tombstone.consumed_at is None
+        assert session.query(Device).filter_by(installation_id=installation).count() == 0
+
+
+def test_approval_wins_before_reaper_writes_without_losing_device_or_quota(tmp_path):
+    from sqlalchemy import event
+
+    from app.db.engine import get_engine, get_session_factory
+    from app.db.models import Base, DeviceRefreshToken
+    from app.services.collector_identity import authorize_collector
+    from app.services.device_service import DeviceService
+
+    engine = get_engine(f"sqlite:///{tmp_path}/reaper.db")
+    Base.metadata.create_all(engine)
+    factory = get_session_factory(engine)
+    with factory() as setup:
+        setup.add(Policy(id=POLICY_A, name=POLICY_A, type="application"))
+        setup.commit()
+        service = DeviceService(setup)
+        raw, rt = service.create_registration_token(
+            "fixture", POLICY_A, expires_at=datetime.now(UTC) + timedelta(days=1), purpose="collector_write"
+        )
+        token_id = rt.id
+        devices = [
+            service.enrol_device(
+                rt_token_hash=hash_key(raw),
+                installation_id=str(uuid4()),
+                device_name="fixture",
+                user_name="",
+                user_email="",
+                browser="",
+                os="",
+                ext_version="",
+            )["result"]
+            for _ in range(2)
+        ]
+        expiring, fresh = devices
+        device_id = expiring["device_id"]
+        setup.query(Device).filter_by(id=device_id).update({"created_at": datetime.now(UTC) - timedelta(days=4)})
+        now = datetime.now(UTC)
+        setup.query(Device).filter_by(id=fresh["device_id"]).update({"created_at": now - timedelta(hours=71)})
+        setup.commit()
+
+    with factory() as reaper:
+        approvals: list[str] = []
+
+        @event.listens_for(reaper, "do_orm_execute")
+        def approve_before_first_write(statement):
+            if approvals or not (statement.is_update or statement.is_delete):
+                return
+            with factory() as admin:
+                row = DeviceService(admin).approve_device(device_id, expiring["confirmation_code"])
+                approvals.append(row.status)
+
+        # The same instant in an offset timezone must retain the other
+        # device's remaining hour and quota slot.
+        reaped = DeviceService(reaper).reap_pending_devices(now=now.astimezone(timezone(timedelta(hours=2))))
+        assert approvals == ["active"]
+        assert reaped == 0
+
+    with factory() as verify:
+        pending = verify.get(Device, fresh["device_id"])
+        registration = verify.get(RegistrationToken, token_id)
+        assert pending is not None and pending.status == "pending"
+        assert registration is not None and registration.pending_count == 1
+        principal = authorize_collector(
+            verify, hash_key(expiring["access_token"]["token"]), device_id, datetime.now(UTC)
+        )
+        assert principal.policy_id == POLICY_A
+        assert verify.query(DeviceRefreshToken).filter_by(device_id=device_id).count() == 1
+    engine.dispose()
+
+
+def test_existing_guard_tombstone_cannot_reclassify_imported_collector_on_deletion(fleet):
+    client, keys, sessions = fleet
+    admin = keys["deployment"]
+    token = register(client, admin).json()["token"]
+    installation = str(uuid4())
+    device = enrol(client, token, installation).json()["result"]
+    device_id = device["device_id"]
+    path = f"{DEVICES}/{device_id}"
+    guard = register(client, admin, purpose="guard_device").json()["token"]
+    with sessions.begin() as session:
+        session.get(Device, device_id).policy_id = None
+        session.add(
+            DeviceTombstone(
+                device_id=device_id,
+                installation_id=installation,
+                reason="incomplete import",
+                recovery_secret_hash=hash_key("synthetic-test-grant"),
+            )
+        )
+    for deleted in (False, True):
+        if deleted:
+            assert client.delete(path, headers=bearer(admin)).status_code == 204
+        assert enrol(client, guard, installation, recovery_secret="synthetic-test-grant").status_code == 403
+        assert client.post(f"{path}/authorise-recovery", headers=bearer(admin)).status_code == 403
+    with sessions() as session:
+        assert session.get(DeviceTombstone, device_id).purpose == "collector_write"

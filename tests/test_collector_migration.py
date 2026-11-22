@@ -48,8 +48,11 @@ def test_populated_upgrade_authentication_and_downgrade(tmp_path):
         assert con.execute("PRAGMA foreign_key_check").fetchall() == []
         assert con.execute("SELECT purpose, collector_approved_at FROM devices").fetchone() == ("guard_device", None)
         assert con.execute("SELECT purpose FROM registration_tokens").fetchone() == ("guard_device",)
-        assert con.execute("SELECT collector_policy_id FROM device_tombstones").fetchone() == (None,)
-        for table in ("devices", "registration_tokens"):
+        assert con.execute("SELECT purpose, collector_policy_id FROM device_tombstones").fetchone() == (
+            "guard_device",
+            None,
+        )
+        for table in ("devices", "registration_tokens", "device_tombstones"):
             for invalid in ("other", None):
                 with pytest.raises(sqlite3.IntegrityError):
                     con.execute(f"UPDATE {table} SET purpose=?", (invalid,))
@@ -88,3 +91,33 @@ def test_downgrade_cannot_convert_collectors_into_guard_registrations(tmp_path):
     with sqlite3.connect(db) as con:
         assert con.execute("SELECT version_num FROM alembic_version").fetchone() == (NEW,)
         assert con.execute("SELECT purpose FROM registration_tokens").fetchone() == ("collector_write",)
+
+
+def test_downgrade_refuses_tombstone_of_collector_whose_scope_was_lost(tmp_path):
+    db = tmp_path / "unscoped.db"
+    _alembic(db, "upgrade", NEW)
+    engine = get_engine(f"sqlite:///{db}")
+    from app.db.models import Device
+    from app.services.device_service import DeviceService
+
+    with get_session_factory(engine)() as session:
+        device = Device(
+            installation_id="fixture",
+            device_name="d",
+            user_name="",
+            user_email="",
+            purpose="collector_write",
+            policy_id=None,
+        )
+        session.add(device)
+        session.commit()
+        DeviceService(session).delete_device(device.id)
+    engine.dispose()
+    with pytest.raises(pytest.fail.Exception, match="collector identity"):
+        _alembic(db, "downgrade", OLD)
+    with sqlite3.connect(db) as con:
+        assert con.execute("SELECT version_num FROM alembic_version").fetchone() == (NEW,)
+        assert con.execute("SELECT purpose, collector_policy_id FROM device_tombstones").fetchone() == (
+            "collector_write",
+            None,
+        )

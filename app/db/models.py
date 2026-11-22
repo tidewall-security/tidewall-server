@@ -680,8 +680,16 @@ class DeviceTombstone(Base):
 
     __tablename__ = "device_tombstones"
 
-    # Snapshot survives device and policy deletion. NULL identifies historical
-    # guard tombstones, which retain the existing recovery procedure.
+    # Keep purpose independently of policy. A collector whose imported policy
+    # binding is missing must still be recognized after deleting its device.
+    purpose: Mapped[str] = mapped_column(
+        String,
+        CheckConstraint("purpose IN ('guard_device', 'collector_write')", name="ck_device_tombstones_purpose"),
+        nullable=False,
+        default="guard_device",
+        server_default="guard_device",
+    )
+    # This snapshot outlives both the device and its policy.
     collector_policy_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
     device_id: Mapped[str] = mapped_column(String, primary_key=True)

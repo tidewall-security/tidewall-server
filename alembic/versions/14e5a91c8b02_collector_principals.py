@@ -11,7 +11,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    for table in ("registration_tokens", "devices"):
+    for table in ("registration_tokens", "devices", "device_tombstones"):
         # Inline CHECK permits native SQLite ADD / DROP COLUMN. Rebuilding
         # either parent table needlessly risks its descendant credentials.
         op.add_column(
@@ -37,13 +37,15 @@ def downgrade() -> None:
             sa.text("""
         SELECT EXISTS(SELECT 1 FROM registration_tokens WHERE purpose='collector_write')
             OR EXISTS(SELECT 1 FROM devices WHERE purpose='collector_write')
-            OR EXISTS(SELECT 1 FROM device_tombstones WHERE collector_policy_id IS NOT NULL)
+            OR EXISTS(SELECT 1 FROM device_tombstones
+                      WHERE purpose='collector_write' OR collector_policy_id IS NOT NULL)
     """)
         )
         .scalar()
     ):
         raise RuntimeError("Cannot downgrade while collector identity records exist")
     op.drop_column("device_tombstones", "collector_policy_id")
+    op.drop_column("device_tombstones", "purpose")
     op.drop_column("devices", "collector_approved_at")
     op.drop_column("devices", "purpose")
     op.drop_column("registration_tokens", "purpose")

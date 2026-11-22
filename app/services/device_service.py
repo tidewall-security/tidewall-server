@@ -321,7 +321,9 @@ class DeviceService:
             # A wrong secret answers exactly as no secret does. Any other
             # arrangement reports whether recovery has been authorised, which
             # tells the revoked party when to try.
-            if tombstone.collector_policy_id is not None and (
+            if not self._valid_recovery_scope(tombstone):
+                return {"status": "InstallationTombstoned", "result": None}
+            if tombstone.purpose == "collector_write" and (
                 rt.purpose != "collector_write"
                 or rt.policy_id != tombstone.collector_policy_id
                 or as_utc(rt.created_at) <= as_utc(tombstone.created_at)
@@ -641,6 +643,14 @@ class DeviceService:
     def get_device(self, device_id: str) -> Device | None:
         return self._session.get(Device, device_id)
 
+    def _valid_recovery_scope(self, tombstone: DeviceTombstone) -> bool:
+        device = self._session.get(Device, tombstone.device_id)
+        if device is not None and device.purpose != tombstone.purpose:
+            return False
+        if tombstone.purpose == "guard_device":
+            return tombstone.collector_policy_id is None
+        return bool(tombstone.collector_policy_id and self._session.get(Policy, tombstone.collector_policy_id))
+
     def authorise_recovery(self, device_id: str) -> str:
         """Grant one recovery for a tombstoned device. Returns the secret once.
 
@@ -652,7 +662,9 @@ class DeviceService:
         tombstone = self._session.get(DeviceTombstone, device_id)
         if tombstone is None:
             raise LookupError(f"No tombstone for device {device_id}")
-        if tombstone.collector_policy_id is not None:
+        if not self._valid_recovery_scope(tombstone):
+            raise CollectorScopeError("Recovery requires a valid stored device scope")
+        if tombstone.purpose == "collector_write":
             self._check_collector_scope("collector_write", tombstone.collector_policy_id)
         if tombstone.consumed_at is not None:
             raise PermissionError("That recovery has already been used")
@@ -675,20 +687,24 @@ class DeviceService:
         the scheduler passes the configured one in; leaving the constant as the
         only source is how that setting came to be read by nothing at all.
         """
-        moment = now or datetime.now(UTC)
+        moment = as_utc(now).astimezone(UTC) if now is not None else datetime.now(UTC)
         cutoff = moment - (ttl if ttl is not None else PENDING_DEVICE_TTL)
-        stale = [
-            d for d in self._session.query(Device).filter_by(status="pending").all() if as_utc(d.created_at) < cutoff
-        ]
-        for device in stale:
+        expired_pending = self._session.query(Device).filter(Device.status == "pending", Device.created_at < cutoff)
+        reaped = 0
+        for device in expired_pending.all():
+            # Approval can commit after selection. Claim the removal with the
+            # current status and TTL before releasing a slot or credentials.
+            if not expired_pending.filter(Device.id == device.id).delete(synchronize_session="fetch"):
+                continue
             self._release_pending_slot(device)
+            # Also clear credentials in databases without FK enforcement.
             self._session.query(AccessToken).filter_by(device_id=device.id).delete()
             self._session.query(DeviceRefreshToken).filter_by(device_id=device.id).delete()
-            self._session.delete(device)
+            reaped += 1
         self._session.commit()
-        if stale:
-            logger.info("Reaped %d pending device(s) past their TTL", len(stale))
-        return len(stale)
+        if reaped:
+            logger.info("Reaped %d pending device(s) past their TTL", reaped)
+        return reaped
 
     def _release_pending_slot(self, device: Device) -> None:
         """Give a pending device's quota slot back.
@@ -717,13 +733,20 @@ class DeviceService:
 
         Idempotent -- re-revoking a device must not raise on the primary key.
         """
-        if self._session.get(DeviceTombstone, device.id) is not None:
+        existing = self._session.get(DeviceTombstone, device.id)
+        if existing is not None:
+            if device.purpose == "collector_write" and existing.purpose != device.purpose:
+                # A conflicting import never established a collector policy
+                # snapshot. Preserve its collector identity after deletion.
+                existing.purpose = device.purpose
+                existing.collector_policy_id = None
             return
         self._session.add(
             DeviceTombstone(
                 device_id=device.id,
                 installation_id=device.installation_id,
                 reason=reason,
+                purpose=device.purpose,
                 collector_policy_id=device.policy_id if device.purpose == "collector_write" else None,
             )
         )
