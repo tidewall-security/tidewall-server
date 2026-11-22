@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "fixture_stream_id": "fixture-claude-stream-01",
+  "projection": {
+    "source_case": "Phase 0 synthetic file.read; public parser values used only as test inputs",
+    "test_keys_hex": {
+      "A": "0000000000000000000000000000000000000000000000000000000000000000",
+      "B": "0101010101010101010101010101010101010101010101010101010101010101"
+    },
+    "parser_inputs": {
+      "parser_logical": "8e408dc78f52fc559545a15e5eb7e867deeb5926a13bb7f97539d4fcf8ef91e6",
+      "parser_observation": "3ef53643cc7bd5efb6762231b934dc29be903a26db005dff6f546aa5e7ef1245"
+    },
+    "expected_tokens": {
+      "A": {
+        "parser_logical_token": "098e31dda3454d7607f4d36d1897663ae04fcf44332a6afdf4be4734211da13c",
+        "parser_observation_token": "05ccf4e7e0cab645959321a7ea003d28794b7fe3a8ef8c2fcbe6d4f02880e6bb"
+      },
+      "B": {
+        "parser_logical_token": "ff671ca636bb66312c51f7feffd5748eb564c4dfd5facdb698a97a41441f6d49",
+        "parser_observation_token": "b2c514a61c2c5057888fb2730d61aca712196a077d0311f68b4b96f6577ae5d8"
+      }
+    }
+  },
+  "observation_vectors": [
+    {
+      "name": "transcript_file_read_A",
+      "canonical": "{\"adapter_version\":\"1.0.0\",\"agent\":\"claude-code\",\"availability\":\"metadata_only\",\"fixture_profile\":\"claude-fixture-v1\",\"gaps\":[],\"kind\":\"file.read\",\"native_session_token\":\"43d3dd74b03620227a86f46e9b017617adc6737e8a2aeaa767cb53689754ccd3\",\"native_tool_call_token\":\"90d1f78f6889db3166b35c77f70d891e76650bdbecd3cdf5a75ea3238122ca45\",\"source\":{\"byte_position\":329,\"channel\":\"transcript\",\"parser_evidence_version\":1,\"parser_logical_token\":\"098e31dda3454d7607f4d36d1897663ae04fcf44332a6afdf4be4734211da13c\",\"parser_observation_token\":\"05ccf4e7e0cab645959321a7ea003d28794b7fe3a8ef8c2fcbe6d4f02880e6bb\",\"part\":1,\"record_origin\":\"native\",\"record_token\":\"fb68c21b78164aa6930bf28959713a7b4a3333efba3e184783a84ef6366b0466\",\"stream_token\":\"e589c8f3167d332ff33ba11ec4caf83930063c4995a7fc4d485cc5573ba5ca8a\"},\"tool_name\":\"Read\",\"upstream_sha\":\"7ec2891b0904dad621bb13f24312121d05d4ca03\"}",
+      "sha256": "9b9ffb2a9cb843e4e29e6d862c174115178e5bb52a14e288d4d256f74a535aec"
+    },
+    {
+      "name": "transcript_file_read_B",
+      "canonical": "{\"adapter_version\":\"1.0.0\",\"agent\":\"claude-code\",\"availability\":\"metadata_only\",\"fixture_profile\":\"claude-fixture-v1\",\"gaps\":[],\"kind\":\"file.read\",\"native_session_token\":\"fc30eb7a76865d0d327433ef4a8a7fe68f36cac4d4859ebfbbd7badc2bc9afcb\",\"native_tool_call_token\":\"53f0ee496198144ed3957ee049b49194bcafd9cacf5600f73b73f61f12f8f8e3\",\"source\":{\"byte_position\":329,\"channel\":\"transcript\",\"parser_evidence_version\":1,\"parser_logical_token\":\"ff671ca636bb66312c51f7feffd5748eb564c4dfd5facdb698a97a41441f6d49\",\"parser_observation_token\":\"b2c514a61c2c5057888fb2730d61aca712196a077d0311f68b4b96f6577ae5d8\",\"part\":1,\"record_origin\":\"native\",\"record_token\":\"e734de7afddf827ab03782fc2cae95d0e1346d7f4724c5b009fdaa0f3cfc1cd1\",\"stream_token\":\"3b638de7cbc6f798d7c525fed9b196a7dcc7cd0a794644ef20aa360337044627\"},\"tool_name\":\"Read\",\"upstream_sha\":\"7ec2891b0904dad621bb13f24312121d05d4ca03\"}",
+      "sha256": "9e1c498aef8dfdb97a2dd0ba2026c0243bc28a4d8b34e9b91225ca94b19097c1"
+    },
+    {
+      "name": "hook_orphan_result",
+      "canonical": "{\"adapter_version\":\"1.0.0\",\"agent\":\"claude-code\",\"availability\":\"metadata_only\",\"fixture_profile\":\"claude-fixture-v1\",\"gaps\":[\"missing_native_session_id\",\"missing_native_tool_call_id\"],\"kind\":\"tool.result\",\"source\":{\"channel\":\"hook\",\"collector_observation_id\":\"12345678-abcd-4000-8000-000000000003\",\"native_event\":\"PostToolUse\"},\"tool_name\":\"WebFetch\",\"upstream_sha\":\"7ec2891b0904dad621bb13f24312121d05d4ca03\"}",
+      "sha256": "56c997248618edb8de88e5a299c24ba798c4e97dc72daf924c9bfe6da94eba47"
+    },
+    {
+      "name": "largest_v1_observation",
+      "canonical": "{\"adapter_version\":\"12345678.1234567.1234567\",\"agent\":\"claude-code\",\"availability\":\"truncated\",\"fixture_profile\":\"claude-fixture-v1\",\"gaps\":[\"content_truncated\",\"malformed_record\",\"missing_native_session_id\",\"missing_native_tool_call_id\",\"missing_tool_call\",\"other_parser_gap\",\"skipped_content\",\"unsupported_content\"],\"kind\":\"session.start\",\"native_session_token\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"native_tool_call_token\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"source\":{\"byte_position\":9007199254740991,\"channel\":\"transcript\",\"parser_evidence_version\":1,\"parser_logical_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"parser_observation_token\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"part\":65535,\"record_origin\":\"parser_generated\",\"record_token\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"stream_token\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"},\"source_at\":\"2024-02-29T23:59:59.120000Z\",\"tool_name\":\"WebFetch\",\"upstream_sha\":\"7ec2891b0904dad621bb13f24312121d05d4ca03\"}",
+      "sha256": "cd0954f355fa2698f0b9bd6b7a16f8aee009a69403bef90056e4e6989e730af1",
+      "canonical_size": 1137
+    }
+  ],
+  "batch": "{\"batch_id\":\"12345678-abcd-4000-8000-000000000002\",\"enrollment_id\":\"12345678-abcd-4000-8000-000000000001\",\"rows\":[{\"observation\":{\"adapter_version\":\"1.0.0\",\"agent\":\"claude-code\",\"availability\":\"metadata_only\",\"fixture_profile\":\"claude-fixture-v1\",\"gaps\":[\"missing_native_session_id\",\"missing_native_tool_call_id\"],\"kind\":\"tool.result\",\"source\":{\"channel\":\"hook\",\"collector_observation_id\":\"12345678-abcd-4000-8000-000000000003\",\"native_event\":\"PostToolUse\"},\"tool_name\":\"WebFetch\",\"upstream_sha\":\"7ec2891b0904dad621bb13f24312121d05d4ca03\"},\"ordinal\":41}],\"version\":1}",
+  "heartbeat": "{\"adapter_version\":\"1.0.0\",\"enrollment_id\":\"12345678-abcd-4000-8000-000000000001\",\"pending\":1,\"queue_bytes\":650,\"revision\":1,\"state\":\"ready\",\"totals\":{\"capacity_rejected\":0,\"expired\":0,\"incomplete_tail\":0,\"invalid_json\":0,\"invalid_shape\":0,\"oversized_input\":0,\"retired_ordinal\":0,\"row_schema_invalid\":0,\"server_conflict\":0,\"unsupported_record\":0},\"upstream_sha\":\"7ec2891b0904dad621bb13f24312121d05d4ca03\",\"version\":1}",
+  "responses": {
+    "receipt": "{\"batch_id\":\"12345678-abcd-4000-8000-000000000002\",\"enrollment_id\":\"12345678-abcd-4000-8000-000000000001\",\"results\":[{\"digest\":\"56c997248618edb8de88e5a299c24ba798c4e97dc72daf924c9bfe6da94eba47\",\"event_id\":\"12345678-abcd-4000-8000-000000000004\",\"ordinal\":41,\"outcome\":\"accepted\"}],\"version\":1}",
+    "heartbeat_ack": "{\"capture\":\"metadata_only\",\"enrollment_id\":\"12345678-abcd-4000-8000-000000000001\",\"retain_content\":false,\"revision\":1,\"version\":1}",
+    "refusals": {
+      "unsupported_version": "{\"code\":\"unsupported_version\"}",
+      "invalid_envelope": "{\"code\":\"invalid_envelope\"}",
+      "invalid_row": "{\"code\":\"invalid_row\"}"
+    },
+    "duplicate_receipt": "{\"batch_id\":\"12345678-abcd-4000-8000-000000000002\",\"enrollment_id\":\"12345678-abcd-4000-8000-000000000001\",\"results\":[{\"digest\":\"56c997248618edb8de88e5a299c24ba798c4e97dc72daf924c9bfe6da94eba47\",\"event_id\":\"12345678-abcd-4000-8000-000000000004\",\"ordinal\":41,\"outcome\":\"duplicate\"}],\"version\":1}",
+    "rejected_receipt": "{\"batch_id\":\"12345678-abcd-4000-8000-000000000002\",\"enrollment_id\":\"12345678-abcd-4000-8000-000000000001\",\"results\":[{\"digest\":\"56c997248618edb8de88e5a299c24ba798c4e97dc72daf924c9bfe6da94eba47\",\"ordinal\":41,\"outcome\":\"rejected\",\"reason\":\"retired_ordinal\"}],\"version\":1}"
+  },
+  "negative_requests": [
+    {
+      "name": "unknown_version",
+      "request": "batch",
+      "code": "unsupported_version",
+      "body": "{\"batch_id\":\"12345678-abcd-4000-8000-000000000002\",\"enrollment_id\":\"12345678-abcd-4000-8000-000000000001\",\"rows\":[{\"observation\":{\"adapter_version\":\"1.0.0\",\"agent\":\"claude-code\",\"availability\":\"metadata_only\",\"fixture_profile\":\"claude-fixture-v1\",\"gaps\":[\"missing_native_session_id\",\"missing_native_tool_call_id\"],\"kind\":\"tool.result\",\"source\":{\"channel\":\"hook\",\"collector_observation_id\":\"12345678-abcd-4000-8000-000000000003\",\"native_event\":\"PostToolUse\"},\"tool_name\":\"WebFetch\",\"upstream_sha\":\"7ec2891b0904dad621bb13f24312121d05d4ca03\"},\"ordinal\":41}],\"version\":2}"
+    },
+    {
+      "name": "duplicate_envelope_key",
+      "request": "batch",
+      "code": "invalid_envelope",
+      "body": "{\"version\":1,\"batch_id\":\"12345678-abcd-4000-8000-000000000002\",\"enrollment_id\":\"12345678-abcd-4000-8000-000000000001\",\"rows\":[{\"observation\":{\"adapter_version\":\"1.0.0\",\"agent\":\"claude-code\",\"availability\":\"metadata_only\",\"fixture_profile\":\"claude-fixture-v1\",\"gaps\":[\"missing_native_session_id\",\"missing_native_tool_call_id\"],\"kind\":\"tool.result\",\"source\":{\"channel\":\"hook\",\"collector_observation_id\":\"12345678-abcd-4000-8000-000000000003\",\"native_event\":\"PostToolUse\"},\"tool_name\":\"WebFetch\",\"upstream_sha\":\"7ec2891b0904dad621bb13f24312121d05d4ca03\"},\"ordinal\":41}],\"version\":1}"
+    },
+    {
+      "name": "unknown_row_field",
+      "request": "batch",
+      "code": "invalid_row",
+      "body": "{\"batch_id\":\"12345678-abcd-4000-8000-000000000002\",\"enrollment_id\":\"12345678-abcd-4000-8000-000000000001\",\"rows\":[{\"observation\":{\"adapter_version\":\"1.0.0\",\"agent\":\"claude-code\",\"availability\":\"metadata_only\",\"content\":\"synthetic_test_sentinel\",\"fixture_profile\":\"claude-fixture-v1\",\"gaps\":[\"missing_native_session_id\",\"missing_native_tool_call_id\"],\"kind\":\"tool.result\",\"source\":{\"channel\":\"hook\",\"collector_observation_id\":\"12345678-abcd-4000-8000-000000000003\",\"native_event\":\"PostToolUse\"},\"tool_name\":\"WebFetch\",\"upstream_sha\":\"7ec2891b0904dad621bb13f24312121d05d4ca03\"},\"ordinal\":41}],\"version\":1}"
+    },
+    {
+      "name": "hook_kind_mismatch",
+      "request": "batch",
+      "code": "invalid_row",
+      "body": "{\"batch_id\":\"12345678-abcd-4000-8000-000000000002\",\"enrollment_id\":\"12345678-abcd-4000-8000-000000000001\",\"rows\":[{\"observation\":{\"adapter_version\":\"1.0.0\",\"agent\":\"claude-code\",\"availability\":\"metadata_only\",\"fixture_profile\":\"claude-fixture-v1\",\"gaps\":[\"missing_native_session_id\",\"missing_native_tool_call_id\"],\"kind\":\"file.read\",\"source\":{\"channel\":\"hook\",\"collector_observation_id\":\"12345678-abcd-4000-8000-000000000003\",\"native_event\":\"PostToolUse\"},\"tool_name\":\"WebFetch\",\"upstream_sha\":\"7ec2891b0904dad621bb13f24312121d05d4ca03\"},\"ordinal\":41}],\"version\":1}"
+    },
+    {
+      "name": "hook_missing_id_gap_mismatch",
+      "request": "batch",
+      "code": "invalid_row",
+      "body": "{\"batch_id\":\"12345678-abcd-4000-8000-000000000002\",\"enrollment_id\":\"12345678-abcd-4000-8000-000000000001\",\"rows\":[{\"observation\":{\"adapter_version\":\"1.0.0\",\"agent\":\"claude-code\",\"availability\":\"metadata_only\",\"fixture_profile\":\"claude-fixture-v1\",\"gaps\":[\"missing_native_session_id\"],\"kind\":\"tool.result\",\"source\":{\"channel\":\"hook\",\"collector_observation_id\":\"12345678-abcd-4000-8000-000000000003\",\"native_event\":\"PostToolUse\"},\"tool_name\":\"WebFetch\",\"upstream_sha\":\"7ec2891b0904dad621bb13f24312121d05d4ca03\"},\"ordinal\":41}],\"version\":1}"
+    },
+    {
+      "name": "heartbeat_boolean_counter",
+      "request": "heartbeat",
+      "code": "invalid_envelope",
+      "body": "{\"adapter_version\":\"1.0.0\",\"enrollment_id\":\"12345678-abcd-4000-8000-000000000001\",\"pending\":true,\"queue_bytes\":650,\"revision\":1,\"state\":\"ready\",\"totals\":{\"capacity_rejected\":0,\"expired\":0,\"incomplete_tail\":0,\"invalid_json\":0,\"invalid_shape\":0,\"oversized_input\":0,\"retired_ordinal\":0,\"row_schema_invalid\":0,\"server_conflict\":0,\"unsupported_record\":0},\"upstream_sha\":\"7ec2891b0904dad621bb13f24312121d05d4ca03\",\"version\":1}"
+    }
+  ]
+}
