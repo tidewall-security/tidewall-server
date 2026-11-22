@@ -90,17 +90,19 @@
     var input = document.getElementById('auth-key-input');
     var btn = document.getElementById('auth-key-submit');
     var errEl = document.getElementById('auth-error');
+    var latestSubmission = 0;
 
     function tryAuth() {
       var key = input.value.trim();
       if (!key) return;
 
       var revision = _credentialRevision;
+      var submission = ++latestSubmission;
       // Test the key against /v1/logs/stats (needs viewer+)
       fetch('/v1/logs/stats', {
         headers: { 'Authorization': 'Bearer ' + key }
       }).then(function (resp) {
-        if (revision !== _credentialRevision) return;
+        if (submission !== latestSubmission || revision !== _credentialRevision) return;
         if (resp.ok) {
           setStoredKey(key);
           overlay.remove();
@@ -113,7 +115,7 @@
           errEl.style.display = 'block';
         }
       }).catch(function () {
-        if (revision !== _credentialRevision) return;
+        if (submission !== latestSubmission || revision !== _credentialRevision) return;
         errEl.textContent = 'Connection error';
         errEl.style.display = 'block';
       });
