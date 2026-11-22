@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -61,6 +62,20 @@ def test_wire_vectors(vector):
 @pytest.mark.parametrize("vector", VECTORS["negative_requests"], ids=lambda vector: vector["name"])
 def test_refusal_vectors(vector):
     assert_refused(vector["body"].encode(), vector["code"], parser=f"parse_{vector['request']}")
+
+
+REFUSAL_PROFILE = json.loads((Path(__file__).parent / "fixtures/collector_v1_refusals.json").read_text())
+
+
+@pytest.mark.parametrize("vector", REFUSAL_PROFILE["negative_batches"], ids=lambda vector: vector["name"])
+def test_receiver_refusal_profile(vector):
+    # The qualified CPython JSON decoder applies this limit before DTO validation.
+    previous = sys.get_int_max_str_digits()
+    try:
+        sys.set_int_max_str_digits(REFUSAL_PROFILE["python_int_max_str_digits"])
+        assert_refused(vector["body"].encode("ascii"), vector["code"])
+    finally:
+        sys.set_int_max_str_digits(previous)
 
 
 def test_response_vectors():

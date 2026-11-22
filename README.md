@@ -218,6 +218,8 @@ Use the collector CLI's `enrol` command with the pinned server origin, a fresh
 state directory and the registration secret on a protected file descriptor.
 Approve the resulting device with its confirmation code. Run `fixture` on
 the two fixture files, then `ship` to deliver observations and a heartbeat.
+Receiver validation and negative request vectors are documented in the
+[collector v1 refusal profile](docs/collector-wire-v1.md).
 
 Open **Sessions** at `/ui/sessions` with a policy-bound viewer or admin key. A
 deployment administrator can investigate all policies. The page shows the
