@@ -356,3 +356,24 @@ def vault_retention_job(
             report(logger, "info", f"Retention purged {purged} expired vault row(s)")
 
     return Job(name="vault-retention", interval_seconds=interval_seconds, run=_run)
+
+
+def collection_retention_job(
+    session_factory: Callable[[], object],
+    *,
+    scheduler: Scheduler,
+    interval_seconds: float = DEFAULT_INTERVAL_SECONDS,
+) -> Job:
+    """Run the collector's atomic purge under the managed worker lifecycle."""
+    from datetime import UTC, datetime
+
+    from app.services.collection_retention import purge_collection
+
+    def _purge() -> int:
+        with session_factory() as session:  # type: ignore[attr-defined]
+            return purge_collection(session, datetime.now(UTC))
+
+    async def _run() -> None:
+        await scheduler.run_in_worker(_purge)
+
+    return Job(name="collection-retention", interval_seconds=interval_seconds, run=_run)

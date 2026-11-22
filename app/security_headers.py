@@ -26,7 +26,10 @@ from starlette.requests import Request
 #:
 #: An exact segment matcher, never a prefix. A trailing slash selects redirect
 #: or 404 behaviour rather than this route and is outside the contract.
-_CONTENT_PATH = re.compile(r"^(/v1/logs/[^/]+/content|/v1/logs/[^/]+/content-export|/v1/me/capabilities)$")
+_CONTENT_PATH = re.compile(
+    r"^/v1/(?:logs/[^/]+/content(?:-export)?|me/capabilities|agent-sessions(?:/[^/]+/observations)?|"
+    r"agent-observations|collector-health)$"
+)
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):

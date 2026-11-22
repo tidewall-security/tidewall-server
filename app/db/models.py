@@ -38,12 +38,14 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     LargeBinary,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -561,6 +563,14 @@ class ModelIntent(Base):
 class RegistrationToken(Base):
     __tablename__ = "registration_tokens"
 
+    purpose: Mapped[str] = mapped_column(
+        String,
+        CheckConstraint("purpose IN ('guard_device', 'collector_write')", name="ck_registration_tokens_purpose"),
+        nullable=False,
+        default="guard_device",
+        server_default="guard_device",
+    )
+
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String, nullable=False)
     token_hash: Mapped[str] = mapped_column(String, unique=True, nullable=False)
@@ -606,6 +616,15 @@ class RegistrationToken(Base):
 
 class Device(Base):
     __tablename__ = "devices"
+
+    purpose: Mapped[str] = mapped_column(
+        String,
+        CheckConstraint("purpose IN ('guard_device', 'collector_write')", name="ck_devices_purpose"),
+        nullable=False,
+        default="guard_device",
+        server_default="guard_device",
+    )
+    collector_approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     # UUID the client generates once and stores. This is the device's identity.
@@ -663,6 +682,18 @@ class DeviceTombstone(Base):
 
     __tablename__ = "device_tombstones"
 
+    # Keep purpose independently of policy. A collector whose imported policy
+    # binding is missing must still be recognized after deleting its device.
+    purpose: Mapped[str] = mapped_column(
+        String,
+        CheckConstraint("purpose IN ('guard_device', 'collector_write')", name="ck_device_tombstones_purpose"),
+        nullable=False,
+        default="guard_device",
+        server_default="guard_device",
+    )
+    # This snapshot outlives both the device and its policy.
+    collector_policy_id: Mapped[str | None] = mapped_column(String, nullable=True)
+
     device_id: Mapped[str] = mapped_column(String, primary_key=True)
     installation_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     reason: Mapped[str] = mapped_column(String, nullable=False)
@@ -717,3 +748,102 @@ class AccessToken(Base):
     # deleted outright — an in-flight request must not fail because a refresh
     # happened to land first.
     replaced_by_id: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class CollectorProgress(Base):
+    """Durable per-enrollment cursor and counters, with separately expiring health detail."""
+
+    __tablename__ = "collector_progress"
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), primary_key=True)
+    policy_id: Mapped[str] = mapped_column(ForeignKey("policies.id", ondelete="RESTRICT"))
+    high_water: Mapped[int] = mapped_column(Integer, default=0)
+    heartbeat_revision: Mapped[int] = mapped_column(Integer, default=0)
+    heartbeat_digest: Mapped[str | None] = mapped_column(String(64))
+    totals: Mapped[dict[str, int]] = mapped_column(JSON, default=dict)
+    heartbeat_json: Mapped[str | None] = mapped_column(Text)
+    heartbeat_received_at: Mapped[datetime | None] = mapped_column(DateTime)
+    heartbeat_expires_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    __table_args__ = (
+        CheckConstraint("high_water BETWEEN 0 AND 9007199254740991", name="ck_collector_high_water"),
+        CheckConstraint("heartbeat_revision BETWEEN 0 AND 9007199254740991", name="ck_collector_revision"),
+        Index("ix_collector_health_policy_time", "policy_id", "heartbeat_received_at", "device_id"),
+    )
+
+
+class AgentSession(Base):
+    __tablename__ = "agent_sessions"
+    session_id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"))
+    policy_id: Mapped[str] = mapped_column(ForeignKey("policies.id", ondelete="RESTRICT"))
+    agent: Mapped[str] = mapped_column(String)
+    native_session_token: Mapped[str] = mapped_column(String(64))
+    received_at: Mapped[datetime] = mapped_column(DateTime)
+    __table_args__ = (
+        UniqueConstraint("device_id", "agent", "native_session_token"),
+        UniqueConstraint("session_id", "device_id", "policy_id", "agent"),
+        Index("ix_agent_sessions_policy_time", "policy_id", "received_at", "session_id"),
+    )
+
+
+class AgentObservation(Base):
+    __tablename__ = "agent_observations"
+    event_id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"))
+    policy_id: Mapped[str] = mapped_column(ForeignKey("policies.id", ondelete="RESTRICT"))
+    session_id: Mapped[str | None] = mapped_column(String)
+    agent: Mapped[str] = mapped_column(String)
+    channel: Mapped[str] = mapped_column(String)
+    source_key: Mapped[str] = mapped_column(String(64))
+    digest: Mapped[str] = mapped_column(String(64))
+    observation_json: Mapped[str] = mapped_column(Text)
+    received_at: Mapped[datetime] = mapped_column(DateTime)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    __table_args__ = (
+        UniqueConstraint("device_id", "agent", "channel", "source_key"),
+        UniqueConstraint("event_id", "device_id"),
+        ForeignKeyConstraint(
+            ["session_id", "device_id", "policy_id", "agent"],
+            [
+                "agent_sessions.session_id",
+                "agent_sessions.device_id",
+                "agent_sessions.policy_id",
+                "agent_sessions.agent",
+            ],
+        ),
+        Index("ix_agent_observations_policy_time", "policy_id", "received_at", "event_id"),
+        Index("ix_agent_observations_session_time", "session_id", "received_at", "event_id"),
+    )
+
+
+class CollectorOutcome(Base):
+    __tablename__ = "collector_outcomes"
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), primary_key=True)
+    ordinal: Mapped[int] = mapped_column(Integer, primary_key=True)
+    digest: Mapped[str] = mapped_column(String(64), primary_key=True)
+    outcome: Mapped[str] = mapped_column(String)
+    reason: Mapped[str | None] = mapped_column(String)
+    event_id: Mapped[str | None] = mapped_column(String)
+    received_at: Mapped[datetime] = mapped_column(DateTime)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["event_id", "device_id"],
+            ["agent_observations.event_id", "agent_observations.device_id"],
+            ondelete="CASCADE",
+        ),
+        Index(
+            "uq_collector_successful_ordinal",
+            "device_id",
+            "ordinal",
+            unique=True,
+            sqlite_where=text("event_id IS NOT NULL"),
+        ),
+        Index("ix_collector_outcomes_event", "event_id", "device_id"),
+        CheckConstraint("ordinal BETWEEN 1 AND 9007199254740991", name="ck_collector_ordinal"),
+        CheckConstraint(
+            "(outcome IN ('accepted','duplicate') AND event_id IS NOT NULL AND reason IS NULL) OR "
+            "(outcome = 'rejected' AND event_id IS NULL AND reason IS NOT NULL "
+            "AND reason IN ('identity_conflict','retired_ordinal'))",
+            name="ck_collector_disposition",
+        ),
+    )

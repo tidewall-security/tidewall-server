@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tidewall — Agent sessions</title>
+  <link rel="stylesheet" href="/static/css/theme.css">
+  <style>
+    .collection { max-width: 1440px; margin: auto; }
+    .collection-layout { display: grid; grid-template-columns: minmax(230px, 1fr) minmax(0, 2fr); gap: var(--space-lg); align-items: start; }
+    .collection section { margin-bottom: var(--space-lg); min-width: 0; }
+    .collection h2 { font-size: 17px; margin: 0 0 12px; }
+    .collection h3 { font-size: 15px; }
+    .collection-list { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+    .collection-list > * { padding: 14px 16px; overflow-wrap: anywhere; }
+    .collection-list > * + * { border-top: 1px solid var(--border); }
+    .collection-list p { color: var(--text-secondary); font-size: 13px; line-height: 1.55; }
+    .collection-list article { display: grid; gap: 5px; }
+    .collection button { color: var(--brand); background: var(--brand-muted); border: 1px solid var(--border-hover); border-radius: 6px; font: inherit; cursor: pointer; padding: 6px 10px; }
+    .collection button:hover, .collection button[aria-pressed=true] { background: var(--brand-hover); }
+    .collection-list .session-link { text-align: left; justify-self: start; max-width: 100%; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 12px; }
+    .collection .more { margin: 10px 16px; }
+    .collection .assessment { color: var(--text-primary); background: var(--bg-elevated); border-radius: 4px; padding: 2px 7px; font-size: 12px; justify-self: start; }
+    @media (max-width: 800px) {
+      .collection-layout { grid-template-columns: minmax(0,1fr); gap: 0; }
+      .top-nav { overflow-x: auto; } .nav-search, .nav-user { display: none; }
+      .nav-tabs { flex-shrink: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div id="nav"></div>
+  <main class="page-content collection">
+    <header class="page-header"><h1>Agent sessions</h1><p class="text-muted">Investigate collector metadata, source gaps and delivery health.</p></header>
+    <div class="collection-layout">
+      <section><h2>Sessions</h2><div id="sessions" class="collection-list" aria-live="polite"></div></section>
+      <section><h2>Session observations</h2><div id="observations" class="collection-list" aria-live="polite"></div></section>
+    </div>
+    <section><h2>Unassigned observations</h2><div id="unassigned" class="collection-list" aria-live="polite"></div></section>
+    <section><h2>Collector health</h2><div id="health" class="collection-list" aria-live="polite"></div></section>
+  </main>
+  <script src="/static/js/auth.js"></script>
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/nav.js"></script>
+  <script>renderNav('sessions');</script>
+  <script src="/static/js/sessions.js"></script>
+</body>
+</html>

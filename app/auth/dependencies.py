@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fastapi import HTTPException, Request
 
+from app.services.collector_identity import CollectorPrincipal
+
 # Role hierarchy: admin > viewer > api > rt
 _ROLE_HIERARCHY = {"admin": 3, "viewer": 2, "api": 1, "rt": 0}
 
@@ -74,3 +76,11 @@ def deny_device_credentials(request: Request) -> None:
             status_code=403,
             detail="Device credentials may not reverse redactions",
         )
+
+
+def require_collector(request: Request) -> CollectorPrincipal:
+    """Only the dedicated access-token middleware branch sets this identity."""
+    principal = getattr(request.state, "collector_principal", None)
+    if not isinstance(principal, CollectorPrincipal):
+        raise HTTPException(status_code=403, detail="Collector authority required")
+    return principal

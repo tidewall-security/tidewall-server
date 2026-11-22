@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app.auth.dependencies import require_role
+from app.services.device_service import DeviceService
 
 router = APIRouter(prefix="/v1/registration-tokens", tags=["registration-tokens"])
 
 
 class CreateRegistrationTokenRequest(BaseModel):
     name: str
+    purpose: Literal["guard_device", "collector_write"] = "guard_device"
     # Required: every device enrolled with this token inherits it as its scope.
     # Making it optional is what left the column unwritten by anything, so the
     # inheritance code at enrolment read NULL and every device fell back to the
@@ -34,6 +37,7 @@ class CreateRegistrationTokenRequest(BaseModel):
 
 def _to_dict(rt) -> dict:
     return {
+        **({"purpose": rt.purpose} if rt.purpose == "collector_write" else {}),
         "id": rt.id,
         "name": rt.name,
         "token_prefix": rt.token_prefix,
@@ -52,9 +56,7 @@ def _to_dict(rt) -> dict:
 async def create_registration_token(body: CreateRegistrationTokenRequest, request: Request) -> dict:
     session = request.app.state.session_factory()
     try:
-        from app.services.device_service import DeviceService
-
-        svc = DeviceService(session)
+        svc = DeviceService(session, actor_policy_id=request.state.policy_id)
         raw_token, record = svc.create_registration_token(
             name=body.name,
             policy_id=body.policy_id,
@@ -62,10 +64,13 @@ async def create_registration_token(body: CreateRegistrationTokenRequest, reques
             expires_at=body.expires_at,
             max_uses=body.max_uses,
             pre_authorized=body.pre_authorized,
+            purpose=body.purpose,
         )
         result = _to_dict(record)
         result["token"] = raw_token  # Returned ONCE, never stored
         return result
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from None
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
     finally:
@@ -76,10 +81,8 @@ async def create_registration_token(body: CreateRegistrationTokenRequest, reques
 async def list_registration_tokens(request: Request) -> list[dict]:
     session = request.app.state.session_factory()
     try:
-        from app.services.device_service import DeviceService
-
-        svc = DeviceService(session)
-        return [_to_dict(rt) for rt in svc.list_registration_tokens()]
+        svc = DeviceService(session, actor_policy_id=request.state.policy_id)
+        return [_to_dict(rt) for rt in svc.list_registration_tokens(role=request.state.role)]
     finally:
         session.close()
 
@@ -99,9 +102,11 @@ async def delete_registration_token(token_id: str, request: Request) -> None:
     """
     session = request.app.state.session_factory()
     try:
-        from app.services.device_service import DeviceService
-
-        DeviceService(session).revoke_registration_token(token_id, cascade=False)
+        DeviceService(session, actor_policy_id=request.state.policy_id).revoke_registration_token(
+            token_id, cascade=False
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from None
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e)) from None
     finally:
@@ -119,9 +124,11 @@ async def revoke_registration_token(token_id: str, body: RevokeRegistrationToken
     """
     session = request.app.state.session_factory()
     try:
-        from app.services.device_service import DeviceService
-
-        return DeviceService(session).revoke_registration_token(token_id, cascade=body.cascade)
+        return DeviceService(session, actor_policy_id=request.state.policy_id).revoke_registration_token(
+            token_id, cascade=body.cascade
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from None
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e)) from None
     finally:

@@ -7,8 +7,9 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Query, Session
 
 from app.auth.key_utils import generate_key, hash_key, key_prefix
 from app.db.models import (
@@ -93,11 +94,26 @@ _SITES = {
 }
 
 
+class CollectorScopeError(PermissionError):
+    """A policy-bound administrator requested another policy's collector."""
+
+
 class DeviceService:
     """Manages device registration tokens, device check-in, and access tokens."""
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, *, actor_policy_id: str | None = None) -> None:
         self._session = session
+        self._actor_policy_id = actor_policy_id
+
+    def _check_collector_scope(self, purpose: str, policy_id: str | None) -> None:
+        if purpose == "collector_write" and self._actor_policy_id is not None and self._actor_policy_id != policy_id:
+            raise CollectorScopeError("Collector policy does not match administrator scope")
+
+    def _visible_rows[T: (Device, RegistrationToken)](self, model: type[T], role: str | None) -> Query[T]:
+        query = self._session.query(model)
+        if self._actor_policy_id is None:
+            return query if role == "admin" else query.filter(model.purpose == "guard_device")
+        return query.filter(or_(model.purpose == "guard_device", model.policy_id == self._actor_policy_id))
 
     # ------------------------------------------------------------------
     # Registration token CRUD
@@ -111,6 +127,7 @@ class DeviceService:
         expires_at: datetime | None = None,
         max_uses: int | None = None,
         pre_authorized: bool = False,
+        purpose: str = "guard_device",
     ) -> tuple[str, RegistrationToken]:
         """Create a new registration token. Returns (raw_token, record).
 
@@ -121,6 +138,11 @@ class DeviceService:
         produces unscoped devices that fall back to the default policy — the
         binding exists in the schema but is never established.
         """
+        if purpose not in ("collector_write", "guard_device"):
+            raise ValueError("Unknown registration purpose")
+        self._check_collector_scope(purpose, policy_id)
+        if purpose == "collector_write" and pre_authorized:
+            raise ValueError("Collector enrollment requires code approval")
         if self._session.get(Policy, policy_id) is None:
             raise ValueError(f"Policy {policy_id} not found")
         if expires_at is None:
@@ -133,6 +155,7 @@ class DeviceService:
         raw = generate_key(prefix="rt")
         record = RegistrationToken(
             name=name,
+            purpose=purpose,
             token_hash=hash_key(raw),
             token_prefix=key_prefix(raw),
             created_by=created_by,
@@ -146,8 +169,8 @@ class DeviceService:
         logger.info("Created registration token '%s' (prefix=%s)", name, record.token_prefix)
         return raw, record
 
-    def list_registration_tokens(self) -> list[RegistrationToken]:
-        return self._session.query(RegistrationToken).order_by(RegistrationToken.created_at.desc()).all()
+    def list_registration_tokens(self, *, role: str | None = None) -> list[RegistrationToken]:
+        return self._visible_rows(RegistrationToken, role).order_by(RegistrationToken.created_at.desc()).all()
 
     def revoke_registration_token(self, token_id: str, *, cascade: bool) -> dict[str, Any]:
         """Revoke a key, optionally with every device enrolled through it.
@@ -167,10 +190,17 @@ class DeviceService:
         if rt is None:
             raise LookupError(f"Registration token {token_id} not found")
 
+        self._check_collector_scope(rt.purpose, rt.policy_id)
         rt.revoked_at = datetime.now(UTC)
         revoked = 0
         if cascade:
+            # The application's session disables autoflush. Reserve SQLite's
+            # writer before enumerating children, or a concurrent enrollment
+            # can commit after this enumeration and escape the cascade.
+            self._session.flush()
             devices = self._session.query(Device).filter_by(reg_token_id=rt.id).all()
+            for device in devices:
+                self._check_collector_scope(device.purpose, device.policy_id)
             for device in devices:
                 self._release_pending_slot(device)
                 self._entomb(device, reason="enrolment key revoked")
@@ -264,6 +294,26 @@ class DeviceService:
         if rt is None:
             raise ValueError("Invalid registration token")
 
+        if rt.purpose == "collector_write":
+            # Acquire SQLite's write reservation and revalidate the key before
+            # consuming a grant or issuing credentials. A concurrent cascade
+            # must observe this device or finish before this check.
+            valid = (
+                self._session.query(RegistrationToken)
+                .filter(
+                    RegistrationToken.id == rt.id,
+                    RegistrationToken.purpose == "collector_write",
+                    RegistrationToken.revoked_at.is_(None),
+                    RegistrationToken.expires_at > datetime.now(UTC),
+                    RegistrationToken.pre_authorized.is_(False),
+                    RegistrationToken.policy_id == rt.policy_id,
+                    RegistrationToken.policy_id.in_(self._session.query(Policy.id)),
+                )
+                .update({"uses": RegistrationToken.uses}, synchronize_session=False)
+            )
+            if not valid:
+                raise ValueError("Invalid collector registration token")
+
         tombstone = (
             self._session.query(DeviceTombstone).filter_by(installation_id=installation_id, consumed_at=None).first()
         )
@@ -271,6 +321,14 @@ class DeviceService:
             # A wrong secret answers exactly as no secret does. Any other
             # arrangement reports whether recovery has been authorised, which
             # tells the revoked party when to try.
+            if not self._valid_recovery_scope(tombstone):
+                return {"status": "InstallationTombstoned", "result": None}
+            if tombstone.purpose == "collector_write" and (
+                rt.purpose != "collector_write"
+                or rt.policy_id != tombstone.collector_policy_id
+                or as_utc(rt.created_at) <= as_utc(tombstone.created_at)
+            ):
+                return {"status": "InstallationTombstoned", "result": None}
             if (
                 recovery_secret is None
                 or tombstone.recovery_secret_hash is None
@@ -366,6 +424,7 @@ class DeviceService:
             reg_token_prefix=rt.token_prefix,
             # Scope is inherited from the token and is immutable thereafter.
             policy_id=rt.policy_id,
+            purpose=rt.purpose,
             # Pending unless the key says otherwise. A leaked key then buys an
             # attacker a device that does nothing, and an unexpected row in the
             # admin console.
@@ -455,8 +514,12 @@ class DeviceService:
             # told its credential is unknown and re-enrols.
             return {"status": "credential_unknown", "result": None}
 
-        if device.status == "pending":
+        if device.status == "pending" or (device.purpose == "collector_write" and device.collector_approved_at is None):
             return {"status": "device_pending", "result": None}
+        if device.purpose == "collector_write" and (
+            device.status != "active" or not device.policy_id or self._session.get(Policy, device.policy_id) is None
+        ):
+            return {"status": "device_revoked", "result": None}
 
         for field, value in (
             ("device_name", device_name),
@@ -491,7 +554,7 @@ class DeviceService:
                     "expires_in": _ACCESS_TOKEN_TTL_SECONDS,
                 },
                 "config": {
-                    "sites": self._get_site_config(),
+                    "sites": {} if device.purpose == "collector_write" else self._get_site_config(),
                 },
             },
         }
@@ -521,6 +584,7 @@ class DeviceService:
         device = self._session.get(Device, device_id)
         if device is None:
             raise LookupError("Device not found")
+        self._check_collector_scope(device.purpose, device.policy_id)
         if device.status != "pending":
             raise PermissionError("Device is not pending approval")
         if device.confirmation_code is None or not secrets.compare_digest(device.confirmation_code, confirmation_code):
@@ -529,6 +593,22 @@ class DeviceService:
         # Release BEFORE the status changes: _release_pending_slot only acts on
         # a device that is still pending, which is what stops a double release
         # from a path that runs twice.
+        if device.purpose == "collector_write":
+            # Conditional write serializes approval with revocation and other
+            # approvals even when their preceding reads saw a pending device.
+            approved = (
+                self._session.query(Device)
+                .filter(
+                    Device.id == device.id,
+                    Device.status == "pending",
+                    Device.confirmation_code == confirmation_code,
+                    Device.policy_id.in_(self._session.query(Policy.id)),
+                    ~self._session.query(DeviceTombstone).filter_by(device_id=device.id).exists(),
+                )
+                .update({"collector_approved_at": datetime.now(UTC)}, synchronize_session="fetch")
+            )
+            if not approved:
+                raise PermissionError("Collector is not awaiting approval")
         self._release_pending_slot(device)
         device.status = "active"
         # Single use. Left in place it is a standing credential for reactivating
@@ -557,11 +637,19 @@ class DeviceService:
     # Device CRUD
     # ------------------------------------------------------------------
 
-    def list_devices(self) -> list[Device]:
-        return self._session.query(Device).order_by(Device.created_at.desc()).all()
+    def list_devices(self, *, role: str | None = None) -> list[Device]:
+        return self._visible_rows(Device, role).order_by(Device.created_at.desc()).all()
 
     def get_device(self, device_id: str) -> Device | None:
         return self._session.get(Device, device_id)
+
+    def _valid_recovery_scope(self, tombstone: DeviceTombstone) -> bool:
+        device = self._session.get(Device, tombstone.device_id)
+        if device is not None and device.purpose != tombstone.purpose:
+            return False
+        if tombstone.purpose == "guard_device":
+            return tombstone.collector_policy_id is None
+        return bool(tombstone.collector_policy_id and self._session.get(Policy, tombstone.collector_policy_id))
 
     def authorise_recovery(self, device_id: str) -> str:
         """Grant one recovery for a tombstoned device. Returns the secret once.
@@ -574,6 +662,10 @@ class DeviceService:
         tombstone = self._session.get(DeviceTombstone, device_id)
         if tombstone is None:
             raise LookupError(f"No tombstone for device {device_id}")
+        if not self._valid_recovery_scope(tombstone):
+            raise CollectorScopeError("Recovery requires a valid stored device scope")
+        if tombstone.purpose == "collector_write":
+            self._check_collector_scope("collector_write", tombstone.collector_policy_id)
         if tombstone.consumed_at is not None:
             raise PermissionError("That recovery has already been used")
 
@@ -595,20 +687,24 @@ class DeviceService:
         the scheduler passes the configured one in; leaving the constant as the
         only source is how that setting came to be read by nothing at all.
         """
-        moment = now or datetime.now(UTC)
+        moment = as_utc(now).astimezone(UTC) if now is not None else datetime.now(UTC)
         cutoff = moment - (ttl if ttl is not None else PENDING_DEVICE_TTL)
-        stale = [
-            d for d in self._session.query(Device).filter_by(status="pending").all() if as_utc(d.created_at) < cutoff
-        ]
-        for device in stale:
+        expired_pending = self._session.query(Device).filter(Device.status == "pending", Device.created_at < cutoff)
+        reaped = 0
+        for device in expired_pending.all():
+            # Approval can commit after selection. Claim the removal with the
+            # current status and TTL before releasing a slot or credentials.
+            if not expired_pending.filter(Device.id == device.id).delete(synchronize_session="fetch"):
+                continue
             self._release_pending_slot(device)
+            # Also clear credentials in databases without FK enforcement.
             self._session.query(AccessToken).filter_by(device_id=device.id).delete()
             self._session.query(DeviceRefreshToken).filter_by(device_id=device.id).delete()
-            self._session.delete(device)
+            reaped += 1
         self._session.commit()
-        if stale:
-            logger.info("Reaped %d pending device(s) past their TTL", len(stale))
-        return len(stale)
+        if reaped:
+            logger.info("Reaped %d pending device(s) past their TTL", reaped)
+        return reaped
 
     def _release_pending_slot(self, device: Device) -> None:
         """Give a pending device's quota slot back.
@@ -637,13 +733,21 @@ class DeviceService:
 
         Idempotent -- re-revoking a device must not raise on the primary key.
         """
-        if self._session.get(DeviceTombstone, device.id) is not None:
+        existing = self._session.get(DeviceTombstone, device.id)
+        if existing is not None:
+            if device.purpose == "collector_write" and existing.purpose != device.purpose:
+                # A conflicting import never established a collector policy
+                # snapshot. Preserve its collector identity after deletion.
+                existing.purpose = device.purpose
+                existing.collector_policy_id = None
             return
         self._session.add(
             DeviceTombstone(
                 device_id=device.id,
                 installation_id=device.installation_id,
                 reason=reason,
+                purpose=device.purpose,
+                collector_policy_id=device.policy_id if device.purpose == "collector_write" else None,
             )
         )
 
@@ -651,6 +755,9 @@ class DeviceService:
         device = self._session.get(Device, device_id)
         if device is None:
             raise ValueError(f"Device {device_id} not found")
+        self._check_collector_scope(device.purpose, device.policy_id)
+        if device.purpose == "collector_write" and status != "revoked":
+            raise PermissionError("Only revocation is permitted for collector status updates")
         if status == "revoked":
             # Before the status changes, for the same reason as approval.
             self._release_pending_slot(device)
@@ -670,6 +777,7 @@ class DeviceService:
         device = self._session.get(Device, device_id)
         if device is None:
             raise ValueError(f"Device {device_id} not found")
+        self._check_collector_scope(device.purpose, device.policy_id)
         self._release_pending_slot(device)
         self._entomb(device, reason="deleted by administrator")
         # Cascade delete credentials first (in case the DB doesn't enforce it)

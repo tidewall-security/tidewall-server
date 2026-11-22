@@ -6,8 +6,8 @@ need different treatment:
 
 **Additional-copy writers** put the *same* value in *more physical locations*.
 Indexes are that class, and it is derivable: for each column, the table B-tree
-plus every index covering it. `copy_map` computes it from the live schema, so
-it is complete over indexes by construction rather than by enumeration.
+plus every index covering it. `copy_map` inventories the live index slots
+and resolves the receipt index predicate against the row being attributed.
 
 **Different-target writers** put a value somewhere the statement never names.
 A connection-level statement trace cannot attribute those, and their bodies
@@ -28,52 +28,68 @@ from __future__ import annotations
 import collections
 import sqlite3
 from dataclasses import dataclass
+from itertools import groupby
 
-#: Every foreign key at head, as (table, column, parent, parent_column,
-#: on_update, on_delete).
-#:
-#: The parent COLUMN is part of the identity: an `ON UPDATE CASCADE` copies a
-#: specific parent value, and updating `policies.name` is a different event
-#: from updating `policies.id`. Without it, retargeting an FK from one unique
-#: parent column to another -- same child column, same table, same actions --
-#: is invisible.
-#:
-#: All ten are pinned, not only the six that write. "Exactly the six" was
-#: ambiguous about whether RESTRICT and NO ACTION were inside or outside the
-#: set; they are inside the pin and outside the cascade map, because they
-#: cannot copy a value anywhere.
-REFERENTIAL_ACTIONS: frozenset[tuple[str, str, str, str, str, str]] = frozenset(
+# Keep child and parent columns paired and ordered within each constraint.
+# Splitting a composite FK changes which rows may refer to one another even
+# though the same column-to-column edges still appear in foreign_key_list.
+ForeignKey = tuple[str, tuple[str, ...], str, tuple[str, ...], str, str]
+
+REFERENTIAL_ACTIONS: frozenset[ForeignKey] = frozenset(
     {
-        ("access_rules", "rule_set_id", "rule_sets", "id", "NO ACTION", "CASCADE"),
+        ("access_rules", ("rule_set_id",), "rule_sets", ("id",), "NO ACTION", "CASCADE"),
         # A device's refresh credential dies with the device. Leaving it would
         # keep a credential addressed to a device that no longer exists.
-        ("device_refresh_tokens", "device_id", "devices", "id", "NO ACTION", "CASCADE"),
+        ("device_refresh_tokens", ("device_id",), "devices", ("id",), "NO ACTION", "CASCADE"),
         # A vault dies with the policy that owns it. The vault holds the
         # placeholder-to-original mapping, and once its policy is gone no
         # credential can resolve that policy -- so the row would be unreachable
         # plaintext. CASCADE rather than RESTRICT so retention never becomes a
         # reason a policy cannot be deleted.
-        ("vaults", "policy_id", "policies", "id", "NO ACTION", "CASCADE"),
-        ("access_tokens", "device_id", "devices", "id", "NO ACTION", "CASCADE"),
-        ("interaction_contents", "interaction_id", "interactions", "id", "NO ACTION", "CASCADE"),
-        ("rule_sets", "policy_id", "policies", "id", "NO ACTION", "CASCADE"),
+        ("vaults", ("policy_id",), "policies", ("id",), "NO ACTION", "CASCADE"),
+        ("access_tokens", ("device_id",), "devices", ("id",), "NO ACTION", "CASCADE"),
+        ("interaction_contents", ("interaction_id",), "interactions", ("id",), "NO ACTION", "CASCADE"),
+        ("rule_sets", ("policy_id",), "policies", ("id",), "NO ACTION", "CASCADE"),
         # RESTRICT, matching devices and registration_tokens. It was SET NULL,
         # which made api_keys the only one of the three bound to a policy whose
         # guarantee was a service check rather than a constraint -- and an
         # unbound admin reads and deletes globally, so silently unbinding one
         # promotes a policy-scoped administrator to an organisation-wide one.
-        ("api_keys", "policy_id", "policies", "id", "NO ACTION", "RESTRICT"),
-        ("devices", "reg_token_id", "registration_tokens", "id", "NO ACTION", "SET NULL"),
-        ("devices", "policy_id", "policies", "id", "NO ACTION", "RESTRICT"),
-        ("registration_tokens", "policy_id", "policies", "id", "NO ACTION", "RESTRICT"),
-        ("content_export_notes", "attempt_id", "content_export_attempts", "attempt_id", "NO ACTION", "NO ACTION"),
+        ("api_keys", ("policy_id",), "policies", ("id",), "NO ACTION", "RESTRICT"),
+        ("devices", ("reg_token_id",), "registration_tokens", ("id",), "NO ACTION", "SET NULL"),
+        ("devices", ("policy_id",), "policies", ("id",), "NO ACTION", "RESTRICT"),
+        ("registration_tokens", ("policy_id",), "policies", ("id",), "NO ACTION", "RESTRICT"),
+        ("content_export_notes", ("attempt_id",), "content_export_attempts", ("attempt_id",), "NO ACTION", "NO ACTION"),
         (
             "content_export_reconciliations",
-            "attempt_id",
+            ("attempt_id",),
             "content_export_attempts",
-            "attempt_id",
+            ("attempt_id",),
             "NO ACTION",
             "NO ACTION",
+        ),
+        ("agent_sessions", ("device_id",), "devices", ("id",), "NO ACTION", "CASCADE"),
+        ("agent_sessions", ("policy_id",), "policies", ("id",), "NO ACTION", "RESTRICT"),
+        ("collector_progress", ("device_id",), "devices", ("id",), "NO ACTION", "CASCADE"),
+        ("collector_progress", ("policy_id",), "policies", ("id",), "NO ACTION", "RESTRICT"),
+        ("agent_observations", ("device_id",), "devices", ("id",), "NO ACTION", "CASCADE"),
+        ("agent_observations", ("policy_id",), "policies", ("id",), "NO ACTION", "RESTRICT"),
+        (
+            "agent_observations",
+            ("session_id", "device_id", "policy_id", "agent"),
+            "agent_sessions",
+            ("session_id", "device_id", "policy_id", "agent"),
+            "NO ACTION",
+            "NO ACTION",
+        ),
+        ("collector_outcomes", ("device_id",), "devices", ("id",), "NO ACTION", "CASCADE"),
+        (
+            "collector_outcomes",
+            ("event_id", "device_id"),
+            "agent_observations",
+            ("event_id", "device_id"),
+            "NO ACTION",
+            "CASCADE",
         ),
     }
 )
@@ -81,7 +97,7 @@ REFERENTIAL_ACTIONS: frozenset[tuple[str, str, str, str, str, str]] = frozenset(
 #: The actions that write to a child. ON UPDATE matters as much as ON DELETE:
 #: an `ON UPDATE CASCADE` copies the parent's new value into the child, which
 #: is a different-target write the statement never names. v1 read only
-#: `on_delete` (fk[6]) and would have missed every one of them. All ten are
+#: `on_delete` (fk[6]) and would have missed every one of them. All are
 #: `NO ACTION` on update today, which is exactly why the omission was invisible.
 WRITING_ACTIONS = frozenset({"CASCADE", "SET NULL"})
 
@@ -93,24 +109,21 @@ class InvariantViolation:
 
 
 def _tables(conn: sqlite3.Connection) -> list[str]:
-    return [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+    return [r[0] for r in conn.execute("SELECT name FROM main.sqlite_schema WHERE type='table'")]
 
 
-def referential_actions(conn: sqlite3.Connection) -> collections.Counter[tuple[str, str, str, str, str, str]]:
-    """Every foreign key, as (table, column, parent, on_update, on_delete).
-
-    foreign_key_list columns: (id, seq, table, from, to, on_update, on_delete,
-    match).
-    """
-    out: collections.Counter[tuple[str, str, str, str, str, str]] = collections.Counter()
+def referential_actions(conn: sqlite3.Connection) -> collections.Counter[ForeignKey]:
+    """Pin each complete foreign key, including multiplicity and column order."""
+    out: collections.Counter[ForeignKey] = collections.Counter()
     for table in _tables(conn):
-        for fk in conn.execute(f"PRAGMA foreign_key_list('{table}')"):
-            # (id, seq, table, from, to, on_update, on_delete, match)
-            # A Counter, not a set: two distinct constraints with the same
-            # child column, parent column and actions collapse to one tuple,
-            # so an eleventh database-side writer could arrive while the
-            # count assertion stayed green.
-            out[(table, fk[3], fk[2], fk[4], fk[5], fk[6])] += 1
+        # foreign_key_list is (id, seq, parent, from, to, on_update, on_delete, match).
+        edges = sorted(conn.execute(f"PRAGMA main.foreign_key_list('{table}')"), key=lambda fk: (fk[0], fk[1]))
+        for _, group in groupby(edges, key=lambda fk: fk[0]):
+            rows = list(group)
+            first = rows[0]
+            columns = tuple(row[3] for row in rows)
+            parent_columns = tuple(row[4] for row in rows)
+            out[(table, columns, first[2], parent_columns, first[5], first[6])] += 1
     return out
 
 
@@ -123,25 +136,77 @@ def cascade_map(conn: sqlite3.Connection) -> dict[tuple[str, str], set[tuple[str
     and reading only `on_delete` would silently drop every ON UPDATE CASCADE.
     """
     out: dict[tuple[str, str], set[tuple[str, str, str]]] = {}
-    for table, column, parent, parent_column, on_update, on_delete in referential_actions(conn):
+    for table, columns, parent, parent_columns, on_update, on_delete in referential_actions(conn):
         for event, action in (("UPDATE", on_update), ("DELETE", on_delete)):
             if action in WRITING_ACTIONS:
                 # Keyed by (parent table, parent COLUMN): which value changing
                 # causes the write is the fact attribution needs.
-                out.setdefault((parent, parent_column), set()).add((table, column, event, action))
+                for column, parent_column in zip(columns, parent_columns, strict=True):
+                    out.setdefault((parent, parent_column), set()).add((table, column, event, action))
     return out
 
 
-def copy_map(conn: sqlite3.Connection) -> dict[tuple[str, str], collections.Counter[str]]:
-    """(table, column) -> every physical location holding that value.
+RECEIPT_INDEX = "uq_collector_successful_ordinal"
+_RECEIPT_INDEX_SQL = (
+    f"CREATE UNIQUE INDEX {RECEIPT_INDEX} ON collector_outcomes (device_id, ordinal) WHERE event_id IS NOT NULL"
+)
 
-    The table B-tree, plus every index whose columns include it. This is what
-    makes an expected byte-occurrence count an oracle instead of a surprise:
-    `policies.name` is unique, so its value exists twice in a closed database.
-    """
+
+class Unattributed(Exception):
+    """A byte occurrence no declared path explains."""
+
+
+def _partial_index_violations(conn: sqlite3.Connection) -> list[InvariantViolation]:
+    violations = []
+    tables = _tables(conn)
+    if "collector_outcomes" in tables:
+        ddl = conn.execute(
+            "SELECT sql FROM main.sqlite_schema WHERE type='index' AND name=?", (RECEIPT_INDEX,)
+        ).fetchone()
+        if ddl is None or ddl[0] != _RECEIPT_INDEX_SQL:
+            violations.append(InvariantViolation("receipt-index", RECEIPT_INDEX))
+
+    for table in tables:
+        for index in conn.execute(f"PRAGMA main.index_list('{table}')"):
+            if index[4] and (table, index[1]) != ("collector_outcomes", RECEIPT_INDEX):
+                violations.append(InvariantViolation("partial-index", index[1]))
+    return violations
+
+
+@dataclass
+class CopyMap:
+    conn: sqlite3.Connection
+    slots: dict[tuple[str, str], collections.Counter[str]]
+
+    def locations(self, path: tuple[str, str], *, rowid: int | None = None) -> collections.Counter[str]:
+        """Resolve all physical copies of a cell, including the conditional receipt index."""
+        if path not in self.slots:
+            raise Unattributed(f"no copy map entry for {path[0]}.{path[1]}")
+        slots = self.slots[path]
+        if path[0] != "collector_outcomes" or RECEIPT_INDEX not in slots:
+            return slots
+        if rowid is None:
+            raise Unattributed(f"{path[0]}.{path[1]} requires a rowid to resolve its partial index")
+        row = self.conn.execute(
+            "SELECT event_id IS NOT NULL FROM main.collector_outcomes WHERE rowid = ?", (rowid,)
+        ).fetchone()
+        if row is None:
+            raise Unattributed(f"no live collector_outcomes row for rowid {rowid}")
+        if row[0]:
+            return slots
+        locations = slots.copy()
+        del locations[RECEIPT_INDEX]
+        return locations
+
+
+def copy_map(conn: sqlite3.Connection) -> CopyMap:
+    """Inventory all index slots; resolve conditional membership for each live cell."""
+    violations = _partial_index_violations(conn)
+    if violations:
+        raise Unattributed(f"cannot attribute copies on a schema with unsupported indexes: {violations}")
     out: dict[tuple[str, str], collections.Counter[str]] = {}
     for table in _tables(conn):
-        info = list(conn.execute(f"PRAGMA table_info('{table}')"))
+        info = list(conn.execute(f"PRAGMA main.table_info('{table}')"))
         for column in (r[1] for r in info):
             out[(table, column)] = collections.Counter({table: 1})
 
@@ -165,19 +230,19 @@ def copy_map(conn: sqlite3.Connection) -> dict[tuple[str, str], collections.Coun
         # `INTEGER` and `PRIMARY KEY DESC` evaded it, so a non-alias column was
         # counted into indexes that never carry it. Asking SQLite what it built
         # needs no lexical guessing at all.
-        has_pk_autoindex = any(index[3] == "pk" for index in conn.execute(f"PRAGMA index_list('{table}')"))
+        has_pk_autoindex = any(index[3] == "pk" for index in conn.execute(f"PRAGMA main.index_list('{table}')"))
         rowid_alias = (
             key_columns[0][1]
             if len(key_columns) == 1 and (key_columns[0][2] or "").upper() == "INTEGER" and not has_pk_autoindex
             else None
         )
         if rowid_alias is not None:
-            for index in conn.execute(f"PRAGMA index_list('{table}')"):
+            for index in conn.execute(f"PRAGMA main.index_list('{table}')"):
                 out[(table, rowid_alias)][index[1]] += 1
 
-        for index in conn.execute(f"PRAGMA index_list('{table}')"):
+        for index in conn.execute(f"PRAGMA main.index_list('{table}')"):
             name = index[1]
-            for entry in conn.execute(f"PRAGMA index_xinfo('{name}')"):
+            for entry in conn.execute(f"PRAGMA main.index_xinfo('{name}')"):
                 column = entry[2]
                 # Counter, not a set: `CREATE INDEX i ON t(c, c)` gives c two
                 # key slots in one index, so the value exists twice there. A
@@ -190,7 +255,7 @@ def copy_map(conn: sqlite3.Connection) -> dict[tuple[str, str], collections.Coun
                 # permitted schema has two.
                 if entry[5] == 1 and column is not None and (table, column) in out:
                     out[(table, column)][name] += 1
-    return out
+    return CopyMap(conn, out)
 
 
 def invariant(conn: sqlite3.Connection) -> list[InvariantViolation]:
@@ -201,7 +266,7 @@ def invariant(conn: sqlite3.Connection) -> list[InvariantViolation]:
     # sqlite_master, but it can be attached to a main-schema table and write
     # another main-schema table -- a different-target writer while the
     # invariant reported nothing.
-    for source, prefix in (("sqlite_master", ""), ("sqlite_temp_master", "temp-")):
+    for source, prefix in (("main.sqlite_schema", ""), ("temp.sqlite_schema", "temp-")):
         for kind in ("trigger", "view"):
             for (name,) in conn.execute(f"SELECT name FROM {source} WHERE type=?", (kind,)):
                 violations.append(InvariantViolation(f"{prefix}{kind}", name))
@@ -218,7 +283,7 @@ def invariant(conn: sqlite3.Connection) -> list[InvariantViolation]:
     for table in _tables(conn):
         # table_xinfo, not table_info: only the former can see generated columns
         # at all, and `hidden` is 2 for VIRTUAL and 3 for STORED.
-        for column in conn.execute(f"PRAGMA table_xinfo('{table}')"):
+        for column in conn.execute(f"PRAGMA main.table_xinfo('{table}')"):
             if column[6] in (2, 3):
                 violations.append(InvariantViolation("generated-column", f"{table}.{column[1]}"))
 
@@ -234,22 +299,17 @@ def invariant(conn: sqlite3.Connection) -> list[InvariantViolation]:
         elif row[2] not in known_safe:
             violations.append(InvariantViolation("unknown-object-type", f"{row[2]}:{row[1]}"))
 
-    # index_list columns: (seq, name, unique, origin, partial). The structural
-    # `partial` flag, not a `" where "` substring: `ON t(c)\nWHERE ...` is legal
-    # and evaded the substring rule entirely, while an index NAMED
-    # "plain where marker" was wrongly flagged by it.
-    for table in _tables(conn):
-        for index in conn.execute(f"PRAGMA index_list('{table}')"):
-            if index[4]:
-                violations.append(InvariantViolation("partial-index", index[1]))
+    # The structural partial flag catches every conditional index. Only the
+    # exact DDL whose predicate CopyMap.locations resolves is supported.
+    violations.extend(_partial_index_violations(conn))
 
-    for name, _sql in conn.execute("SELECT name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"):
+    for name, _sql in conn.execute("SELECT name, sql FROM main.sqlite_schema WHERE type='index' AND sql IS NOT NULL"):
         # index_xinfo columns: (seqno, cid, name, desc, coll, key). Only KEY
         # columns describe the index's own content -- every index also carries
         # an implicit rowid entry with cid=-1 and a NULL name, so checking for
         # a NULL name flags all 41 of them. An expression is cid=-2 on a key
         # column.
-        if any(e[5] == 1 and e[1] == -2 for e in conn.execute(f"PRAGMA index_xinfo('{name}')")):
+        if any(e[5] == 1 and e[1] == -2 for e in conn.execute(f"PRAGMA main.index_xinfo('{name}')")):
             violations.append(InvariantViolation("expression-index", name))
 
     # table_list columns: (schema, name, type, ncol, wr, strict). `wr` is the

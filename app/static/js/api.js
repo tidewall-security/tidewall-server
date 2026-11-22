@@ -55,7 +55,8 @@ var API = (function () {
       return { ok: false, status: 0, body: null, aborted: e && e.name === 'AbortError' };
     }
 
-    if (resp.status === 401) {
+    if (resp.status === 401 && !(options && options.signal && options.signal.aborted) &&
+        (!window.TidewallAuth || window.TidewallAuth.getKey() === key)) {
       // Same handling as request(): clear and re-prompt. clearKey() notifies
       // credential-change listeners, which is how a disclosure fetched under
       // the old key gets discarded.
@@ -97,6 +98,17 @@ var API = (function () {
         guard_input: { messages: msgs },
         event_type: eventType || 'input'
       }, meta || {}));
+    },
+    getSessionPage: function (section, sessionId, cursor, signal) {
+      var paths = {
+        sessions: '/v1/agent-sessions',
+        unassigned: '/v1/agent-observations?unassigned=true',
+        health: '/v1/collector-health',
+        observations: '/v1/agent-sessions/' + encodeURIComponent(sessionId) + '/observations'
+      };
+      var path = paths[section];
+      if (cursor) path += (path.includes('?') ? '&' : '?') + 'cursor=' + encodeURIComponent(cursor);
+      return statusRequest('GET', path, { signal: signal });
     },
     getLogs: function (params) {
       var qs = new URLSearchParams(params || {}).toString();

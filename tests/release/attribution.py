@@ -25,7 +25,8 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 
-from tests.release.schema import cascade_map, copy_map
+from tests.release.schema import RECEIPT_INDEX, cascade_map, copy_map
+from tests.release.schema import Unattributed as Unattributed
 from tests.release.store import Cell, Delta
 
 
@@ -44,11 +45,7 @@ class Attribution:
         return f"{table}.{column}{where} ({self.basis})"
 
 
-class Unattributed(Exception):
-    """A byte occurrence no declared path explains."""
-
-
-def expected_locations(conn: sqlite3.Connection, path: tuple[str, str]) -> dict[str, int]:
+def expected_locations(conn: sqlite3.Connection, path: tuple[str, str], *, rowid: int | None = None) -> dict[str, int]:
     """Every physical location holding `path`'s value, with its copy count.
 
     This is what makes an expected byte count an oracle. A unique column's
@@ -56,10 +53,7 @@ def expected_locations(conn: sqlite3.Connection, path: tuple[str, str]) -> dict[
     once in the index -- and a check expecting one occurrence fails on a
     correct system.
     """
-    copies = copy_map(conn)
-    if path not in copies:
-        raise Unattributed(f"no copy map entry for {path[0]}.{path[1]}")
-    return dict(copies[path])
+    return dict(copy_map(conn).locations(path, rowid=rowid))
 
 
 def attribute(conn: sqlite3.Connection, delta: Delta) -> list[Attribution]:
@@ -72,12 +66,13 @@ def attribute(conn: sqlite3.Connection, delta: Delta) -> list[Attribution]:
     cascades = cascade_map(conn)
     out: list[Attribution] = []
 
-    for cell in sorted(delta.produced):
+    produced = delta.produced
+    for cell in sorted(produced):
         table, rowid, column = cell
         path = (table, column)
         out.append(Attribution(path=path, location=table, basis="observed", rowid=rowid))
 
-        for location, count in sorted(copies.get(path, {}).items()):
+        for location, count in sorted(copies.locations(path, rowid=rowid).items()):
             if location == table:
                 continue  # already recorded as the observed table occurrence
             for _ in range(count):
@@ -85,6 +80,15 @@ def attribute(conn: sqlite3.Connection, delta: Delta) -> list[Attribution]:
 
         for child_table, child_column, _event, _action in sorted(cascades.get(path, set())):
             out.append(Attribution(path=(child_table, child_column), location=child_table, basis="cascade"))
+
+    # Entering the partial index also writes copies of key columns whose
+    # values stayed put. Changed key columns were attributed above.
+    for (table, rowid, column), (before, after) in delta.changed.items():
+        if (table, column) == ("collector_outcomes", "event_id") and before is None and after is not None:
+            for (key_table, key), slots in copies.slots.items():
+                if key_table == table and (table, rowid, key) not in produced:
+                    for _ in range(slots[RECEIPT_INDEX]):
+                        out.append(Attribution(path=(table, key), location=RECEIPT_INDEX, basis="copy", rowid=rowid))
 
     return out
 

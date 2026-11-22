@@ -208,6 +208,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         from app.services.scheduler import (
             Scheduler,
+            collection_retention_job,
             export_abandon_job,
             pending_device_job,
             retention_job,
@@ -222,6 +223,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         scheduler = Scheduler()
         scheduler.start(
             [
+                collection_retention_job(SessionLocal, scheduler=scheduler),
                 retention_job(SessionLocal, scheduler=scheduler),
                 # Deletes vaults past their expiry. Unlike the two beside it,
                 # this one is not merely housekeeping: reversible redaction is
@@ -468,6 +470,8 @@ def create_app() -> FastAPI:
 
     from app.routes import (
         activity,
+        agent_events,
+        collector_ingest,
         content,
         content_export,
         content_export_admin,
@@ -483,6 +487,8 @@ def create_app() -> FastAPI:
         unredact,
     )
 
+    app.include_router(agent_events.router)
+    app.include_router(collector_ingest.router)
     app.include_router(guard.router)
     app.include_router(unredact.router)
     app.include_router(logs.router)
