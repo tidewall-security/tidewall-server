@@ -5,6 +5,7 @@ function renderNav(activeId) {
   var NAV_ITEMS = [
     { id: 'visibility', label: 'Visibility', href: '/ui/visibility' },
     { id: 'findings',   label: 'Findings',   href: '/ui/findings' },
+    { id: 'sessions',   label: 'Sessions',    href: '/ui/sessions' },
     { id: 'policies',   label: 'Policies',    href: '/ui/policies' },
     { id: 'sandbox',    label: 'Sandbox',     href: '/ui/sandbox' },
   ];

@@ -27,7 +27,7 @@ Powered by HuggingFace Transformers, Microsoft Presidio, and detect-secrets.
 flowchart TB
     subgraph Client["Client Layer"]
         SDK["SDK / Browser Extension"]
-        Dashboard["Web Dashboard<br/><i>Visibility · Findings · Policies · Sandbox</i>"]
+        Dashboard["Web Dashboard<br/><i>Visibility · Findings · Sessions · Policies · Sandbox</i>"]
     end
 
     subgraph API["FastAPI Application"]
@@ -208,6 +208,45 @@ repoint `VAULT_ENCRYPTION_CURRENT` at it, and keep the previous key listed for
 at least the vault TTL. Nothing is re-encrypted; old rows simply expire.
 
 ---
+
+## Agent session investigations
+
+The collector fixture workflow imports explicitly selected synthetic Claude Code
+transcript and hook files. A policy administrator creates a registration token
+with purpose `collector_write`, a policy binding and `pre_authorized=false`.
+Use the collector CLI's `enrol` command with the pinned server origin, a fresh
+state directory and the registration secret on a protected file descriptor.
+Approve the resulting device with its confirmation code. Run `fixture` on
+the two fixture files, then `ship` to deliver observations and a heartbeat.
+
+Open **Sessions** at `/ui/sessions` with a policy-bound viewer or admin key. A
+deployment administrator can investigate all policies. The page shows the
+reported source channel, time and gaps alongside server receipt time. Rows
+without a native session identifier appear under **Unassigned observations**.
+The agent build is unknown for these fixtures. **Not assessed** describes every
+observation, including rows where the source reported no gaps. Collector health
+shows the last retained heartbeat and reported cumulative loss counts.
+
+Authenticated metadata reads return `items` and `next_cursor`:
+
+| GET endpoint | Records |
+| --- | --- |
+| `/v1/agent-sessions` | Sessions with retained observations and their counts |
+| `/v1/agent-sessions/{session_id}/observations` | Observations in that authorized session |
+| `/v1/agent-observations?unassigned=true` | Observations without a session |
+| `/v1/collector-health` | Enrollment progress with retained heartbeat detail and loss totals |
+
+Pass `limit` (default 50, range 1–100) and the returned `cursor` on the same
+query and policy scope. Cursors expire on server restart. Event, receipt and
+heartbeat details expire 30 days after first server receipt. Reads enforce this
+cutoff and a background purge reclaims the rows. The enrollment retains replay
+progress and cumulative loss totals. Revocation freezes new writes. Device
+deletion and successful same-installation recovery erase that device's server
+collection history. The replacement needs approval and starts empty. An
+offline endpoint's erasure remains unknown until its local offboard is observed.
+
+This workflow is limited to fixture metadata. Live agent operation, prompt
+assessment and native enforcement have separate qualification requirements.
 
 ## Authentication
 

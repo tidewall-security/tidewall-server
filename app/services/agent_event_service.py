@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
-from sqlalchemy import select, text, update
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -69,6 +69,17 @@ def _authorized_write(
     raise HTTPException(status_code=503, detail="Collector storage unavailable", headers={"Retry-After": "1"})
 
 
+def _retire_session(session: Session, session_id: str, received: datetime) -> bool:
+    """Forget a fully expired correlation while the writer holds BEGIN IMMEDIATE."""
+    events = AgentObservation.session_id == session_id
+    live = select(AgentObservation.event_id).where(events, AgentObservation.expires_at > received).exists()
+    if session.scalar(select(live)):
+        return False
+    session.execute(delete(AgentObservation).where(events))
+    session.execute(delete(AgentSession).where(AgentSession.session_id == session_id))
+    return True
+
+
 def _session_id(session: Session, progress: CollectorProgress, obs: Observation, received: datetime) -> str | None:
     if obs.native_session_token is None:
         return None
@@ -79,6 +90,9 @@ def _session_id(session: Session, progress: CollectorProgress, obs: Observation,
         native_session_token=obs.native_session_token,
     )
     stored = session.scalar(select(AgentSession).filter_by(**scope))
+    if stored is not None and as_utc(stored.received_at) + DETAIL_LIFETIME <= received:
+        if _retire_session(session, stored.session_id, received):
+            stored = None
     if stored is None:
         stored = AgentSession(**scope, received_at=received)
         session.add(stored)
@@ -107,8 +121,11 @@ def _apply_source(
     if event is not None and as_utc(event.expires_at) <= received:
         # The deduplication key becomes reusable at the retention boundary,
         # including when the periodic deletion has not run yet.
+        old_session_id = event.session_id
         session.delete(event)
         session.flush()
+        if old_session_id is not None:
+            _retire_session(session, old_session_id, received)
         event = None
     if event is None:
         event = AgentObservation(

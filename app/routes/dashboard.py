@@ -21,7 +21,7 @@ async def dashboard_redirect():
 
 @router.get("/ui/{page}")  # public shell — see /dashboard above
 async def serve_page(page: str):
-    allowed = {"visibility", "findings", "policies", "sandbox"}
+    allowed = {"visibility", "findings", "sessions", "policies", "sandbox"}
     if page not in allowed:
         page = "findings"
     path = os.path.join(PAGES_DIR, f"{page}.html")
