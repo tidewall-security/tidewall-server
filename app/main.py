@@ -24,7 +24,7 @@ import logging
 import os
 import pathlib
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -80,6 +80,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan: startup and shutdown logic."""
     settings = Settings.from_env()
 
+    from app.services.prompt_classifier_client import ClassifierSettings, PromptClassifierClient
+
+    classifier_settings = ClassifierSettings.from_settings(settings)
     logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
 
     # Validate authentication configuration BEFORE touching the database.
@@ -306,10 +309,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # shutdown the loop can close with one still in flight.
     app.state.export_settlements = set()
 
-    logging.info("Tidewall ready")
-
     try:
-        yield
+        async with AsyncExitStack() as resources:
+            classifier = None
+            if classifier_settings is not None:
+                classifier = PromptClassifierClient(classifier_settings)
+                resources.push_async_callback(classifier.aclose)
+            app.state.prompt_classifier_client = classifier
+            logging.info("Tidewall ready")
+            yield
     finally:
         # In a finally: an exception thrown into the lifespan context would
         # otherwise skip both, leaving the scheduler running against a disposed

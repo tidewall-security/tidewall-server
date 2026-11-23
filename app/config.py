@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 # ---------------------------------------------------------------------------
 # Settings (environment variables)
@@ -36,6 +36,14 @@ class Settings(BaseModel):
     # Tidewall never generates this, because a generated value would have to be
     # emitted to logs or stdout to reach the operator, where it would persist.
     BOOTSTRAP_KEY: str | None = None
+    # Operator-only inference endpoint. These fields have no public configuration projection.
+    NATIVE_CLASSIFIER_ORIGIN: str | None = Field(default=None, repr=False, exclude=True)
+    NATIVE_CLASSIFIER_TENANT_ID: str | None = Field(default=None, repr=False, exclude=True)
+    NATIVE_CLASSIFIER_KEY_FILE: str | None = Field(default=None, repr=False, exclude=True)
+    NATIVE_CLASSIFIER_CA_FILE: str | None = Field(default=None, repr=False, exclude=True)
+    NATIVE_CLASSIFIER_ALLOW_LOOPBACK_HTTP: bool = Field(default=False, repr=False, exclude=True)
+    NATIVE_CLASSIFIER_TIMEOUT_MS: int = Field(default=1200, ge=1, le=1500, repr=False, exclude=True)
+
     # The deployment's declared NAT64 posture. Unset is not a default: content
     # export refuses rather than assume this network has no translation. See
     # app/services/nat64.py and the finding it names.
@@ -83,7 +91,16 @@ class Settings(BaseModel):
             env_val = os.environ.get(field_name)
             if env_val is not None:
                 overrides[field_name] = env_val
-        return cls(**overrides)
+        try:
+            return cls(**overrides)
+        except ValidationError as exc:
+            if any(
+                str(error["loc"][0]).startswith("NATIVE_CLASSIFIER_")
+                for error in exc.errors(include_input=False)
+                if error["loc"]
+            ):
+                raise ValueError("Invalid native classifier configuration") from None
+            raise
 
     # Parsed eagerly on construction, not lazily on access. A property would
     # defer the failure to the first export, which is the opposite of the
