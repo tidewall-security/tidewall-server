@@ -438,3 +438,33 @@ def test_disabled_guard_components_and_guard_model_do_not_change_native_revision
         "topic": {"enabled": False, "action": "redact"},
     }
     assert freeze(db).revision == before
+
+
+def test_activation_refuses_regex_that_fails_only_with_matching_options(db, monkeypatch):
+    from app.services import prompt_list_service
+    from app.services.safe_regex import UnsafePatternError
+
+    lists(db)
+    svc = PromptListService(db)
+    svc.create("malicious", "^sample$", "regex")
+    compiler = prompt_list_service.compile_pattern
+
+    def restricted_compiler(pattern, *, case_insensitive=False):
+        if case_insensitive:
+            raise UnsafePatternError("synthetic case-insensitive program exceeds budget")
+        return compiler(pattern)
+
+    monkeypatch.setattr(prompt_list_service, "compile_pattern", restricted_compiler)
+    with pytest.raises(PromptListConfigError):
+        svc.check_match("SAMPLE", "malicious")
+    with pytest.raises(native().NativePolicyUnsupported):
+        freeze(db)
+
+
+@pytest.mark.parametrize(("column", "value"), [("name", b"rule"), ("id", b"id"), ("sort_order", 1.5)])
+def test_malformed_stored_rule_scalars_refused_at_activation(db, column, value):
+    rule(db)
+    db.flush()
+    db.execute(AccessRule.__table__.update().values({column: value}))
+    with pytest.raises(native().NativePolicyUnsupported):
+        freeze(db)

@@ -27,6 +27,20 @@ class FrozenPromptEntry:
     match_type: str
     pattern: str = field(repr=False)
 
+    def compile_regex(self):
+        return compile_pattern(self.pattern, case_insensitive=True)
+
+
+def preflight_prompt_entries(entries: tuple[FrozenPromptEntry, ...], list_type: str) -> None:
+    """Check frozen regex entries with the exact compiler used for matching."""
+    for entry in entries:
+        if entry.match_type == "regex":
+            try:
+                entry.compile_regex()
+            except UnsafePatternError as exc:
+                logger.error("Invalid regex in stored %s prompt list entry", list_type)
+                raise PromptListConfigError("invalid regex in prompt list") from exc
+
 
 def match_prompt_entries(text: str, entries: tuple[FrozenPromptEntry, ...]) -> bool:
     """Match a bounded list with the same interpreter used by the guard."""
@@ -50,7 +64,7 @@ def match_prompt_entries(text: str, entries: tuple[FrozenPromptEntry, ...]) -> b
                 # mutable independently of the engine cache, so a cache
                 # without invalidation would keep matching a pattern the
                 # administrator has already changed.
-                if compile_pattern(entry.pattern, case_insensitive=True).search(text):
+                if entry.compile_regex().search(text):
                     return True
             except UnsafePatternError as exc:
                 # Skipping meant a malicious-list entry simply never
@@ -142,13 +156,7 @@ class PromptListService:
         Visibility only: nothing currently refuses to serve an engine on the
         strength of it.
         """
-        for entry in self.frozen_entries(list_type):
-            if entry.match_type == "regex":
-                try:
-                    compile_pattern(entry.pattern, case_insensitive=True)
-                except UnsafePatternError as exc:
-                    logger.error("Invalid regex in stored %s prompt list entry", list_type)
-                    raise PromptListConfigError("invalid regex in prompt list") from exc
+        preflight_prompt_entries(self.frozen_entries(list_type), list_type)
 
     def list_entries(self, list_type: str | None = None) -> list[GlobalPromptList]:
         query = self._session.query(GlobalPromptList)

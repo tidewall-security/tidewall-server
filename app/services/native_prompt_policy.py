@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import AccessRule, Policy, RuleSet
-from app.services.policy_validation import VALID_OPERATORS, PolicyValidationError, validate_prompt_list_entry
+from app.services.policy_validation import VALID_OPERATORS
 from app.services.prompt_classifier_client import (
     PROFILE,
     AssessmentReason,
@@ -25,6 +25,7 @@ from app.services.prompt_list_service import (
     PromptListConfigError,
     PromptListService,
     match_prompt_entries,
+    preflight_prompt_entries,
 )
 from app.services.rule_evaluator import evaluate_access_rules
 
@@ -196,6 +197,8 @@ def _freeze_rules(session: Session, rule_set_id: str) -> tuple[FrozenAccessRule,
         raise NativePolicyUnsupported("input rule set exceeds native access-rule limit")
     rules = []
     for row in rows:
+        if not isinstance(row.id, str) or not isinstance(row.name, str) or type(row.sort_order) is not int:
+            raise NativePolicyUnsupported("native access rules require text IDs and names and integer sort orders")
         condition = row.conditions
         if (
             not isinstance(condition, dict)
@@ -231,8 +234,10 @@ def _freeze_entries(
         for entry in entries:
             if not isinstance(entry.pattern, str):
                 raise NativePolicyUnsupported(f"stored {kind} prompt list requires text patterns")
-            validate_prompt_list_entry(entry.pattern, entry.match_type)
-    except (PromptListConfigError, PolicyValidationError):
+            if entry.match_type not in ("substring", "exact", "regex"):
+                raise NativePolicyUnsupported(f"stored {kind} prompt list has an unsupported match type")
+        preflight_prompt_entries(entries, kind)
+    except PromptListConfigError:
         raise NativePolicyUnsupported(f"stored {kind} prompt list cannot be enforced") from None
     return entries
 
