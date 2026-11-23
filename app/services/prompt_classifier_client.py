@@ -99,6 +99,8 @@ class ClassifierSettings:
     allow_loopback_http: bool = False
 
     def __post_init__(self) -> None:
+        if self.ca_file == "":
+            raise ValueError("Native classifier CA file must be a nonempty path when configured")
         try:
             url = urlsplit(self.origin)
             host = url.hostname

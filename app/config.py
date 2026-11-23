@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ---------------------------------------------------------------------------
 # Settings (environment variables)
@@ -22,6 +22,9 @@ from app.services.nat64 import Pref64Posture, parse_pref64
 
 class Settings(BaseModel):
     """Application-level settings sourced from environment variables."""
+
+    # Model-level validation sees the complete environment override mapping, including credentials.
+    model_config = ConfigDict(hide_input_in_errors=True)
 
     POLICY_FILE: str = "policy.yaml"
     DB_URL: str = "sqlite:///data/tidewall.db"
@@ -91,16 +94,7 @@ class Settings(BaseModel):
             env_val = os.environ.get(field_name)
             if env_val is not None:
                 overrides[field_name] = env_val
-        try:
-            return cls(**overrides)
-        except ValidationError as exc:
-            if any(
-                str(error["loc"][0]).startswith("NATIVE_CLASSIFIER_")
-                for error in exc.errors(include_input=False)
-                if error["loc"]
-            ):
-                raise ValueError("Invalid native classifier configuration") from None
-            raise
+        return cls(**overrides)
 
     # Parsed eagerly on construction, not lazily on access. A property would
     # defer the failure to the first export, which is the opposite of the

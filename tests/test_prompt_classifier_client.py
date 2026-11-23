@@ -473,3 +473,48 @@ def test_prompt_and_service_configuration_repr_hide_operator_and_input_values(cl
     )
     rendered = repr(settings)
     assert "inference.invalid" not in rendered and str(key_file) not in rendered and TENANT not in rendered
+
+
+def test_empty_ca_file_refused_during_settings_validation(client_module, key_file, monkeypatch):
+    monkeypatch.setenv("NATIVE_CLASSIFIER_ORIGIN", "https://inference.invalid")
+    monkeypatch.setenv("NATIVE_CLASSIFIER_KEY_FILE", str(key_file))
+    monkeypatch.setenv("NATIVE_CLASSIFIER_TENANT_ID", TENANT)
+    monkeypatch.setenv("NATIVE_CLASSIFIER_CA_FILE", "")
+    with pytest.raises(ValueError, match="CA file"):
+        client_module.ClassifierSettings.from_settings(Settings.from_env())
+
+
+def test_omitted_ca_file_uses_verified_system_trust(client_module, key_file, monkeypatch):
+    import ssl
+    from unittest.mock import patch
+
+    monkeypatch.setenv("NATIVE_CLASSIFIER_ORIGIN", "https://inference.invalid")
+    monkeypatch.setenv("NATIVE_CLASSIFIER_KEY_FILE", str(key_file))
+    monkeypatch.setenv("NATIVE_CLASSIFIER_TENANT_ID", TENANT)
+    monkeypatch.delenv("NATIVE_CLASSIFIER_CA_FILE", raising=False)
+    settings = client_module.ClassifierSettings.from_settings(Settings.from_env())
+    with patch.object(httpx, "AsyncClient", wraps=httpx.AsyncClient) as constructor:
+        client = client_module.PromptClassifierClient(settings)
+        try:
+            context = constructor.call_args.kwargs["verify"]
+            assert context.check_hostname and context.verify_mode == ssl.CERT_REQUIRED
+            assert context.get_ca_certs(binary_form=True) == ssl.create_default_context().get_ca_certs(binary_form=True)
+        finally:
+            asyncio.run(client.aclose())
+
+
+def test_unrelated_settings_error_keeps_cause_and_hides_classifier_configuration(monkeypatch):
+    from fastapi import FastAPI
+
+    from app.main import lifespan
+
+    monkeypatch.setenv("PREF64", "x")
+    monkeypatch.setenv("NATIVE_CLASSIFIER_ORIGIN", "https://inference.invalid")
+    monkeypatch.setenv("NATIVE_CLASSIFIER_TENANT_ID", TENANT)
+    monkeypatch.setenv("NATIVE_CLASSIFIER_KEY_FILE", "abcdef!")
+    with pytest.raises(ValueError) as err:
+        asyncio.run(lifespan(FastAPI()).__aenter__())
+    message = str(err.value)
+    assert "PREF64" in message
+    assert "abcdef!" not in message
+    assert "input_value=" not in message
