@@ -504,6 +504,10 @@ def create_app() -> FastAPI:
         unredact,
     )
 
+    # Last registered so this gate runs outside CORS and every BaseHTTPMiddleware
+    # stream. It must see the final transport send for a native decision.
+    app.add_middleware(native_prompt.NativeDecisionOutputMiddleware)
+
     app.include_router(agent_events.router)
     app.include_router(collector_ingest.router)
     app.add_exception_handler(NativeError, native_prompt.native_error_handler)

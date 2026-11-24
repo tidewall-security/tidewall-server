@@ -4,7 +4,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Annotated, TypeVar
 
@@ -14,8 +14,9 @@ from pydantic import ValidationError
 from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette.datastructures import MutableHeaders
 from starlette.requests import ClientDisconnect
-from starlette.types import Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.auth.dependencies import require_native, require_role
 from app.auth.grants import GrantError, validate_grants
@@ -180,49 +181,106 @@ async def _disconnected(request: Request) -> None:
         pass
 
 
-class _PreparedDecision(JSONResponse):
-    """Refuse an expired reply at the last controllable ASGI response boundary."""
+@dataclass(frozen=True)
+class _DecisionOutput:
+    request_id: str
+    timely: Callable[[], bool]
 
-    def __init__(self, reply: NativeDecisionReply, timely: Callable[[], bool]):
-        super().__init__(reply.model_dump(), headers=_PRIVATE)
-        self._request_id = reply.request_id
-        self._timely = timely
+
+class NativeDecisionOutputMiddleware:
+    """Hold the bounded reply until every buffering middleware has finished with it."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if self._timely():
-            await super().__call__(scope, receive, send)
-        else:
-            refusal = native_refusal(NativeError("deadline_exceeded", 504), self._request_id)
-            await refusal(scope, receive, send)
+        if (
+            scope["type"] != "http"
+            or scope.get("method") != "POST"
+            or scope.get("path") != "/v1/native-prompt/decisions"
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        start: Message | None = None
+        body = bytearray()
+        oversized = False
+
+        async def gate(message: Message) -> None:
+            nonlocal start, oversized
+            if message["type"] == "http.response.start" and message["status"] == 200:
+                start = dict(message)
+                return
+            if start is None:
+                await send(message)
+                return
+
+            chunk = message.get("body", b"")
+            if len(chunk) > NativeDecisionReply.byte_limit - len(body):
+                oversized = True
+            elif not oversized:
+                body.extend(chunk)
+            if message.get("more_body", False):
+                return
+
+            output = scope["state"].get("native_decision_output")
+            headers = MutableHeaders(scope=start)
+            if not isinstance(output, _DecisionOutput) or oversized or not output.timely():
+                error = (
+                    NativeError("storage_unavailable", 503)
+                    if oversized or not isinstance(output, _DecisionOutput)
+                    else NativeError("deadline_exceeded", 504)
+                )
+                refusal = native_refusal(error, output.request_id if isinstance(output, _DecisionOutput) else None)
+                start["status"] = refusal.status_code
+                headers["content-length"] = str(len(refusal.body))
+                await send(start)
+                await send({"type": "http.response.body", "body": refusal.body})
+                return
+
+            # ASGI hands headers and body to the transport separately. Without a
+            # fixed length, a stalled header handoff can end with an empty body.
+            if "content-length" in headers:
+                del headers["content-length"]
+            await send(start)
+            await send({"type": "http.response.body", "body": bytes(body) if output.timely() else b""})
+
+        await self.app(scope, receive, gate)
 
 
 @router.post("/v1/native-prompt/decisions")
 async def decide(request: Request, principal: Annotated[NativePrincipal, Depends(require_native)]):
-    started = request.state.native_started_at
-    try:
-        async with asyncio.timeout(max(0, started + 1.8 - time.monotonic())):
-            body = await read_native_body(request, NativePromptRequest)
-    except TimeoutError:
-        return native_refusal(NativeError("deadline_exceeded", 504))
-    except ClientDisconnect:
-        return native_refusal(NativeError("request_retired", 409))
-    deadline = started + body.budget_ms / 1000
     service = request.app.state.native_decisions
-    worker = asyncio.create_task(service.decide(body, principal, deadline=deadline))
-    disconnect = asyncio.create_task(_disconnected(request))
-    try:
-        done, _ = await asyncio.wait({worker, disconnect}, return_when=asyncio.FIRST_COMPLETED)
-        if disconnect in done:
-            return native_refusal(NativeError("request_retired", 409), body.request_id)
-        reply = worker.result()
-        return _PreparedDecision(reply, lambda: service.can_return(principal, reply, deadline=deadline))
-    except NativeError as exc:
-        return native_refusal(exc, body.request_id)
-    finally:
-        for task in (worker, disconnect):
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(worker, disconnect, return_exceptions=True)
+    with service.admission() as slot:
+        started = request.state.native_started_at
+        try:
+            async with asyncio.timeout(max(0, started + 1.8 - time.monotonic())):
+                body = await read_native_body(request, NativePromptRequest)
+        except TimeoutError:
+            return native_refusal(NativeError("deadline_exceeded", 504))
+        except ClientDisconnect:
+            return native_refusal(NativeError("request_retired", 409))
+        deadline = started + body.budget_ms / 1000
+        request_id = body.request_id
+        worker = asyncio.create_task(service.decide_admitted(body, principal, deadline=deadline, slot=slot))
+        del body
+        disconnect = asyncio.create_task(_disconnected(request))
+        try:
+            done, _ = await asyncio.wait({worker, disconnect}, return_when=asyncio.FIRST_COMPLETED)
+            if disconnect in done:
+                return native_refusal(NativeError("request_retired", 409), request_id)
+            reply = worker.result()
+            request.state.native_decision_output = _DecisionOutput(
+                reply.request_id, lambda: service.can_return(principal, reply, deadline=deadline)
+            )
+            return JSONResponse(reply.model_dump(), headers=_PRIVATE)
+        except NativeError as exc:
+            return native_refusal(exc, request_id)
+        finally:
+            for task in (worker, disconnect):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(worker, disconnect, return_exceptions=True)
 
 
 @router.post("/v1/native-prompt/deliveries")

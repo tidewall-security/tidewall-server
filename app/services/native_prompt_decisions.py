@@ -9,6 +9,7 @@ import secrets
 import sqlite3
 import threading
 import time
+import weakref
 from collections.abc import AsyncIterator, Callable, Iterator
 from concurrent.futures import Future
 from contextlib import asynccontextmanager, contextmanager, suppress
@@ -25,10 +26,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db.models import NativePromptAssessment, NativePromptDecision, NativePromptDelivery, NativePromptObservation
 from app.native_prompt import (
     MODEL_IDENTITY_JSON,
+    InputState,
     NativeDecisionReply,
     NativeDeliveryAck,
     NativeDeliveryReport,
     NativeError,
+    NativeMetadata,
     NativePromptRequest,
 )
 from app.services.native_prompt_grants import (
@@ -87,11 +90,47 @@ class _Binding:
 
 
 @dataclass(frozen=True)
+class _RequestMetadata:
+    request_id: str
+    observation: NativeMetadata
+    input_state: InputState
+
+
+class _WorkSlot:
+    """Release capacity only after the caller and its last background unit leave."""
+
+    def __init__(self, slots: threading.BoundedSemaphore):
+        self.slots = slots
+        self.users = 1
+
+    def hold(self, task: asyncio.Task[Any]) -> None:
+        self.users += 1
+        task.add_done_callback(lambda _: self.release())
+
+    def release(self) -> None:
+        # All users of this slot run on its request's event loop.
+        self.users -= 1
+        if self.users == 0:
+            self.slots.release()
+
+
+def _precheck(
+    snapshot: NativePolicySnapshot, source: weakref.ReferenceType[NativePromptRequest], budget: _Budget
+) -> Precheck:
+    # A queued CPU job cannot keep the callback text alive. Only a running
+    # matcher, after checking the original budget, may borrow it.
+    budget.check()
+    request = source()
+    if request is None:
+        raise NativeError("request_retired", 409)
+    return evaluate_native_precheck(snapshot, request.prompt)
+
+
+@dataclass(frozen=True)
 class _Reservation:
     decision_id: str
     inference_id: UUID
     snapshot: NativePolicySnapshot
-    precheck: Precheck
 
 
 def retire_pending(session: Session, *, process_id: UUID, now: datetime) -> int:
@@ -152,12 +191,25 @@ class NativeDecisionService:
         self.classifier = classifier
         self.process_id = process_id
         self._key = secrets.token_bytes(32)
+        self._slots = threading.BoundedSemaphore(_MAX_BINDINGS)
         self._bindings: dict[tuple[str, str], _Binding] = {}
         self._bindings_lock = threading.Lock()
         self._tasks: set[asyncio.Task[Any]] = set()
         self._cleanup_needed = threading.Event()
 
-    def _track(self, task: asyncio.Task[T]) -> asyncio.Task[T]:
+    @contextmanager
+    def admission(self) -> Iterator[_WorkSlot]:
+        if not self._slots.acquire(blocking=False):
+            raise NativeError("capacity", 503)
+        slot = _WorkSlot(self._slots)
+        try:
+            yield slot
+        finally:
+            slot.release()
+
+    def _track(self, task: asyncio.Task[T], slot: _WorkSlot | None = None) -> asyncio.Task[T]:
+        if slot is not None:
+            slot.hold(task)
         self._tasks.add(task)
 
         def done(completed: asyncio.Task[T]) -> None:
@@ -168,9 +220,9 @@ class NativeDecisionService:
         task.add_done_callback(done)
         return task
 
-    async def _worker(self, func: Callable[..., T], *args: Any) -> T:
+    async def _worker(self, func: Callable[..., T], *args: Any, slot: _WorkSlot | None = None) -> T:
         # Cancelling the caller never detaches an untracked database worker from shutdown.
-        return await asyncio.shield(self._track(asyncio.create_task(asyncio.to_thread(func, *args))))
+        return await asyncio.shield(self._track(asyncio.create_task(asyncio.to_thread(func, *args)), slot))
 
     @contextmanager
     def _transaction(self, budget: _Budget, *, write: bool = True) -> Iterator[Session]:
@@ -228,15 +280,12 @@ class NativeDecisionService:
             )
 
     def _admit(
-        self, request: NativePromptRequest, p: NativePrincipal, candidate: _Binding, budget: _Budget
+        self, request: _RequestMetadata, p: NativePrincipal, candidate: _Binding, budget: _Budget
     ) -> _Reservation | NativeDecisionReply | _Binding:
         with self._transaction(budget) as session:
             _authority(session, p)
             snapshot = _snapshot(session, p)
             key = (p.device_id, request.request_id)
-            # budget_ms is transport time. Compare semantic content only after
-            # both credentials and scope have been checked in this reservation.
-            digest = hmac.digest(self._key, request.model_dump_json(exclude={"budget_ms"}).encode(), "sha256")
             rows = session.scalars(
                 select(Decision).where(
                     Decision.device_id == p.device_id,
@@ -272,7 +321,7 @@ class NativeDecisionService:
                     or as_utc(d.expires_at) <= _now()
                 ):
                     raise NativeError("request_retired", 409)
-                if not hmac.compare_digest(digest, entry.digest):
+                if not hmac.compare_digest(candidate.digest, entry.digest):
                     raise NativeError("identity_conflict", 409)
                 if d.policy_revision != snapshot.revision:
                     raise NativeError("policy_changed", 409)
@@ -287,7 +336,6 @@ class NativeDecisionService:
                 reply = _reply(d, detail)
                 _authority(session, p)
                 return reply
-            candidate.digest = digest
             self._register(key, candidate)
             now = _now()
             obs = upsert_native_observation(session, p, request.observation, now=now)
@@ -316,9 +364,7 @@ class NativeDecisionService:
             did, iid = d.decision_id, UUID(d.inference_request_id)
             _authority(session, p)
             candidate.reserved.set()
-        precheck = evaluate_native_precheck(snapshot, request.prompt)
-        budget.check()
-        return _Reservation(did, iid, snapshot, precheck)
+        return _Reservation(did, iid, snapshot)
 
     def _owned(
         self, session: Session, p: NativePrincipal, entry: _Binding, reservation: _Reservation
@@ -422,6 +468,15 @@ class NativeDecisionService:
     async def decide(
         self, request: NativePromptRequest, principal: NativePrincipal, *, deadline: float
     ) -> NativeDecisionReply:
+        try:
+            with self.admission() as slot:
+                return await self.decide_admitted(request, principal, deadline=deadline, slot=slot)
+        finally:
+            del request
+
+    async def decide_admitted(
+        self, request: NativePromptRequest, principal: NativePrincipal, *, deadline: float, slot: _WorkSlot
+    ) -> NativeDecisionReply:
         deadline = min(deadline, time.monotonic() + request.budget_ms / 1000)
         budget = _Budget(deadline)
         budget.check()
@@ -431,34 +486,39 @@ class NativeDecisionService:
             or (request.input_state != "capture_disabled" and not principal.capture_allowed)
         ):
             raise NativeError("unauthorized", 403)
-        live = self._binding((principal.device_id, request.request_id))
-        if live is not None:
-            budget.deadline = min(budget.deadline, live.deadline)
-        entry = _Binding(b"", budget.deadline)
+        # The database receives only the closed source metadata and an opaque
+        # process HMAC. Fresh authority inside admission precedes any binding
+        # lookup or comparison, including on an existing decision.
+        metadata = _RequestMetadata(request.request_id, request.observation, request.input_state)
+        entry = _Binding(
+            hmac.digest(self._key, request.model_dump_json(exclude={"budget_ms"}).encode(), "sha256"), deadline
+        )
         cause = "request_retired"
         try:
             async with asyncio.timeout(max(0, budget.deadline - time.monotonic())) as timeout:
-                reservation = await self._worker(self._admit, request, principal, entry, budget)
+                reservation = await self._worker(self._admit, metadata, principal, entry, budget, slot=slot)
                 if isinstance(reservation, _Binding):
                     timeout.reschedule(asyncio.get_running_loop().time() + max(0, budget.deadline - time.monotonic()))
                     await asyncio.shield(asyncio.wrap_future(reservation.finished))
-                    reservation = await self._worker(self._admit, request, principal, entry, budget)
+                    reservation = await self._worker(self._admit, metadata, principal, entry, budget, slot=slot)
                     if isinstance(reservation, _Binding):
                         raise NativeError("request_retired", 409)
                 if isinstance(reservation, NativeDecisionReply):
                     budget.check()
                     return reservation
+                precheck = await self._worker(_precheck, reservation.snapshot, weakref.ref(request), budget, slot=slot)
+                budget.check()
                 assessment = None
                 if request.input_state in ("unsupported", "input_too_large"):
                     assessment = AssessmentResult(
                         "unsupported",
                         "input_too_large" if request.input_state == "input_too_large" else "input_unsupported",
                     )
-                elif reservation.precheck.needs_assessment:
+                elif precheck.needs_assessment:
                     if self.classifier is None:
                         assessment = AssessmentResult("unavailable", "classifier_unavailable")
                     else:
-                        await self._worker(self._dispatch_check, principal, entry, reservation, budget)
+                        await self._worker(self._dispatch_check, principal, entry, reservation, budget, slot=slot)
                         budget.check()
                         assert request.prompt is not None
                         provider = self._track(
@@ -468,7 +528,8 @@ class NativeDecisionService:
                                     request_id=reservation.inference_id,
                                     deadline=budget.deadline,
                                 )
-                            )
+                            ),
+                            slot,
                         )
                         try:
                             assessment = await asyncio.shield(provider)
@@ -482,8 +543,8 @@ class NativeDecisionService:
                     and assessment.model_identity != MODEL_IDENTITY
                 ):
                     assessment = AssessmentResult("failed", "classifier_invalid")
-                outcome = resolve_native_result(reservation.snapshot, reservation.precheck, assessment)
-                reply = await self._worker(self._finalize, principal, entry, reservation, outcome, budget)
+                outcome = resolve_native_result(reservation.snapshot, precheck, assessment)
+                reply = await self._worker(self._finalize, principal, entry, reservation, outcome, budget, slot=slot)
                 budget.check()
                 entry.published_decision_id = reply.decision_id
                 return reply
@@ -502,12 +563,15 @@ class NativeDecisionService:
             }.get(exc.code, "request_retired")
             raise
         finally:
+            del request
             budget.cancelled.set()
+            if not entry.reserved.is_set():
+                entry.digest = b""
             entry.finished.set_result(None)
             # System cleanup cannot authorize a response; its independent budget
             # is never applied to model I/O, evaluation or wire preparation.
             if entry.reserved.is_set() and entry.published_decision_id is None:
-                cleanup = self._track(asyncio.create_task(asyncio.to_thread(self._abandon, entry, cause)))
+                cleanup = self._track(asyncio.create_task(asyncio.to_thread(self._abandon, entry, cause)), slot)
                 remaining = budget.deadline - time.monotonic()
                 if remaining > 0:
                     await asyncio.wait({cleanup}, timeout=remaining)

@@ -139,11 +139,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
         ):
             return native_refusal(NativeError("unauthorized", 401))
 
+        # A checkout may outlive the caller. The worker needs only the factory
+        # and hashes, never the request or its ASGI receive/body stream.
+        sessions = request.app.state.session_factory
+        collector_hash = hash_key(bearers[0][7:])
+        capability_hash = hash_key(capabilities[0])
+
         def authenticate() -> NativePrincipal:
-            with request.app.state.session_factory() as session:
-                return authorize_native(
-                    session, hash_key(bearers[0][7:]), hash_key(capabilities[0]), now=datetime.now(UTC)
-                )
+            with sessions() as session:
+                return authorize_native(session, collector_hash, capability_hash, now=datetime.now(UTC))
 
         try:
             if request.url.path == "/v1/native-prompt/decisions":

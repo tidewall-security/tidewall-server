@@ -227,6 +227,7 @@ def test_late_delivery_bound_idempotent_and_no_action(native):
 
 def test_decision_route_rejects_bad_request_before_writes(fleet):
     c, _, s, _, _, _ = fleet
+    install_service(c, s, Classifier())
     enable(fleet)
     h, _ = credentials(fleet, False)
     r = c.post(DECIDE, headers=h, json={"prompt": "closed-input-sentinel"})

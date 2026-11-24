@@ -709,3 +709,231 @@ def test_owner_cannot_send_prepared_reply_if_disconnect_cleanup_crosses_output_b
     r = c.post(DECIDE, headers=h, json={**request_body(), "budget_ms": 210})
     assert r.json()["code"] == "deadline_exceeded"
     assert counts(s, ("native_prompt_assessments", "native_prompt_deliveries")) == [1, 0]
+
+
+@pytest.mark.parametrize("replay", [False, True])
+def test_outer_middleware_cannot_forward_expired_owner_or_replay(native, monkeypatch, replay):
+    from app.security_headers import SecurityHeadersMiddleware
+
+    c, h, sessions, _, model, _ = native
+    original = {**request_body(), "budget_ms": 350}
+    if replay:
+        assert c.post(DECIDE, headers=h, json=original).status_code == 200
+    # Fixture provisioning has already built the actual stack, whose middleware
+    # captures its dispatch function at construction.
+    middleware = c.app.middleware_stack
+    while not isinstance(middleware, SecurityHeadersMiddleware):
+        middleware = middleware.app
+    old_dispatch = middleware.dispatch_func
+    exercised = []
+
+    async def delayed(request, call_next):
+        response = await old_dispatch(request, call_next)
+        if request.url.path == DECIDE:
+            assert response.status_code == 200
+            exercised.append(True)
+            await asyncio.sleep(0.38)
+        return response
+
+    monkeypatch.setattr(middleware, "dispatch_func", delayed)
+    result = c.post(
+        DECIDE, headers={**h, "Origin": "http://local.test"}, json={**original, "budget_ms": 1800 if replay else 350}
+    )
+    assert exercised == [True]
+    assert result.status_code == 504
+    assert result.json() == {"version": 1, "request_id": original["request_id"], "code": "deadline_exceeded"}
+    assert result.headers["cache-control"] == "no-store" and result.headers["x-frame-options"] == "DENY"
+    assert result.headers["access-control-allow-origin"] == "*"
+    assert len(result.content) == int(result.headers["content-length"])
+    assert len(model.calls) == 1 and counts(sessions, ("native_prompt_assessments", "native_prompt_deliveries")) == [
+        1,
+        0,
+    ]
+
+
+def test_slow_transport_after_accepting_headers_cannot_receive_late_directive(native):
+    c, h, s, _, _, _ = native
+
+    async def run():
+        body = json.dumps({**request_body(), "budget_ms": 250}).encode()
+        first = True
+
+        async def receive():
+            nonlocal first
+            if first:
+                first = False
+                return {"type": "http.request", "body": body, "more_body": False}
+            await asyncio.Future()
+
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+            if message["type"] == "http.response.start":
+                await asyncio.sleep(0.30)
+
+        await c.app(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "path": DECIDE,
+                "raw_path": DECIDE.encode(),
+                "query_string": b"",
+                "client": ("127.0.0.1", 8090),
+                "server": ("test", 80),
+                "headers": [
+                    (k.lower().encode(), v.encode()) for k, v in {**h, "content-type": "application/json"}.items()
+                ],
+            },
+            receive,
+            send,
+        )
+        assert [m["status"] for m in sent if m["type"] == "http.response.start"] == [200]
+        assert b"".join(m.get("body", b"") for m in sent) == b""
+
+    asyncio.run(run())
+    assert counts(s, ("native_prompt_assessments", "native_prompt_deliveries")) == [1, 0]
+
+
+@pytest.mark.parametrize("blocked", ["executor", "connection"])
+def test_expired_admission_releases_synthetic_prompt_while_worker_still_blocked(native, blocked):
+    import weakref
+    from concurrent.futures import ThreadPoolExecutor
+
+    _, _, s, _, model, svc = native
+    p = principal(native)
+    release = threading.Event()
+    entered = threading.Event()
+
+    def occupy(*args):
+        entered.set()
+        assert release.wait(3)
+
+    class SyntheticText(str):
+        pass
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        engine = s.kw["bind"]
+        if blocked == "executor":
+            loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+            occupied = loop.run_in_executor(None, occupy)
+        else:
+            event.listen(engine, "checkout", occupy)
+        try:
+            prompt = SyntheticText("temporary synthetic data")
+            req = NativePromptRequest(**request_body()).model_copy(update={"prompt": prompt})
+            prompt_ref, request_ref = weakref.ref(prompt), weakref.ref(req)
+            try:
+                await svc.decide(req, p, deadline=time.monotonic() + 0.10)
+            except NativeError as error:
+                assert error.code == "deadline_exceeded"
+            else:
+                pytest.fail("occupied worker returned a decision")
+            assert entered.is_set()
+            del req, prompt
+            assert request_ref() is None and prompt_ref() is None
+            assert not model.calls
+        finally:
+            release.set()
+            if blocked == "executor":
+                await occupied
+            else:
+                # Removal is safe once the originating checkout has returned.
+                await asyncio.gather(*list(svc._tasks), return_exceptions=True)
+                event.remove(engine, "checkout", occupy)
+
+    asyncio.run(run())
+    assert counts(s, ("native_prompt_decisions", "native_prompt_assessments")) == [0, 0]
+
+
+def test_saturated_native_admission_refuses_new_work_until_queued_units_finish(native, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.services import native_prompt_decisions as module
+
+    c, _, s, _, model, _ = native
+    p = principal(native)
+    monkeypatch.setattr(module, "_MAX_BINDINGS", 2)
+    svc = install_service(c, s, model)
+    release = threading.Event()
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        occupied = loop.run_in_executor(None, release.wait, 3)
+
+        async def attempt(seconds):
+            try:
+                await svc.decide(NativePromptRequest(**request_body()), p, deadline=time.monotonic() + seconds)
+            except NativeError as err:
+                return err.code
+            return "ok"
+
+        try:
+            first, second = [asyncio.create_task(attempt(0.12)) for _ in range(2)]
+            await asyncio.sleep(0.02)
+            assert await attempt(0.04) == "capacity"
+            assert await asyncio.gather(first, second) == ["deadline_exceeded", "deadline_exceeded"]
+            assert await attempt(0.05) == "capacity"
+            assert not model.calls
+        finally:
+            release.set()
+            await occupied
+        await asyncio.gather(*list(svc._tasks), return_exceptions=True)
+        await asyncio.sleep(0)
+        assert await attempt(1) == "ok"
+
+    asyncio.run(run())
+    assert len(model.calls) == 1 and counts(s, ("native_prompt_decisions",)) == [1]
+
+
+def test_saturated_http_callback_is_refused_before_consuming_prompt_body(native, monkeypatch):
+    from app.services import native_prompt_decisions as module
+
+    c, h, s, _, model, _ = native
+    monkeypatch.setattr(module, "_MAX_BINDINGS", 1)
+    svc = install_service(c, s, model)
+
+    async def run():
+        reads = []
+
+        async def receive():
+            reads.append(True)
+            return {"type": "http.request", "body": b"malformed synthetic prompt", "more_body": False}
+
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+
+        with svc.admission():
+            await c.app(
+                {
+                    "type": "http",
+                    "asgi": {"version": "3.0"},
+                    "http_version": "1.1",
+                    "method": "POST",
+                    "scheme": "http",
+                    "path": DECIDE,
+                    "raw_path": DECIDE.encode(),
+                    "query_string": b"",
+                    "client": ("127.0.0.1", 8090),
+                    "server": ("test", 80),
+                    "headers": [
+                        (k.lower().encode(), v.encode()) for k, v in {**h, "content-type": "application/json"}.items()
+                    ],
+                },
+                receive,
+                send,
+            )
+        assert not reads
+        assert json.loads(b"".join(m.get("body", b"") for m in sent)) == dict(
+            version=1, request_id=None, code="capacity"
+        )
+
+    asyncio.run(run())
+    assert not model.calls and counts(s, ("native_prompt_decisions",)) == [0]
