@@ -1,6 +1,8 @@
 # Operate native prompt assessment
 
-Enable the native profile only for a policy with a supported input rule set. Tidewall freezes its effective report mode, detector action, failure action, generic malicious-prompt detector, optional malicious and benign lists, and supported access rules. An access rule can inspect the qualified Claude application ID. Activation rejects unsupported controls. A change to the effective snapshot requires a fresh grant. The historical decision records its semantic revision.
+Enable the native profile only for a policy with a supported input rule set. Tidewall freezes its effective report mode, detector action, failure action, generic malicious-prompt detector, optional malicious and benign lists, and supported access rules. An access rule can inspect the qualified Claude application ID. Activation rejects unsupported controls. Each decision records the semantic revision of its snapshot. Editing a rule, list, report mode or failure policy can invalidate an in-flight decision. A fresh callback uses the updated snapshot with its existing eligible grant.
+
+Changing the native profile configuration advances its configuration generation and invalidates grants bound to the previous generation. Issuing a replacement session grant advances the grant generation and revokes the previous capability. To withdraw capture for one session, revoke its grant with `DELETE /v1/native-prompt/grants/{grant_id}`. To withdraw it across the policy, send `{"enabled":false}` to `PUT /v1/policies/{policy_id}/native-prompt` under policy-scoped admin authorization.
 
 ## Connect the standalone classifier
 

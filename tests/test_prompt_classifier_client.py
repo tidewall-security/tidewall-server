@@ -518,3 +518,29 @@ def test_unrelated_settings_error_keeps_cause_and_hides_classifier_configuration
     assert "PREF64" in message
     assert "abcdef!" not in message
     assert "input_value=" not in message
+
+
+def test_one_millisecond_provider_budget_keeps_local_deadline(client_module, key_file, monkeypatch):
+    from types import SimpleNamespace
+
+    times = iter((10.0, 10.0002, 10.0004, 10.0011))
+    monkeypatch.setattr(client_module, "time", SimpleNamespace(monotonic=lambda: next(times)))
+    budgets = []
+
+    def receive(request):
+        budgets.append(json.loads(request.content)["timeout_ms"])
+        return reply(200, classified())
+
+    async def run():
+        config = client_module.ClassifierSettings(
+            origin="https://inference.invalid", key_file=str(key_file), tenant_id=TENANT, timeout_ms=1
+        )
+        client = client_module.PromptClassifierClient(config, transport=httpx.MockTransport(receive))
+        try:
+            return await client.assess(client_module.CompletePrompt("Hello"), request_id=REQUEST_ID, deadline=10.5)
+        finally:
+            await client.aclose()
+
+    result = asyncio.run(run())
+    assert budgets == [1]
+    assert result.reason == "deadline_exceeded"

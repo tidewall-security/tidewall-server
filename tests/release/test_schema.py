@@ -91,6 +91,10 @@ def test_thirty_relationships_of_which_twenty_one_write_on_delete(conn):
 def test_native_index_slots_and_physical_session_token_copies(scratch):
     locations = copy_map(scratch).locations(("agent_sessions", "native_session_token"))
     assert locations == {"agent_sessions": 1, "sqlite_autoindex_agent_sessions_2": 1, "uq_native_session_scope": 1}
+    assert copy_map(scratch).locations(("native_prompt_deliveries", "decision_id")) == {
+        "native_prompt_deliveries": 1,
+        "ix_native_prompt_deliveries_decision_id": 1,
+    }
     scratch.execute("CREATE INDEX unexpected_token_copy ON native_prompt_grants(session_token)")
     assert any(v.kind == "native-index-slots" and v.detail == "native_prompt_grants" for v in invariant(scratch))
 

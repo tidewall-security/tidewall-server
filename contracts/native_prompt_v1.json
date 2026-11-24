@@ -1569,7 +1569,7 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Select the definition named by each endpoint. Decode strict UTF-8. Reject duplicate fields at every depth, nonfinite numbers, and more than twelve nested containers. Integer fields require a JSON integer literal. Byte limits are checked before decoding. Only a validated, bound, timely committed decision may supply a directive. x-request-max-bytes limits the complete request body for the specified method and path. The standalone observation limit does not apply to metadata embedded within a decision request.",
+  "description": "Select the definition named by each endpoint. Decode strict UTF-8. Reject duplicate fields at every depth, nonfinite numbers, and more than twelve nested containers. Draft 2020-12 treats mathematically integral values such as 1.0 as integers. The wire contract additionally requires an integer literal without a decimal point or exponent for every integer field. Byte limits are checked before decoding. Only a validated, bound, timely committed decision may supply a directive. x-request-max-bytes limits the complete request body for the specified method and path. The standalone observation limit does not apply to metadata embedded within a decision request.",
   "title": "Tidewall native prompt v1",
   "x-endpoints": {
     "DELETE /v1/native-prompt/grants/{grant_id}": [

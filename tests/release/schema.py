@@ -228,6 +228,7 @@ NATIVE_INDEXES = {
         "sqlite_autoindex_native_prompt_decisions_6": (True, ("inference_request_id",)),
     },
     "native_prompt_deliveries": {
+        "ix_native_prompt_deliveries_decision_id": (False, ("decision_id",)),
         "ix_native_prompt_deliveries_expires_at": (False, ("expires_at",)),
         "sqlite_autoindex_native_prompt_deliveries_1": (True, ("report_id",)),
     },

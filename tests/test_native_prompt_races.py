@@ -232,34 +232,77 @@ def test_cancelled_owner_and_cancellation_resistant_provider_cannot_publish(nati
     assert counts(s, ("native_prompt_assessments",)) == [0]
 
 
-def test_late_physical_commit_prepares_history_without_wire_action(native):
-    c, h, s, _, model, _ = native
-    eng = s.kw["bind"]
+def test_late_physical_commit_prepares_history_without_wire_action(native, monkeypatch):
+    from types import SimpleNamespace
 
-    # Commit event is just before the physical DBAPI commit, after the final flush.
-    def delay(conn):
-        if conn.info.pop("delay_final_commit", False):
-            time.sleep(0.30)
+    from app.auth import middleware
+    from app.routes import native_prompt
+    from app.services import native_prompt_decisions
+
+    c, h, sessions, _, model, _ = native
+    engine = sessions.kw["bind"]
+    body = {**request_body(), "budget_ms": 220}
+    local = threading.local()
+    now = time.monotonic()
+    entered = threading.Event()
+    completed = threading.Event()
+    clock = SimpleNamespace(monotonic=lambda: now)
+    for module in (middleware, native_prompt, native_prompt_decisions):
+        monkeypatch.setattr(module, "time", clock)
 
     def marker(conn, cursor, statement, *args):
         if "insert into native_prompt_assessments" in statement.lower():
-            conn.info["delay_final_commit"] = True
+            local.final_commit = True
 
-    event.listen(eng, "before_cursor_execute", marker)
-    event.listen(eng, "commit", delay)
+    commit = engine.dialect.do_commit
+
+    def physical_commit(connection):
+        nonlocal now
+        if not getattr(local, "final_commit", False):
+            return commit(connection)
+        local.final_commit = False
+        entered.set()
+        now += 0.30
+        commit(connection)
+        completed.set()
+
+    monkeypatch.setattr(engine.dialect, "do_commit", physical_commit)
+    event.listen(engine, "before_cursor_execute", marker)
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        task = asyncio.current_task()
+        # The event loop and application share the controlled monotonic clock.
+        # An independent real-time watchdog still bounds an unmet precondition.
+        with monkeypatch.context() as patch:
+            patch.setattr(loop, "time", clock.monotonic)
+            watchdog = threading.Timer(10, lambda: loop.call_soon_threadsafe(task.cancel))
+            watchdog.start()
+            try:
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=c.app), base_url="http://test"
+                ) as client:
+                    r = await client.post(DECIDE, headers=h, json=body)
+                    assert entered.is_set() and await asyncio.to_thread(completed.wait, 3)
+                    assert r.status_code == 504 and r.json()["code"] == "deadline_exceeded"
+                    assert "returned_action" not in r.json()
+                    replay = await client.post(DECIDE, headers=h, json=body)
+                    assert replay.json()["code"] == "request_retired"
+                    assert "returned_action" not in replay.json()
+            except asyncio.CancelledError:
+                pytest.fail(f"commit watchdog: entered={entered.is_set()}, completed={completed.is_set()}")
+            finally:
+                watchdog.cancel()
+                watchdog.join()
+
     try:
-        body = {**request_body(), "budget_ms": 220}
-        r = c.post(DECIDE, headers=h, json=body)
-        assert r.json()["code"] == "deadline_exceeded"
-        time.sleep(0.35)
-        assert c.post(DECIDE, headers=h, json=body).json()["code"] == "request_retired"
-        with s() as db:
+        asyncio.run(run())
+        with sessions() as db:
             d = db.query(NativePromptDecision).one()
-            assert d.status == "committed" and d.response_prepared and d.returned_action == "deny"
-        assert counts(s, ("native_prompt_deliveries",)) == [0] and len(model.calls) == 1
+            assert (d.status, d.response_prepared, d.returned_action) == ("committed", True, "deny")
+        assert counts(sessions, ("native_prompt_deliveries",)) == [0] and len(model.calls) == 1
     finally:
-        event.remove(eng, "commit", delay)
-        event.remove(eng, "before_cursor_execute", marker)
+        event.remove(engine, "before_cursor_execute", marker)
 
 
 def test_finalization_before_revocation_preserves_authorized_reply(native):

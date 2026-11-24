@@ -1101,7 +1101,7 @@ class NativePromptAssessment(Base):
 class NativePromptDelivery(Base):
     __tablename__ = "native_prompt_deliveries"
     report_id: Mapped[str] = mapped_column(String, primary_key=True)
-    decision_id: Mapped[str] = mapped_column(String)
+    decision_id: Mapped[str] = mapped_column(String, index=True)
     device_id: Mapped[str] = mapped_column(String)
     policy_id: Mapped[str] = mapped_column(String)
     grant_id: Mapped[str] = mapped_column(String)

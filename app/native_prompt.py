@@ -5,7 +5,7 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Annotated, ClassVar, Literal, Self, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 from app.agent_events import _check_json_depth, _reject_nonfinite, _unique_object
 from app.services.prompt_classifier_client import MODEL_IDENTITY, RESERVED_TOKENS
@@ -181,11 +181,15 @@ class PinnedModel(WireModel):
     adapter_revision: Literal["5500c3bef53729ed4661b5cfae1b01adca96ca4c"]
     prompt_sha256: Literal["3a0e693064509eb24773ba53af4831ecb4c6ca8cf741a28d2d10080384df5041"]
     scoring_implementation: Literal["qwen3_last_token_logits.1"]
-    class_token_ids: Annotated[list[int], Field(json_schema_extra={"const": list(MODEL_IDENTITY.class_token_ids)})]
+    class_token_ids: Annotated[
+        tuple[int, ...],
+        BeforeValidator(lambda value: tuple(value) if isinstance(value, list) else value),
+        Field(json_schema_extra={"const": list(MODEL_IDENTITY.class_token_ids)}),
+    ]
 
     @model_validator(mode="after")
     def check_tokens(self) -> Self:
-        if tuple(self.class_token_ids) != MODEL_IDENTITY.class_token_ids:
+        if self.class_token_ids != MODEL_IDENTITY.class_token_ids:
             raise ValueError("invalid model identity")
         return self
 

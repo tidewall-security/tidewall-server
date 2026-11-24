@@ -29,7 +29,7 @@ def test_prior_collector_survives_native_upgrade_and_downgrade(tmp_path):
         before = conn.execute("SELECT * FROM access_tokens").fetchall()
     _alembic(db, "upgrade", "head")
     with sqlite3.connect(db) as conn:
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == ("9a42c7d3e601",)
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == ("b07f38a51d24",)
         assert TABLES <= {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         assert conn.execute("SELECT COUNT(*) FROM native_prompt_grants").fetchone() == (0,)
@@ -241,3 +241,22 @@ def test_issue_native_grant_respects_database_encoding(tmp_path, encoding, migra
             with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
                 conn.execute(f"UPDATE native_prompt_grants SET {column}={column}||char(0)||'extra'")
     engine.dispose()
+
+
+def test_delivery_lookup_and_cascade_plans_after_existing_native_head(tmp_path):
+    db = tmp_path / "delivery-index.db"
+    index = "ix_native_prompt_deliveries_decision_id"
+    _alembic(db, "upgrade", "9a42c7d3e601")
+    _alembic(db, "upgrade", "head")
+    with sqlite3.connect(db) as conn:
+        conn.execute("PRAGMA foreign_keys=ON")
+        for sql in (
+            "SELECT stage FROM native_prompt_deliveries WHERE decision_id IN ('a','b') "
+            "AND expires_at>CURRENT_TIMESTAMP",
+            "DELETE FROM native_prompt_decisions WHERE decision_id='a'",
+        ):
+            plan = [row[3] for row in conn.execute("EXPLAIN QUERY PLAN " + sql)]
+            assert any("SEARCH native_prompt_deliveries" in line and index in line for line in plan), plan
+    _alembic(db, "downgrade", "9a42c7d3e601")
+    with sqlite3.connect(db) as conn:
+        assert index not in [row[1] for row in conn.execute("PRAGMA index_list(native_prompt_deliveries)")]

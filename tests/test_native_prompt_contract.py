@@ -3,7 +3,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, validators
 
 META = dict(
     version=1,
@@ -201,7 +201,12 @@ def test_published_standalone_endpoint_byte_limits():
 
 
 def _schema_validator(schema, name):
-    return Draft202012Validator({"$schema": schema["$schema"], "$defs": schema["$defs"], "$ref": "#/$defs/" + name})
+    # A strict decoder retains the distinction between an integer literal and 1.0/1e0.
+    lexical = validators.extend(
+        Draft202012Validator,
+        type_checker=Draft202012Validator.TYPE_CHECKER.redefine("integer", lambda _checker, value: type(value) is int),
+    )
+    return lexical({"$schema": schema["$schema"], "$defs": schema["$defs"], "$ref": "#/$defs/" + name})
 
 
 @pytest.mark.parametrize(
@@ -239,3 +244,17 @@ def test_incomplete_action_pairs_in_dto_and_published_schema(evaluated, returned
     else:
         with pytest.raises(NativeError):
             parse_wire(json.dumps(reply).encode(), NativeDecisionReply)
+
+
+def test_model_tokens_immutable_with_strict_json_array():
+    from pydantic import ValidationError
+
+    from app.native_prompt import MODEL_IDENTITY_JSON, PinnedModel
+
+    model = PinnedModel.model_validate(json.loads(MODEL_IDENTITY_JSON))
+    assert isinstance(model.class_token_ids, tuple)
+    assert json.loads(model.model_dump_json()) == json.loads(MODEL_IDENTITY_JSON)
+    values = json.loads(MODEL_IDENTITY_JSON)
+    values["class_token_ids"][0] = float(values["class_token_ids"][0])
+    with pytest.raises(ValidationError):
+        PinnedModel.model_validate(values)

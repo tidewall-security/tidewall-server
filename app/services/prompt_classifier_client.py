@@ -300,7 +300,7 @@ class PromptClassifierClient:
             return _UNSUPPORTED
 
         ident = str(request_id)
-        budget_ms = int((finish_by - time.monotonic()) * 1000)
+        budget_ms = min(self._timeout_ms, math.ceil((finish_by - time.monotonic()) * 1000))
         if budget_ms < 1:
             return _DEADLINE
         body = {
