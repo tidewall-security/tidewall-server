@@ -2,6 +2,7 @@ import asyncio
 import json
 import threading
 import time
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -232,23 +233,50 @@ def test_cancelled_owner_and_cancellation_resistant_provider_cannot_publish(nati
     assert counts(s, ("native_prompt_assessments",)) == [0]
 
 
-def test_late_physical_commit_prepares_history_without_wire_action(native, monkeypatch):
-    from types import SimpleNamespace
-
+@contextmanager
+def controlled_native_time(monkeypatch, diagnostic):
     from app.auth import middleware
     from app.routes import native_prompt
     from app.services import native_prompt_decisions
 
+    now = time.monotonic()
+
+    class Clock:
+        @staticmethod
+        def monotonic():
+            return now
+
+        @staticmethod
+        def advance(seconds):
+            nonlocal now
+            now += seconds
+
+    loop = asyncio.get_running_loop()
+    task = asyncio.current_task()
+    # Application and event loop time advance only at the observed handoff.
+    # A separate wall-time watchdog diagnoses an unmet precondition.
+    with monkeypatch.context() as patch:
+        for module in (middleware, native_prompt, native_prompt_decisions):
+            patch.setattr(module, "time", Clock)
+        patch.setattr(loop, "time", Clock.monotonic)
+        watchdog = threading.Timer(10, lambda: loop.call_soon_threadsafe(task.cancel))
+        watchdog.start()
+        try:
+            yield Clock
+        except asyncio.CancelledError:
+            pytest.fail(f"native timing watchdog: {diagnostic()}")
+        finally:
+            watchdog.cancel()
+            watchdog.join()
+
+
+def test_late_physical_commit_prepares_history_without_wire_action(native, monkeypatch):
     c, h, sessions, _, model, _ = native
     engine = sessions.kw["bind"]
     body = {**request_body(), "budget_ms": 220}
     local = threading.local()
-    now = time.monotonic()
     entered = threading.Event()
     completed = threading.Event()
-    clock = SimpleNamespace(monotonic=lambda: now)
-    for module in (middleware, native_prompt, native_prompt_decisions):
-        monkeypatch.setattr(module, "time", clock)
 
     def marker(conn, cursor, statement, *args):
         if "insert into native_prompt_assessments" in statement.lower():
@@ -256,45 +284,32 @@ def test_late_physical_commit_prepares_history_without_wire_action(native, monke
 
     commit = engine.dialect.do_commit
 
-    def physical_commit(connection):
-        nonlocal now
-        if not getattr(local, "final_commit", False):
-            return commit(connection)
-        local.final_commit = False
-        entered.set()
-        now += 0.30
-        commit(connection)
-        completed.set()
-
-    monkeypatch.setattr(engine.dialect, "do_commit", physical_commit)
-    event.listen(engine, "before_cursor_execute", marker)
-
     async def run():
-        loop = asyncio.get_running_loop()
-        task = asyncio.current_task()
-        # The event loop and application share the controlled monotonic clock.
-        # An independent real-time watchdog still bounds an unmet precondition.
-        with monkeypatch.context() as patch:
-            patch.setattr(loop, "time", clock.monotonic)
-            watchdog = threading.Timer(10, lambda: loop.call_soon_threadsafe(task.cancel))
-            watchdog.start()
-            try:
-                async with httpx.AsyncClient(
-                    transport=httpx.ASGITransport(app=c.app), base_url="http://test"
-                ) as client:
-                    r = await client.post(DECIDE, headers=h, json=body)
-                    assert entered.is_set() and await asyncio.to_thread(completed.wait, 3)
-                    assert r.status_code == 504 and r.json()["code"] == "deadline_exceeded"
-                    assert "returned_action" not in r.json()
-                    replay = await client.post(DECIDE, headers=h, json=body)
-                    assert replay.json()["code"] == "request_retired"
-                    assert "returned_action" not in replay.json()
-            except asyncio.CancelledError:
-                pytest.fail(f"commit watchdog: entered={entered.is_set()}, completed={completed.is_set()}")
-            finally:
-                watchdog.cancel()
-                watchdog.join()
+        def diagnostic():
+            return f"commit entered={entered.is_set()}, completed={completed.is_set()}"
 
+        with controlled_native_time(monkeypatch, diagnostic) as clock:
+
+            def physical_commit(connection):
+                if not getattr(local, "final_commit", False):
+                    return commit(connection)
+                local.final_commit = False
+                entered.set()
+                clock.advance(0.30)
+                commit(connection)
+                completed.set()
+
+            monkeypatch.setattr(engine.dialect, "do_commit", physical_commit)
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=c.app), base_url="http://test") as client:
+                r = await client.post(DECIDE, headers=h, json=body)
+                assert entered.is_set() and await asyncio.to_thread(completed.wait, 3), diagnostic()
+                assert r.status_code == 504 and r.json()["code"] == "deadline_exceeded"
+                assert "returned_action" not in r.json()
+                replay = await client.post(DECIDE, headers=h, json=body)
+                assert replay.json()["code"] == "request_retired"
+                assert "returned_action" not in replay.json()
+
+    event.listen(engine, "before_cursor_execute", marker)
     try:
         asyncio.run(run())
         with sessions() as db:
@@ -796,7 +811,7 @@ def test_outer_middleware_cannot_forward_expired_owner_or_replay(native, monkeyp
     ]
 
 
-def test_slow_transport_after_accepting_headers_cannot_receive_late_directive(native):
+def test_slow_transport_after_accepting_headers_cannot_receive_late_directive(native, monkeypatch):
     c, h, s, _, _, _ = native
 
     async def run():
@@ -812,30 +827,32 @@ def test_slow_transport_after_accepting_headers_cannot_receive_late_directive(na
 
         sent = []
 
-        async def send(message):
-            sent.append(message)
-            if message["type"] == "http.response.start":
-                await asyncio.sleep(0.30)
+        with controlled_native_time(monkeypatch, lambda: [m["type"] for m in sent]) as clock:
 
-        await c.app(
-            {
-                "type": "http",
-                "asgi": {"version": "3.0"},
-                "http_version": "1.1",
-                "method": "POST",
-                "scheme": "http",
-                "path": DECIDE,
-                "raw_path": DECIDE.encode(),
-                "query_string": b"",
-                "client": ("127.0.0.1", 8090),
-                "server": ("test", 80),
-                "headers": [
-                    (k.lower().encode(), v.encode()) for k, v in {**h, "content-type": "application/json"}.items()
-                ],
-            },
-            receive,
-            send,
-        )
+            async def send(message):
+                sent.append(message)
+                if message["type"] == "http.response.start":
+                    clock.advance(0.30)
+
+            await c.app(
+                {
+                    "type": "http",
+                    "asgi": {"version": "3.0"},
+                    "http_version": "1.1",
+                    "method": "POST",
+                    "scheme": "http",
+                    "path": DECIDE,
+                    "raw_path": DECIDE.encode(),
+                    "query_string": b"",
+                    "client": ("127.0.0.1", 8090),
+                    "server": ("test", 80),
+                    "headers": [
+                        (k.lower().encode(), v.encode()) for k, v in {**h, "content-type": "application/json"}.items()
+                    ],
+                },
+                receive,
+                send,
+            )
         assert [m["status"] for m in sent if m["type"] == "http.response.start"] == [200]
         assert b"".join(m.get("body", b"") for m in sent) == b""
 
