@@ -559,6 +559,10 @@ def test_prepared_finalization_can_win_concurrent_revocation(native):
 
 
 def test_registry_caps_current_process_bindings_and_reclaims_idle_entries(native):
+    import weakref
+
+    from app.services.native_prompt_decisions import _Budget, _Owner
+
     _, _, s, _, _, service = native
     p = principal(native)
 
@@ -567,11 +571,9 @@ def test_registry_caps_current_process_bindings_and_reclaims_idle_entries(native
             deadline = time.monotonic() + 1.8
             requests = [NativePromptRequest(**request_body()) for _ in range(1025)]
             for req in requests[:-1]:
-                from app.services.native_prompt_decisions import _Binding
-
-                entry = _Binding(b"synthetic", deadline)
-                service._register((p.device_id, req.request_id), entry)
-                assert not hasattr(entry, "prompt")
+                owner = _Owner(deadline)
+                service._register((p.device_id, req.request_id), owner, weakref.ref(req), _Budget(deadline))
+                assert not hasattr(owner, "prompt")
             with pytest.raises(NativeError) as err:
                 await service.decide(requests[-1], p, deadline=deadline)
             assert err.value.code == "capacity"
@@ -937,3 +939,186 @@ def test_saturated_http_callback_is_refused_before_consuming_prompt_body(native,
 
     asyncio.run(run())
     assert not model.calls and counts(s, ("native_prompt_decisions",)) == [0]
+
+
+@pytest.mark.parametrize("blocked", ["executor", "checkout", "writer"])
+def test_contended_replay_cannot_wait_past_known_owner_deadline(native, blocked):
+    from concurrent.futures import ThreadPoolExecutor
+    from contextlib import ExitStack
+
+    _, _, sessions, _, model, service = native
+    principal_ = principal(native)
+    request = NativePromptRequest(**request_body())
+    release = threading.Event()
+    started = threading.Event()
+
+    def hold(*args):
+        started.set()
+        assert release.wait(3)
+
+    async def run():
+        owner_deadline = time.monotonic() + 0.42
+        original = await service.decide(request, principal_, deadline=owner_deadline)
+        assert original.returned_action == "deny"
+        loop = asyncio.get_running_loop()
+        engine = sessions.kw["bind"]
+        with ExitStack() as cleanup:
+            if blocked == "executor":
+                loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+                occupied = loop.run_in_executor(None, hold)
+            elif blocked == "checkout":
+                event.listen(engine, "checkout", hold)
+                cleanup.callback(event.remove, engine, "checkout", hold)
+            else:
+                db = cleanup.enter_context(sessions.begin())
+                db.execute(text("BEGIN IMMEDIATE"))
+
+            async def replay():
+                try:
+                    await service.decide(request, principal_, deadline=time.monotonic() + 1.8)
+                except NativeError as error:
+                    return error.code, time.monotonic()
+                pytest.fail("contended duplicate returned a directive")
+
+            task = asyncio.create_task(replay())
+            try:
+                # A later 1.8 s request still has an occupied executor/checkout or
+                # SQLite writer when the original 420 ms budget expires.
+                done, _ = await asyncio.wait({task}, timeout=max(0, owner_deadline - time.monotonic()) + 0.12)
+                assert task in done
+                code, finished = task.result()
+                assert finished <= owner_deadline + 0.12 and code in ("deadline_exceeded", "storage_unavailable")
+                if blocked != "writer":
+                    assert started.is_set() and code == "deadline_exceeded"
+            finally:
+                release.set()
+                if blocked == "executor":
+                    await occupied
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                if blocked != "writer":
+                    await asyncio.gather(*list(service._tasks), return_exceptions=True)
+
+    asyncio.run(run())
+    assert len(model.calls) == 1 and counts(sessions, ("native_prompt_assessments", "native_prompt_decisions")) == [
+        1,
+        1,
+    ]
+
+
+def _inspect_native_queue(service, req, monkeypatch):
+    import dataclasses
+    import hmac
+
+    submitted = asyncio.Event()
+    digest = hmac.digest(service._key, req.model_dump_json(exclude={"budget_ms"}).encode(), "sha256")
+    submit = asyncio.to_thread
+    inspected = []
+    leaked = []
+
+    def carries_content(value):
+        if isinstance(value, NativePromptRequest):
+            return True
+        if isinstance(value, bytes):
+            return len(value) == 32 or digest in value or req.prompt.encode() in value
+        if isinstance(value, str):
+            return req.prompt in value or digest.hex() in value
+        if dataclasses.is_dataclass(value):
+            return any(carries_content(getattr(value, f.name)) for f in dataclasses.fields(value))
+        if isinstance(value, tuple | list):
+            return any(carries_content(item) for item in value)
+        if isinstance(value, dict):
+            return any(carries_content(item) for item in value.values())
+        return False
+
+    async def inspect_queue(func, *args, **kwargs):
+        if getattr(func, "__self__", None) is service:
+            submitted.set()
+            inspected.append(func.__name__)
+            if carries_content(args):
+                leaked.append(func.__name__)
+        return await submit(func, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", inspect_queue)
+
+    return submitted, inspected, leaked
+
+
+def test_full_registry_never_hashes_a_queued_or_over_capacity_new_admission(native, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.services import native_prompt_decisions as module
+
+    c, _, sessions, _, model, _ = native
+    principal_ = principal(native)
+    monkeypatch.setattr(module, "_MAX_BINDINGS", 2)
+    service = install_service(c, sessions, model)
+    new = NativePromptRequest(**{**request_body(), "prompt": "SyntheticFullRegistryMarker"})
+    original_hash = module.hmac.digest
+    hashes = []
+
+    def hash_spy(key, msg, digest):
+        if new.prompt.encode() in msg:
+            hashes.append(True)
+        return original_hash(key, msg, digest)
+
+    release = threading.Event()
+
+    async def run():
+        for _ in range(2):
+            await service.decide(NativePromptRequest(**request_body()), principal_, deadline=time.monotonic() + 1.8)
+        assert len(service._bindings) == 2
+        submitted, inspected, leaked = _inspect_native_queue(service, new, monkeypatch)
+        monkeypatch.setattr(module.hmac, "digest", hash_spy)
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        occupied = loop.run_in_executor(None, release.wait, 3)
+
+        async def attempt():
+            with pytest.raises(NativeError) as error:
+                await service.decide(new, principal_, deadline=time.monotonic() + 1.4)
+            return error.value.code
+
+        task = asyncio.create_task(attempt())
+        try:
+            await asyncio.wait_for(submitted.wait(), 0.4)
+            assert inspected == ["_admit"] and not leaked
+            assert not task.done() and not hashes
+        finally:
+            release.set()
+            await occupied
+            code = await task
+        assert code == "capacity" and len(service._bindings) == 2 and not hashes
+
+    asyncio.run(run())
+    assert len(model.calls) == 2 and counts(sessions, ("native_prompt_assessments", "native_prompt_decisions")) == [
+        2,
+        2,
+    ]
+
+
+def test_db_worker_arguments_never_include_raw_or_keyed_content(native, monkeypatch):
+    _, _, sessions, _, model, service = native
+    principal_ = principal(native)
+    req = NativePromptRequest(**{**request_body(), "prompt": "SyntheticQueueMarker"})
+    _, inspected, leaked = _inspect_native_queue(service, req, monkeypatch)
+
+    async def run():
+        one = await service.decide(req, principal_, deadline=time.monotonic() + 1.8)
+        two = await service.decide(req, principal_, deadline=time.monotonic() + 1.8)
+        assert one == two
+
+        async def edit_policy():
+            await asyncio.to_thread(change, sessions, "policy")
+
+        model.during = edit_policy
+        later = NativePromptRequest(**{**request_body(), "prompt": req.prompt})
+        with pytest.raises(NativeError) as error:
+            await service.decide(later, principal_, deadline=time.monotonic() + 1.8)
+        assert error.value.code == "policy_changed"
+
+    asyncio.run(run())
+    assert {"_admit", "_dispatch_check", "_finalize", "_abandon"} <= set(inspected)
+    assert not leaked
+    assert len(model.calls) == 2 and counts(sessions, ("native_prompt_assessments",)) == [1]

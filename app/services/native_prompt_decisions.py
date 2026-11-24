@@ -79,14 +79,21 @@ class _Budget:
 
 
 @dataclass
-class _Binding:
-    digest: bytes = field(repr=False)
+class _Owner:
+    """Content-free reservation state, safe to pass to a queued database unit."""
+
     deadline: float
     nonce: str = field(default_factory=lambda: str(uuid4()))
     decision_id: str = field(default_factory=lambda: str(uuid4()))
     published_decision_id: str | None = None
     finished: Future[None] = field(default_factory=Future)
     reserved: threading.Event = field(default_factory=threading.Event)
+
+
+@dataclass
+class _Binding:
+    owner: _Owner
+    digest: bytes = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -251,7 +258,7 @@ class NativeDecisionService:
 
     def _purge_bindings(self, now: float) -> None:
         for key, entry in list(self._bindings.items()):
-            if now >= entry.deadline:
+            if now >= entry.owner.deadline:
                 entry.digest = b""
                 del self._bindings[key]
 
@@ -260,14 +267,37 @@ class NativeDecisionService:
             self._purge_bindings(time.monotonic())
             return self._bindings.get(key)
 
-    def _register(self, key: tuple[str, str], entry: _Binding) -> None:
+    def _known_deadline(self, key: tuple[str, str], deadline: float) -> float:
+        # This timing hint can only shorten the wait before checkout. Identity
+        # decisions and content comparisons require fresh transactional authority.
+        with self._bindings_lock:
+            binding = self._bindings.get(key)
+            if binding is not None and time.monotonic() < binding.owner.deadline:
+                return min(deadline, binding.owner.deadline)
+        return deadline
+
+    def _digest(self, source: weakref.ReferenceType[NativePromptRequest], budget: _Budget) -> bytes:
+        budget.check()
+        request = source()
+        if request is None:
+            raise NativeError("request_retired", 409)
+        try:
+            return hmac.digest(self._key, request.model_dump_json(exclude={"budget_ms"}).encode(), "sha256")
+        finally:
+            del request
+
+    def _register(
+        self, key: tuple[str, str], owner: _Owner, source: weakref.ReferenceType[NativePromptRequest], budget: _Budget
+    ) -> None:
         with self._bindings_lock:
             self._purge_bindings(time.monotonic())
             if key in self._bindings:
                 raise NativeError("request_retired", 409)
             if len(self._bindings) >= _MAX_BINDINGS:
                 raise NativeError("capacity", 503)
-            self._bindings[key] = entry
+            # Only an authorized reservation with space for a binding may
+            # compute a new HMAC. No executor argument ever carries this value.
+            self._bindings[key] = _Binding(owner, self._digest(source, budget))
 
     def can_return(self, principal: NativePrincipal, reply: NativeDecisionReply, *, deadline: float) -> bool:
         # The transport can take time to render a replay after its DB check.
@@ -275,13 +305,18 @@ class NativeDecisionService:
             entry = self._bindings.get((principal.device_id, reply.request_id))
             return (
                 entry is not None
-                and entry.published_decision_id == reply.decision_id
-                and time.monotonic() < min(entry.deadline, deadline)
+                and entry.owner.published_decision_id == reply.decision_id
+                and time.monotonic() < min(entry.owner.deadline, deadline)
             )
 
     def _admit(
-        self, request: _RequestMetadata, p: NativePrincipal, candidate: _Binding, budget: _Budget
-    ) -> _Reservation | NativeDecisionReply | _Binding:
+        self,
+        request: _RequestMetadata,
+        source: weakref.ReferenceType[NativePromptRequest],
+        p: NativePrincipal,
+        candidate: _Owner,
+        budget: _Budget,
+    ) -> _Reservation | NativeDecisionReply | _Owner:
         with self._transaction(budget) as session:
             _authority(session, p)
             snapshot = _snapshot(session, p)
@@ -315,20 +350,24 @@ class NativeDecisionService:
                 entry = self._binding(key)
                 if (
                     entry is None
-                    or d.owner_nonce != entry.nonce
+                    or d.owner_nonce != entry.owner.nonce
                     or d.process_id != str(self.process_id)
                     or d.status == "abandoned"
                     or as_utc(d.expires_at) <= _now()
                 ):
                     raise NativeError("request_retired", 409)
-                if not hmac.compare_digest(candidate.digest, entry.digest):
+                budget.deadline = min(budget.deadline, entry.owner.deadline)
+                if not hmac.compare_digest(self._digest(source, budget), entry.digest):
                     raise NativeError("identity_conflict", 409)
                 if d.policy_revision != snapshot.revision:
                     raise NativeError("policy_changed", 409)
-                budget.deadline = min(budget.deadline, entry.deadline)
-                if not entry.finished.done():
-                    return entry
-                if entry.published_decision_id != d.decision_id or d.status != "committed" or not d.response_prepared:
+                if not entry.owner.finished.done():
+                    return entry.owner
+                if (
+                    entry.owner.published_decision_id != d.decision_id
+                    or d.status != "committed"
+                    or not d.response_prepared
+                ):
                     raise NativeError("request_retired", 409)
                 detail = session.get(NativePromptAssessment, d.decision_id)
                 if detail is None:
@@ -336,7 +375,7 @@ class NativeDecisionService:
                 reply = _reply(d, detail)
                 _authority(session, p)
                 return reply
-            self._register(key, candidate)
+            self._register(key, candidate, source, budget)
             now = _now()
             obs = upsert_native_observation(session, p, request.observation, now=now)
             d = Decision(
@@ -367,7 +406,7 @@ class NativeDecisionService:
         return _Reservation(did, iid, snapshot)
 
     def _owned(
-        self, session: Session, p: NativePrincipal, entry: _Binding, reservation: _Reservation
+        self, session: Session, p: NativePrincipal, entry: _Owner, reservation: _Reservation
     ) -> NativePromptDecision:
         _authority(session, p)
         d = session.scalar(
@@ -394,7 +433,7 @@ class NativeDecisionService:
             raise NativeError("policy_changed", 409)
         return d
 
-    def _dispatch_check(self, p: NativePrincipal, entry: _Binding, reservation: _Reservation, budget: _Budget) -> None:
+    def _dispatch_check(self, p: NativePrincipal, entry: _Owner, reservation: _Reservation, budget: _Budget) -> None:
         with self._transaction(budget, write=False) as session:
             _authority(session, p)
             nonce = session.scalar(
@@ -408,7 +447,7 @@ class NativeDecisionService:
                 raise NativeError("request_retired", 409)
 
     def _finalize(
-        self, p: NativePrincipal, entry: _Binding, reservation: _Reservation, outcome: NativeOutcome, budget: _Budget
+        self, p: NativePrincipal, entry: _Owner, reservation: _Reservation, outcome: NativeOutcome, budget: _Budget
     ) -> NativeDecisionReply:
         with self._transaction(budget) as session:
             d = self._owned(session, p, entry, reservation)
@@ -449,7 +488,7 @@ class NativeDecisionService:
             _authority(session, p)
         return reply
 
-    def _abandon(self, entry: _Binding, reason: str) -> None:
+    def _abandon(self, entry: _Owner, reason: str) -> None:
         try:
             with self._transaction(_Budget(time.monotonic() + 1)) as session:
                 session.execute(
@@ -486,27 +525,24 @@ class NativeDecisionService:
             or (request.input_state != "capture_disabled" and not principal.capture_allowed)
         ):
             raise NativeError("unauthorized", 403)
-        # The database receives only the closed source metadata and an opaque
-        # process HMAC. Fresh authority inside admission precedes any binding
-        # lookup or comparison, including on an existing decision.
         metadata = _RequestMetadata(request.request_id, request.observation, request.input_state)
-        entry = _Binding(
-            hmac.digest(self._key, request.model_dump_json(exclude={"budget_ms"}).encode(), "sha256"), deadline
-        )
+        budget.deadline = self._known_deadline((principal.device_id, request.request_id), deadline)
+        source = weakref.ref(request)
+        entry = _Owner(budget.deadline)
         cause = "request_retired"
         try:
             async with asyncio.timeout(max(0, budget.deadline - time.monotonic())) as timeout:
-                reservation = await self._worker(self._admit, metadata, principal, entry, budget, slot=slot)
-                if isinstance(reservation, _Binding):
+                reservation = await self._worker(self._admit, metadata, source, principal, entry, budget, slot=slot)
+                if isinstance(reservation, _Owner):
                     timeout.reschedule(asyncio.get_running_loop().time() + max(0, budget.deadline - time.monotonic()))
                     await asyncio.shield(asyncio.wrap_future(reservation.finished))
-                    reservation = await self._worker(self._admit, metadata, principal, entry, budget, slot=slot)
-                    if isinstance(reservation, _Binding):
+                    reservation = await self._worker(self._admit, metadata, source, principal, entry, budget, slot=slot)
+                    if isinstance(reservation, _Owner):
                         raise NativeError("request_retired", 409)
                 if isinstance(reservation, NativeDecisionReply):
                     budget.check()
                     return reservation
-                precheck = await self._worker(_precheck, reservation.snapshot, weakref.ref(request), budget, slot=slot)
+                precheck = await self._worker(_precheck, reservation.snapshot, source, budget, slot=slot)
                 budget.check()
                 assessment = None
                 if request.input_state in ("unsupported", "input_too_large"):
@@ -565,8 +601,6 @@ class NativeDecisionService:
         finally:
             del request
             budget.cancelled.set()
-            if not entry.reserved.is_set():
-                entry.digest = b""
             entry.finished.set_result(None)
             # System cleanup cannot authorize a response; its independent budget
             # is never applied to model I/O, evaluation or wire preparation.
@@ -621,9 +655,9 @@ class NativeDecisionService:
             else:
                 with self._bindings_lock:
                     live = [
-                        e.nonce
-                        for e in self._bindings.values()
-                        if not e.finished.done() and e.deadline > time.monotonic()
+                        binding.owner.nonce
+                        for binding in self._bindings.values()
+                        if not binding.owner.finished.done() and binding.owner.deadline > time.monotonic()
                     ]
                 session.execute(
                     update(Decision)
