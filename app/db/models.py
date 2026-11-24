@@ -865,7 +865,7 @@ class CollectorOutcome(Base):
 def _hex64(column: str) -> CheckConstraint:
     return CheckConstraint(
         f"typeof({column})='text' AND length({column})=64 AND "
-        f"length(CAST({column} AS BLOB))=64 AND {column} NOT GLOB '*[^0-9a-f]*'"
+        f"instr({column},char(0))=0 AND {column} NOT GLOB '*[^0-9a-f]*'"
     )
 
 
@@ -874,7 +874,7 @@ def _utc_timestamp(column: str) -> CheckConstraint:
     # Round trip whole seconds to reject invalid dates; do not round fractions through julianday.
     whole = f"substr({column},1,19)"
     return CheckConstraint(
-        f"typeof({column})='text' AND length({column})=26 AND length(CAST({column} AS BLOB))=26 AND "
+        f"typeof({column})='text' AND length({column})=26 AND instr({column},char(0))=0 AND "
         f"substr({column},1,4)!='0000' AND {whole} IS datetime(unixepoch({whole}), 'unixepoch') AND "
         f"substr({column},20,1)='.' AND substr({column},21,6) NOT GLOB '*[^0-9]*'"
     )
@@ -883,7 +883,7 @@ def _utc_timestamp(column: str) -> CheckConstraint:
 def _uuid4_check(column: str) -> CheckConstraint:
     digits = f"replace({column},'-','')"
     return CheckConstraint(
-        f"typeof({column})='text' AND length({column})=36 AND length(CAST({column} AS BLOB))=36 AND "
+        f"typeof({column})='text' AND length({column})=36 AND instr({column},char(0))=0 AND "
         f"length({digits})=32 AND "
         f"{digits} NOT GLOB '*[^0-9a-f]*' AND substr({column},9,1)='-' AND substr({column},14,2)='-4' AND "
         f"substr({column},19,1)='-' AND substr({column},20,1) IN ('8','9','a','b') AND substr({column},24,1)='-'"

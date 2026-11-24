@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 from app.db.engine import get_engine, get_session_factory
 from app.db.models import Policy
 from tests.test_agent_event_ingest import DEVICE, provision
@@ -177,4 +179,65 @@ def test_scoped_parents_and_closed_evidence_checks_on_migrated_storage(tmp_path)
     ]:
         with sessions.begin() as db, pytest.raises(IntegrityError):
             db.execute(text(f"UPDATE native_prompt_{table} SET {assignment}"))
+    engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("encoding", "migrate"), [("UTF-8", True), ("UTF-16le", True), ("UTF-16be", True), ("UTF-16le", False)]
+)
+def test_issue_native_grant_respects_database_encoding(tmp_path, encoding, migrate):
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import text
+
+    from app.auth.key_utils import hash_key
+    from app.db.models import Base, RuleSet
+    from app.native_prompt import NativeGrantRequest, NativePolicySettings
+    from app.services.native_prompt_grants import authorize_native, configure_native, issue_native_grant
+
+    db = tmp_path / "encoded.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute(f"PRAGMA encoding='{encoding}'")
+        # Persist the selected SQLite file encoding before Alembic opens its own connection.
+        conn.executescript("CREATE TABLE initialize_encoding (id INTEGER); DROP TABLE initialize_encoding;")
+    engine = get_engine(f"sqlite:///{db}")
+    sessions = get_session_factory(engine)
+    if migrate:
+        _alembic(db, "upgrade", "c81b0704d921")
+    else:
+        Base.metadata.create_all(engine)
+    with sessions.begin() as session:
+        session.add(Policy(id="A", name="A"))
+        session.flush()
+        session.add(RuleSet(policy_id="A", event_type="input", detectors={"malicious_prompt": {"action": "block"}}))
+    _, collector = provision(sessions)
+    if migrate:
+        _alembic(db, "upgrade", "9a42c7d3e601")
+    at = datetime(2026, 1, 2, 12, 0, 0, 123456, tzinfo=UTC)
+    with sessions.begin() as session:
+        session.execute(text("BEGIN IMMEDIATE"))
+        configure_native(session, "A", NativePolicySettings(enabled=True), "A")
+    with sessions.begin() as session:
+        session.execute(text("BEGIN IMMEDIATE"))
+        grant = issue_native_grant(
+            session,
+            NativeGrantRequest(
+                device_id=DEVICE,
+                session_token="a" * 64,
+                native_profile="claude-code.user-prompt-submit.1",
+                ttl_seconds=60,
+            ),
+            "A",
+            now=at,
+        )
+    assert grant.expires_at == (at + timedelta(seconds=60)).isoformat()
+    with sessions.begin() as session:
+        principal = authorize_native(session, collector.token_hash, hash_key(grant.capability), now=at)
+        assert principal.grant_id == grant.grant_id
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("PRAGMA encoding").fetchone() == (encoding,)
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        for column in ("grant_id", "session_token", "capability_hash", "issued_at", "expires_at"):
+            with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
+                conn.execute(f"UPDATE native_prompt_grants SET {column}={column}||char(0)||'extra'")
     engine.dispose()
