@@ -1,6 +1,6 @@
 """Administer scoped native sessions and accept metadata-only observations."""
 
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -51,6 +51,19 @@ async def read_native_body(request: Request, dto: type[T]) -> T:
     except HTTPException as exc:
         raise NativeError("invalid_request", exc.status_code) from None
     return parse_wire(data, dto)
+
+
+def _body_of(dto: type[T]) -> Callable[[Request], Awaitable[T]]:
+    async def read(request: Request) -> T:
+        return await read_native_body(request, dto)
+
+    return read
+
+
+async def _require_empty_body(request: Request) -> None:
+    async for chunk in request.stream():
+        if chunk:
+            raise NativeError("invalid_request", 422)
 
 
 def native_refusal(error: NativeError, request_id: str | None = None) -> JSONResponse:
@@ -104,22 +117,24 @@ def _admin_scope(request: Request, session: Session) -> str | None:
 
 
 @router.put("/v1/policies/{policy_id}/native-prompt", dependencies=_ADMIN)
-async def configure(request: Request, policy_id: str):
-    body = await read_native_body(request, NativePolicySettings)
+def configure(
+    request: Request, policy_id: str, body: Annotated[NativePolicySettings, Depends(_body_of(NativePolicySettings))]
+):
     with _write(request) as session:
         config = configure_native(session, policy_id, body, _admin_scope(request, session))
     return JSONResponse(NativeConfigAck(policy_id=policy_id, **asdict(config)).model_dump(), headers=_PRIVATE)
 
 
 @router.post("/v1/native-prompt/grants", dependencies=_ADMIN, status_code=201)
-async def issue(request: Request):
-    body = await read_native_body(request, NativeGrantRequest)
+def issue(request: Request, body: Annotated[NativeGrantRequest, Depends(_body_of(NativeGrantRequest))]):
     with _write(request) as session:
         result = issue_native_grant(session, body, _admin_scope(request, session), now=datetime.now(UTC))
     return JSONResponse(result.model_dump(), status_code=201, headers=_PRIVATE)
 
 
-@router.delete("/v1/native-prompt/grants/{grant_id}", dependencies=_ADMIN, status_code=204)
+@router.delete(
+    "/v1/native-prompt/grants/{grant_id}", dependencies=[*_ADMIN, Depends(_require_empty_body)], status_code=204
+)
 def revoke(request: Request, grant_id: str):
     with _write(request) as session:
         revoke_native_grant(session, grant_id, _admin_scope(request, session), now=datetime.now(UTC))
@@ -127,8 +142,11 @@ def revoke(request: Request, grant_id: str):
 
 
 @router.post("/v1/native-prompt/observations")
-async def observe(request: Request, principal: Annotated[NativePrincipal, Depends(require_native)]):
-    metadata = await read_native_body(request, NativeMetadata)
+def observe(
+    request: Request,
+    principal: Annotated[NativePrincipal, Depends(require_native)],
+    metadata: Annotated[NativeMetadata, Depends(_body_of(NativeMetadata))],
+):
     with _write(request) as session:
 
         def recheck(now: datetime) -> None:

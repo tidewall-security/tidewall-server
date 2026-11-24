@@ -691,3 +691,13 @@ def test_entering_a_receipt_index_accounts_for_its_implicit_rowid_slot():
             "id",
             "ordinal",
         ]
+
+
+@pytest.mark.parametrize("change", ["COLLATE NOCASE", "DESC"])
+def test_native_parent_index_collation_and_direction_are_pinned(scratch, change):
+    scratch.execute("DROP INDEX uq_native_session_scope")
+    scratch.execute(
+        "CREATE UNIQUE INDEX uq_native_session_scope ON agent_sessions "
+        f"(session_id,device_id,policy_id,agent,native_session_token {change})"
+    )
+    assert any(v.kind == "native-index-slots" and v.detail == "agent_sessions" for v in invariant(scratch))

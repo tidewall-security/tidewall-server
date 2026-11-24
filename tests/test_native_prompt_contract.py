@@ -3,6 +3,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from jsonschema import Draft202012Validator
 
 META = dict(
     version=1,
@@ -74,6 +75,13 @@ def test_size_before_parsing():
         parse_wire(raw + b" ", NativePromptRequest)
 
 
+def _unique_vector_object(pairs):
+    obj = dict(pairs)
+    if len(obj) != len(pairs):
+        raise ValueError("duplicate field")
+    return obj
+
+
 def test_published_vectors():
     from app import native_prompt as wire
 
@@ -81,9 +89,32 @@ def test_published_vectors():
     schema = json.loads((root / "native_prompt_v1.json").read_bytes())
     assert "prompt_list_failed" in json.dumps(schema)
     vectors = json.loads((root / "native_prompt_v1_vectors.json").read_bytes())
+    Draft202012Validator.check_schema(schema)
+    requests = {
+        fields[0]: schema["x-request-max-bytes"][path] for path, fields in schema["x-endpoints"].items() if fields[0]
+    }
     for item in vectors:
         dto = getattr(wire, item["type"])
         raw = bytes.fromhex(item["hex"])
+        definition = schema["$defs"][item["type"]]
+        limit = requests.get(item["type"], definition.get("x-max-utf8-json-bytes"))
+        assert limit == dto.byte_limit
+        # JSON Schema operates on decoded values. Check wire framing independently first.
+        try:
+            obj = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_vector_object)
+        except ValueError:
+            accepted = False
+        else:
+            accepted = len(raw) <= limit and _schema_validator(schema, item["type"]).is_valid(obj)
+            if accepted and item["type"] == "NativePromptRequest" and "prompt" in obj:
+                prompt = obj["prompt"]
+                constraints = definition["properties"]["prompt"]
+                accepted = (
+                    len(prompt.encode()) <= constraints["x-max-decoded-utf8-bytes"]
+                    and bool(prompt.strip())
+                    and all(t not in prompt for t in constraints["x-forbidden-substrings"])
+                )
+        assert accepted is item["valid"], item["name"]
         if item["valid"]:
             wire.parse_wire(raw, dto)
         else:
@@ -149,3 +180,62 @@ def test_successful_report_finding_is_observational_and_failure_can_enforce():
     reply["assessment"].update(status="failed", reason="prompt_list_failed")
     reply["reason"] = "prompt_list_failed"
     assert parse_wire(json.dumps(reply).encode(), NativeDecisionReply).returned_action == "deny"
+
+
+def test_published_standalone_endpoint_byte_limits():
+    from app.native_prompt import NativeError, NativeMetadata, NativePromptRequest, parse_wire
+
+    root = Path(__file__).resolve().parents[1] / "contracts"
+    schema = json.loads((root / "native_prompt_v1.json").read_bytes())
+    cap = schema["x-request-max-bytes"]
+    for route, dto, size, payload in [
+        ("POST /v1/native-prompt/observations", NativeMetadata, 2048, META),
+        ("POST /v1/native-prompt/decisions", NativePromptRequest, 16384, DECISION),
+    ]:
+        assert cap[route] == size
+        assert schema["x-endpoints"][route][0] == dto.__name__
+        raw = json.dumps(payload).encode().ljust(size)
+        assert parse_wire(raw, dto)
+        with pytest.raises(NativeError):
+            parse_wire(raw + b" ", dto)
+
+
+def _schema_validator(schema, name):
+    return Draft202012Validator({"$schema": schema["$schema"], "$defs": schema["$defs"], "$ref": "#/$defs/" + name})
+
+
+@pytest.mark.parametrize(
+    ("evaluated", "returned", "valid"),
+    [
+        ("deny", "allow", False),
+        ("allow", "allow", False),
+        ("unknown", "deny", False),
+        ("deny", "deny", True),
+        ("unknown", "allow", True),
+        ("unknown", None, True),
+    ],
+)
+@pytest.mark.parametrize(
+    ("status", "reason"),
+    [("failed", "prompt_list_failed"), ("unsupported", "input_too_large"), ("unavailable", "classifier_unavailable")],
+)
+def test_incomplete_action_pairs_in_dto_and_published_schema(evaluated, returned, valid, status, reason):
+    from app.native_prompt import NativeDecisionReply, NativeError, parse_wire
+
+    root = Path(__file__).resolve().parents[1] / "contracts"
+    published = json.loads((root / "native_prompt_v1.json").read_bytes())
+    vectors = json.loads((root / "native_prompt_v1_vectors.json").read_bytes())
+    reply = json.loads(bytes.fromhex(next(v["hex"] for v in vectors if v["name"] == "valid NativeDecisionReply")))
+    reply.update(
+        assessment=dict(profile="tidewall.prompt-injection.1", reason=reason, status=status),
+        reason=reason,
+        evaluated_action=evaluated,
+        returned_action=returned,
+    )
+    matches = _schema_validator(published, "NativeDecisionReply").is_valid(reply)
+    assert matches is valid
+    if valid:
+        parse_wire(json.dumps(reply).encode(), NativeDecisionReply)
+    else:
+        with pytest.raises(NativeError):
+            parse_wire(json.dumps(reply).encode(), NativeDecisionReply)

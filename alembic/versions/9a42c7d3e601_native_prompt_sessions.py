@@ -10,10 +10,22 @@ branch_labels = None
 depends_on = None
 
 
+def _utc_timestamp(column: str) -> sa.CheckConstraint:
+    # SQLite stores the ORM UTC instant as YYYY-MM-DD HH:MM:SS.ffffff.
+    # Round trip whole seconds to reject invalid dates; do not round fractions through julianday.
+    whole = f"substr({column},1,19)"
+    return sa.CheckConstraint(
+        f"typeof({column})='text' AND length({column})=26 AND length(CAST({column} AS BLOB))=26 AND "
+        f"substr({column},1,4)!='0000' AND {whole} IS datetime(unixepoch({whole}), 'unixepoch') AND "
+        f"substr({column},20,1)='.' AND substr({column},21,6) NOT GLOB '*[^0-9]*'"
+    )
+
+
 def _uuid4_check(column: str) -> sa.CheckConstraint:
     digits = f"replace({column},'-','')"
     return sa.CheckConstraint(
-        f"typeof({column})='text' AND length({column})=36 AND length({digits})=32 AND "
+        f"typeof({column})='text' AND length({column})=36 AND length(CAST({column} AS BLOB))=36 AND "
+        f"length({digits})=32 AND "
         f"{digits} NOT GLOB '*[^0-9a-f]*' AND substr({column},9,1)='-' AND substr({column},14,2)='-4' AND "
         f"substr({column},19,1)='-' AND substr({column},20,1) IN ('8','9','a','b') AND substr({column},24,1)='-'"
     )
@@ -68,21 +80,24 @@ def upgrade() -> None:
         sa.Column("issued_at", sa.DateTime(), nullable=False),
         sa.Column("expires_at", sa.DateTime(), nullable=False),
         sa.Column("revoked_at", sa.DateTime(), nullable=True),
+        _utc_timestamp("issued_at"),
+        _utc_timestamp("expires_at"),
         sa.CheckConstraint(
-            "julianday(issued_at) IS NOT NULL AND julianday(expires_at) IS NOT NULL AND expires_at>issued_at AND "
             "((unixepoch(substr(expires_at,1,19))-unixepoch(substr(issued_at,1,19)))*1000000 + "
-            "CAST(substr(expires_at || '.000000',21,6) AS INTEGER) - CAST(substr(issued_at || '.000000',21,6) AS "
-            "INTEGER)) BETWEEN 1 AND 1800000000"
+            "CAST(substr(expires_at,21,6) AS INTEGER) - CAST(substr(issued_at,21,6) AS INTEGER)) "
+            "BETWEEN 1 AND 1800000000"
         ),
         sa.CheckConstraint("native_profile='claude-code.user-prompt-submit.1' AND agent='claude-code'"),
         sa.CheckConstraint(
-            "typeof(capability_hash)='text' AND length(capability_hash)=64 AND capability_hash NOT GLOB '*[^0-9a-f]*'"
+            "typeof(capability_hash)='text' AND length(capability_hash)=64 AND "
+            "length(CAST(capability_hash AS BLOB))=64 AND capability_hash NOT GLOB '*[^0-9a-f]*'"
         ),
         sa.CheckConstraint("typeof(grant_generation)='integer' AND grant_generation BETWEEN 1 AND 9007199254740991"),
         _uuid4_check("grant_id"),
         sa.CheckConstraint("typeof(policy_generation)='integer' AND policy_generation BETWEEN 1 AND 9007199254740991"),
         sa.CheckConstraint(
-            "typeof(session_token)='text' AND length(session_token)=64 AND session_token NOT GLOB '*[^0-9a-f]*'"
+            "typeof(session_token)='text' AND length(session_token)=64 AND "
+            "length(CAST(session_token AS BLOB))=64 AND session_token NOT GLOB '*[^0-9a-f]*'"
         ),
         sa.CheckConstraint(
             "(capture_allowed=1 AND session_id IS NOT NULL) OR (capture_allowed=0 AND session_id IS NULL)"
@@ -126,7 +141,8 @@ def upgrade() -> None:
         _uuid4_check("event_id"),
         _uuid4_check("occurrence_id"),
         sa.CheckConstraint(
-            "typeof(session_token)='text' AND length(session_token)=64 AND session_token NOT GLOB '*[^0-9a-f]*'"
+            "typeof(session_token)='text' AND length(session_token)=64 AND "
+            "length(CAST(session_token AS BLOB))=64 AND session_token NOT GLOB '*[^0-9a-f]*'"
         ),
         sa.ForeignKeyConstraint(
             ["session_id", "device_id", "policy_id", "agent", "session_token"],
@@ -201,7 +217,8 @@ def upgrade() -> None:
         _uuid4_check("owner_nonce"),
         sa.CheckConstraint("typeof(policy_generation)='integer' AND policy_generation BETWEEN 1 AND 9007199254740991"),
         sa.CheckConstraint(
-            "typeof(policy_revision)='text' AND length(policy_revision)=64 AND policy_revision NOT GLOB '*[^0-9a-f]*'"
+            "typeof(policy_revision)='text' AND length(policy_revision)=64 AND "
+            "length(CAST(policy_revision AS BLOB))=64 AND policy_revision NOT GLOB '*[^0-9a-f]*'"
         ),
         _uuid4_check("process_id"),
         _uuid4_check("request_id"),

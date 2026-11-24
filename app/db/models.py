@@ -863,13 +863,28 @@ class CollectorOutcome(Base):
 # Native evidence uses bounded scalar columns throughout. Each child references
 # the whole parent scope so a valid UUID cannot be combined with a different tenant.
 def _hex64(column: str) -> CheckConstraint:
-    return CheckConstraint(f"typeof({column})='text' AND length({column})=64 AND {column} NOT GLOB '*[^0-9a-f]*'")
+    return CheckConstraint(
+        f"typeof({column})='text' AND length({column})=64 AND "
+        f"length(CAST({column} AS BLOB))=64 AND {column} NOT GLOB '*[^0-9a-f]*'"
+    )
+
+
+def _utc_timestamp(column: str) -> CheckConstraint:
+    # SQLite stores the ORM UTC instant as YYYY-MM-DD HH:MM:SS.ffffff.
+    # Round trip whole seconds to reject invalid dates; do not round fractions through julianday.
+    whole = f"substr({column},1,19)"
+    return CheckConstraint(
+        f"typeof({column})='text' AND length({column})=26 AND length(CAST({column} AS BLOB))=26 AND "
+        f"substr({column},1,4)!='0000' AND {whole} IS datetime(unixepoch({whole}), 'unixepoch') AND "
+        f"substr({column},20,1)='.' AND substr({column},21,6) NOT GLOB '*[^0-9]*'"
+    )
 
 
 def _uuid4_check(column: str) -> CheckConstraint:
     digits = f"replace({column},'-','')"
     return CheckConstraint(
-        f"typeof({column})='text' AND length({column})=36 AND length({digits})=32 AND "
+        f"typeof({column})='text' AND length({column})=36 AND length(CAST({column} AS BLOB))=36 AND "
+        f"length({digits})=32 AND "
         f"{digits} NOT GLOB '*[^0-9a-f]*' AND substr({column},9,1)='-' AND substr({column},14,2)='-4' AND "
         f"substr({column},19,1)='-' AND substr({column},20,1) IN ('8','9','a','b') AND substr({column},24,1)='-'"
     )
@@ -936,11 +951,12 @@ class NativePromptGrant(Base):
         UniqueConstraint("device_id", "policy_id", "session_token", "native_profile", "grant_generation"),
         CheckConstraint("native_profile='claude-code.user-prompt-submit.1' AND agent='claude-code'"),
         CheckConstraint("(capture_allowed=1 AND session_id IS NOT NULL) OR (capture_allowed=0 AND session_id IS NULL)"),
+        _utc_timestamp("issued_at"),
+        _utc_timestamp("expires_at"),
         CheckConstraint(
-            "julianday(issued_at) IS NOT NULL AND julianday(expires_at) IS NOT NULL AND expires_at>issued_at AND "
             "((unixepoch(substr(expires_at,1,19))-unixepoch(substr(issued_at,1,19)))*1000000 + "
-            "CAST(substr(expires_at || '.000000',21,6) AS INTEGER) - "
-            "CAST(substr(issued_at || '.000000',21,6) AS INTEGER)) BETWEEN 1 AND 1800000000"
+            "CAST(substr(expires_at,21,6) AS INTEGER) - CAST(substr(issued_at,21,6) AS INTEGER)) "
+            "BETWEEN 1 AND 1800000000"
         ),
         _uuid4_check("grant_id"),
         _hex64("session_token"),

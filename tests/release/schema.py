@@ -386,11 +386,18 @@ def invariant(conn: sqlite3.Connection) -> list[InvariantViolation]:
         indexes = {}
         for _, name, unique, _, _ in conn.execute(f"PRAGMA main.index_list('{table}')"):
             # Bind the index name as data, including for drift introduced by an operator.
-            cols = tuple(
-                row[0] for row in conn.execute("SELECT name FROM pragma_index_info(?, 'main') ORDER BY seqno", (name,))
+            slots = tuple(
+                conn.execute(
+                    'SELECT name, coll, "desc" FROM pragma_index_xinfo(?, ?) WHERE key=1 ORDER BY seqno',
+                    (name, "main"),
+                )
             )
-            indexes[name] = (bool(unique), cols)
-        if indexes != pinned_indexes:
+            indexes[name] = (bool(unique), slots)
+        # All native key terms are BINARY ascending, including the parent key used by scoped FKs.
+        expected_slots = {
+            name: (unique, tuple((col, "BINARY", 0) for col in cols)) for name, (unique, cols) in pinned_indexes.items()
+        }
+        if indexes != expected_slots:
             violations.append(InvariantViolation("native-index-slots", table))
 
     observed = referential_actions(conn)

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -107,7 +107,10 @@ def test_fresh_authority_no_writes(fleet, change):
             d.policy_id = "B"
         elif change == "expired":
             db.execute(
-                text("UPDATE native_prompt_grants SET issued_at='2020-01-01 00:00:00',expires_at='2020-01-01 00:01:00'")
+                text(
+                    "UPDATE native_prompt_grants SET issued_at='2020-01-01 00:00:00.000000',"
+                    "expires_at='2020-01-01 00:01:00.000000'"
+                )
             )
     if change == "ABA":
         for threshold in [0.7, 0.5]:
@@ -233,7 +236,131 @@ def test_grant_setup_result_repr_hides_its_only_secret(fleet):
     )
     with sessions.begin() as db:
         db.execute(text("BEGIN IMMEDIATE"))
-        issued = issue_native_grant(db, req, "A", now=datetime.now(UTC))
+        at = datetime(2026, 1, 1, 2, 0, tzinfo=timezone(timedelta(hours=2)))
+        issued = issue_native_grant(db, req, "A", now=at)
+        assert issued.expires_at == "2026-01-01T00:01:00+00:00"
+        assert db.scalar(text("SELECT issued_at FROM native_prompt_grants")) == "2026-01-01 00:00:00.000000"
         assert "capability" not in repr(issued)
         assert issued.capability not in repr(issued)
         assert hash_key(issued.capability) == db.scalar(text("SELECT capability_hash FROM native_prompt_grants"))
+
+
+@pytest.mark.parametrize("actor", ["anonymous", "invalid", "viewer"])
+def test_native_admin_refusals_have_closed_envelope(fleet, actor):
+    c, _, _, _, keys, _ = fleet
+    headers = {"anonymous": {}, "invalid": {"Authorization": "Bearer ak_invalid"}, "viewer": keys["viewer", "A"]}[actor]
+    for method, path in [("PUT", CFG), ("POST", GRANT), ("DELETE", GRANT + "/" + str(uuid4()))]:
+        r = c.request(method, path, headers=headers, json={"untrusted": "sample"})
+        assert r.status_code == (403 if actor == "viewer" else 401)
+        assert r.json() == {"version": 1, "request_id": None, "code": "unauthorized"}
+        assert r.headers["Cache-Control"] == "no-store"
+
+
+def test_revoke_rejects_nonempty_stream_without_write(fleet):
+    c, h, _, _, _, admin = fleet
+    enable(fleet)
+    grant = issue(fleet).json()
+    r = c.request("DELETE", GRANT + "/" + grant["grant_id"], headers=admin, content=iter([b" ", b"private"]))
+    assert 400 <= r.status_code < 500
+    assert r.json() == {"version": 1, "request_id": None, "code": "invalid_request"}
+    assert c.post(OBS, headers={**h, CAP: grant["capability"]}, json=META).status_code == 200
+
+
+def test_native_database_admission_and_writer_sessions_run_off_event_loop(fleet):
+    import asyncio
+    import threading
+
+    import httpx
+    from sqlalchemy import event
+
+    c, h, s, p, _, admin = fleet
+    engine = s.kw["bind"]
+    observed = []
+
+    def statement(conn, cursor, sql, *args):
+        observed.append(("sql", threading.get_ident()))
+
+    def commit(conn):
+        observed.append(("commit", threading.get_ident()))
+
+    async def run():
+        loop_thread = threading.get_ident()
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=c.app), base_url="http://test") as client:
+            config = await client.put(CFG, headers=admin, json={"enabled": True})
+            assert config.status_code == 200
+            result = await client.post(
+                GRANT,
+                headers=admin,
+                json=dict(
+                    device_id=p.device_id,
+                    session_token=META["session_token"],
+                    native_profile=META["native_profile"],
+                    ttl_seconds=60,
+                ),
+            )
+            assert result.status_code == 201
+            grant = result.json()
+            assert (await client.post(OBS, headers={**h, CAP: grant["capability"]}, json=META)).status_code == 200
+            assert (await client.delete(GRANT + "/" + grant["grant_id"], headers=admin)).status_code == 204
+        assert any(k == "commit" for k, _ in observed)
+        assert all(t != loop_thread for _, t in observed)
+
+    event.listen(engine, "before_cursor_execute", statement)
+    event.listen(engine, "commit", commit)
+    try:
+        asyncio.run(run())
+    finally:
+        event.remove(engine, "before_cursor_execute", statement)
+        event.remove(engine, "commit", commit)
+
+
+def test_contended_native_observation_does_not_delay_health(fleet):
+    import asyncio
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    import httpx
+    from sqlalchemy import event
+
+    c, h, s, _, _, _ = fleet
+    enable(fleet)
+    grant = issue(fleet).json()
+    engine = s.kw["bind"]
+    holding = threading.Event()
+    release = threading.Event()
+
+    def lock():
+        with engine.begin() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            holding.set()
+            return release.wait(3)
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        attempted = asyncio.Event()
+
+        def before(conn, cursor, sql, *args):
+            if sql == "BEGIN IMMEDIATE":
+                loop.call_soon_threadsafe(attempted.set)
+
+        event.listen(engine, "before_cursor_execute", before)
+        try:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=c.app), base_url="http://test") as client:
+                pending = asyncio.create_task(client.post(OBS, headers={**h, CAP: grant["capability"]}, json=META))
+                try:
+                    await asyncio.wait_for(attempted.wait(), 4)
+                    assert (await client.get("/health")).status_code == 200
+                finally:
+                    release.set()
+                assert (await pending).status_code == 200
+        finally:
+            event.remove(engine, "before_cursor_execute", before)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        locked = pool.submit(lock)
+        assert holding.wait(3)
+        try:
+            asyncio.run(run())
+        finally:
+            release.set()
+        assert locked.result(), "writer watchdog elapsed before the event loop served health"

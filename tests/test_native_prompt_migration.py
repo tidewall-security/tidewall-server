@@ -145,7 +145,20 @@ def test_scoped_parents_and_closed_evidence_checks_on_migrated_storage(tmp_path)
                 expires_at=obs.expires_at,
             )
         )
+    # A full 1,800 seconds across UTC midnight is valid down to the last microsecond.
+    with sessions.begin() as db:
+        db.execute(
+            text(
+                "UPDATE native_prompt_grants SET issued_at='2028-02-29 23:45:00.999999', "
+                "expires_at='2028-03-01 00:15:00.999999'"
+            )
+        )
     for table, assignment in [
+        ("deliveries", "report_id=report_id || char(0) || 'extra'"),
+        ("grants", "capability_hash=capability_hash || char(0) || 'extra'"),
+        ("grants", "issued_at='2026-01-01 12:00:00+06:00',expires_at='2026-01-01 12:30:00-06:00'"),
+        ("grants", "issued_at='2026-02-30 11:00:00.000000',expires_at='2026-02-30 11:30:00.000000'"),
+        ("grants", "issued_at='2026-01-01 12:00:00.000000',expires_at='2026-01-01 12:30:00.000001'"),
         ("grants", "session_token='" + "b" * 64 + "'"),
         ("observations", "session_token='" + "b" * 64 + "'"),
         ("deliveries", "report_id='raw-free-text'"),

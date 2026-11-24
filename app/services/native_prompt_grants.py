@@ -2,7 +2,7 @@
 
 import secrets
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
 from sqlalchemy import func, select, update
@@ -109,6 +109,7 @@ def _native_session_exists(
 def issue_native_grant(
     session: Session, request: NativeGrantRequest, actor_policy_id: str | None, *, now: datetime
 ) -> NativeGrantIssued:
+    now = as_utc(now).astimezone(UTC)
     device = session.execute(
         select(
             Device.id,

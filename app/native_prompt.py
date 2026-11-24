@@ -254,6 +254,9 @@ class NativeDecisionReply(WireModel):
         rule_over_unsupported = self.reason == "access_rule_block" and self.assessment.status == "unsupported"
         if self.reason != self.assessment.reason and not rule_over_unsupported:
             raise ValueError("inconsistent assessment and decision reason")
+        if self.assessment.status in ("failed", "unsupported", "unavailable") and self.returned_action is not None:
+            if (self.evaluated_action, self.returned_action) not in {("deny", "deny"), ("unknown", "allow")}:
+                raise ValueError("inconsistent incomplete assessment action")
         if self.returned_action == "deny" and self.evaluated_action != "deny":
             raise ValueError("inconsistent deny")
         if self.reason in ("classifier_positive", "malicious_list"):

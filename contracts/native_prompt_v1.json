@@ -657,6 +657,50 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "assessment": {
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "failed",
+                      "unsupported",
+                      "unavailable"
+                    ]
+                  }
+                }
+              },
+              "returned_action": {
+                "type": "string"
+              }
+            }
+          },
+          "then": {
+            "oneOf": [
+              {
+                "properties": {
+                  "evaluated_action": {
+                    "const": "deny"
+                  },
+                  "returned_action": {
+                    "const": "deny"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "evaluated_action": {
+                    "const": "unknown"
+                  },
+                  "returned_action": {
+                    "const": "allow"
+                  }
+                }
+              }
+            ]
+          }
         }
       ],
       "properties": {
@@ -1525,7 +1569,7 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Select the definition named by each endpoint. Decode strict UTF-8. Reject duplicate fields at every depth, nonfinite numbers, and more than twelve nested containers. Integer fields require a JSON integer literal. Byte limits are checked before decoding. Only a validated, bound, timely committed decision may supply a directive.",
+  "description": "Select the definition named by each endpoint. Decode strict UTF-8. Reject duplicate fields at every depth, nonfinite numbers, and more than twelve nested containers. Integer fields require a JSON integer literal. Byte limits are checked before decoding. Only a validated, bound, timely committed decision may supply a directive. x-request-max-bytes limits the complete request body for the specified method and path. The standalone observation limit does not apply to metadata embedded within a decision request.",
   "title": "Tidewall native prompt v1",
   "x-endpoints": {
     "DELETE /v1/native-prompt/grants/{grant_id}": [
@@ -1553,5 +1597,13 @@
       "NativeConfigAck"
     ]
   },
-  "x-error": "NativeRefusal"
+  "x-error": "NativeRefusal",
+  "x-request-max-bytes": {
+    "DELETE /v1/native-prompt/grants/{grant_id}": 0,
+    "POST /v1/native-prompt/decisions": 16384,
+    "POST /v1/native-prompt/deliveries": 2048,
+    "POST /v1/native-prompt/grants": 2048,
+    "POST /v1/native-prompt/observations": 2048,
+    "PUT /v1/policies/{policy_id}/native-prompt": 2048
+  }
 }
