@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   const auth = window.TidewallAuth;
-  const sections = ['sessions', 'unassigned', 'health', 'observations'];
+  const sections = ['sessions', 'unassigned', 'health', 'observations', 'native-prompts'];
   const requests = new Map();
   let epoch = 0;
   let selected = null;
@@ -29,6 +29,7 @@
       selected = row.session_id;
       panel('sessions').querySelectorAll('.session-link').forEach(b => b.setAttribute('aria-pressed', String(b === link)));
       load('observations');
+      load('native-prompts');
     }, 'session-link');
     link.setAttribute('aria-pressed', String(row.session_id === selected));
     card.append(element('h3', row.agent), link,
@@ -53,6 +54,53 @@
     card.append(element('p', 'Event ' + row.event_id + ' · Device ' + row.device_id));
     return card;
   }
+  const reportStages = [
+    ['Stdout', ['stdout_flushed', 'allow_no_output', 'stdout_failed']],
+    ['Native acknowledgement', ['native_ack_blocked']],
+    ['Controlled effect', ['effect_allow_marker_verified', 'effect_deny_no_effect_verified']],
+    ['Unspecified stage', ['unknown']],
+  ];
+  function appendReports(card, reports) {
+    card.append(element('h4', 'Reporter assertions'));
+    for (const [label, stages] of reportStages) {
+      const matches = reports.filter(report => stages.includes(report.stage));
+      if (!matches.length && !stages.includes('unknown')) card.append(element('p', label + ' · unknown'));
+      for (const report of matches) {
+        const notes = [report.stage, report.evidence_source, report.report_count + (report.report_count === 1 ? ' report' : ' reports'),
+          'latest ' + report.received_at];
+        if (report.tool_count != null) notes.push('tools ' + report.tool_count);
+        if (report.token_count != null) notes.push('tokens ' + report.token_count);
+        if (report.marker_present != null) notes.push('marker ' + report.marker_present);
+        card.append(element('p', label + ' · ' + notes.join(' · ')));
+      }
+    }
+  }
+  function nativeCard(row) {
+    const card = document.createElement('article');
+    const decision = row.decision;
+    const assessment = decision?.assessment;
+    card.append(element('h3', row.agent + ' · UserPromptSubmit'),
+      element('p', 'Reported version ' + row.agent_version + ' · Native profile ' + row.native_profile),
+      element('p', 'Server received ' + row.received_at + ' · Event ' + row.event_id),
+      element('span', assessment ? assessment.status : 'Not assessed', 'assessment'));
+    if (decision) {
+      card.append(element('p', 'Decision ' + decision.status + ' · Reason ' + (decision.reason ?? 'unknown')),
+        element('p', 'Policy revision ' + decision.policy_revision + ' · Mode ' + decision.mode),
+        element('p', 'Input state · ' + decision.input_state));
+    }
+    if (assessment) card.append(element('p', 'Assessment profile ' + assessment.profile + ' · Reason ' + assessment.reason));
+    if (assessment?.status === 'assessed') {
+      card.append(element('p', 'Raw unsafe score · ' + assessment.unsafe_score + ' · ' + assessment.score_kind +
+        ' · Input tokens ' + assessment.input_tokens));
+    }
+    const prepared = decision?.response_prepared;
+    const preparedLabel = prepared == null ? 'unknown' : (prepared ? 'yes' : 'no');
+    card.append(element('p', 'Evaluated action · ' + (decision?.evaluated_action ?? 'unknown') +
+      ' · Response prepared · ' + preparedLabel +
+      ' · Prepared action · ' + (decision?.prepared_action ?? 'unknown')));
+    appendReports(card, decision?.delivery_reports ?? []);
+    return card;
+  }
   function healthCard(row) {
     const card = document.createElement('article');
     const h = row.heartbeat;
@@ -66,8 +114,10 @@
     card.append(element('p', 'Reported losses · ' + (losses.join(', ') || (totals.length ? '0' : 'unknown'))));
     return card;
   }
-  const render = { sessions: sessionCard, unassigned: observationCard, observations: observationCard, health: healthCard };
+  const render = { sessions: sessionCard, unassigned: observationCard, observations: observationCard,
+    'native-prompts': nativeCard, health: healthCard };
   const empty = { sessions: 'No retained sessions.', observations: 'No retained observations.',
+    'native-prompts': 'No retained native prompts.',
     unassigned: 'No unassigned observations.', health: 'No collector health reports.' };
 
   async function load(section, cursor) {
@@ -111,6 +161,7 @@
     selected = null;
     sections.forEach(section => message(section, 'Waiting for authentication…'));
     message('observations', 'Choose a session to view its observations.');
+    message('native-prompts', 'Choose a session to view its native prompts.');
     if (auth.getKey()) ['sessions', 'unassigned', 'health'].forEach(section => load(section));
   }
   auth.onCredentialChange(reset);

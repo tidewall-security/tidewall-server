@@ -11,11 +11,20 @@ from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import case, func, select, text, tuple_
-from sqlalchemy.orm import Session
+from pydantic import TypeAdapter, ValidationError
+from sqlalchemy import and_, case, func, select, text, tuple_
+from sqlalchemy.orm import Session, load_only
 
 from app.auth.dependencies import require_role
-from app.db.models import AgentObservation, AgentSession, CollectorProgress
+from app.db.models import (
+    AgentObservation,
+    AgentSession,
+    CollectorProgress,
+    NativePromptAssessment,
+    NativePromptDecision,
+    NativePromptObservation,
+)
+from app.native_prompt_views import NativePromptPage, attach_report_summaries, project_native_observation
 from app.routes.logs import _read_scope
 from app.utils import as_utc
 
@@ -23,6 +32,7 @@ router = APIRouter(dependencies=[Depends(require_role("viewer"))])
 Limit = Annotated[int, Query(ge=1, le=100)]
 # A restart invalidates pending dashboard pages. No secret reaches the browser.
 _CURSOR_KEY = secrets.token_bytes(32)
+_PAGE_LIMIT = TypeAdapter(Limit)
 
 
 def _scope(request: Request) -> str | None:
@@ -82,14 +92,31 @@ def _page(
 
 
 def _sessions(policy: str | None, now: datetime):
-    count = (
-        select(func.count())
-        .select_from(AgentObservation)
-        .where(AgentObservation.session_id == AgentSession.session_id, AgentObservation.expires_at > now)
-        .correlate(AgentSession)
-        .scalar_subquery()
-    )
+    def live_count(model):
+        return (
+            select(func.count())
+            .select_from(model)
+            .where(model.session_id == AgentSession.session_id, model.expires_at > now)
+            .correlate(AgentSession)
+            .scalar_subquery()
+        )
+
+    count = live_count(AgentObservation) + live_count(NativePromptObservation)
     return _scoped(select(AgentSession, count).where(count > 0), AgentSession, policy)
+
+
+def _require_visible_session(db: Session, session_id: str, policy: str | None, now: datetime) -> None:
+    # Authorize a retained parent before interpreting cursors or reading either detail family.
+    def has_live(model):
+        return (
+            select(model.event_id).where(model.session_id == AgentSession.session_id, model.expires_at > now).exists()
+        )
+
+    parent = _scoped(select(AgentSession.session_id), AgentSession, policy).where(
+        AgentSession.session_id == session_id, has_live(AgentObservation) | has_live(NativePromptObservation)
+    )
+    if db.scalar(parent) is None:
+        raise HTTPException(404, "Session not found")
 
 
 def _session(row: AgentSession, count: int) -> dict:
@@ -154,8 +181,7 @@ def _observations(request: Request, policy: str | None, session_id: str | None, 
         if session_id is not None:
             # Use one SQLite snapshot for the existence check and the page.
             db.execute(text("BEGIN"))
-            if db.execute(_sessions(policy, now).where(AgentSession.session_id == session_id)).first() is None:
-                raise HTTPException(404, "Session not found")
+            _require_visible_session(db, session_id, policy, now)
         query = _scoped(select(AgentObservation), AgentObservation, policy).where(
             AgentObservation.session_id == session_id, AgentObservation.expires_at > now
         )
@@ -177,6 +203,76 @@ def session_observations(
     request: Request, session_id: str, limit: Limit = 50, cursor: str | None = None, policy=Depends(_scope)
 ):
     return _observations(request, policy, session_id, limit, cursor)
+
+
+@router.get("/v1/agent-sessions/{session_id}/native-prompts", response_model=NativePromptPage)
+def session_native_prompts(
+    request: Request,
+    session_id: str,
+    limit: Annotated[str, Query(description="Page size from 1 to 100")] = "50",
+    cursor: str | None = None,
+    policy=Depends(_scope),
+):
+    observation, decision, assessment = NativePromptObservation, NativePromptDecision, NativePromptAssessment
+    with request.app.state.session_factory() as db:
+        db.execute(text("BEGIN"))
+        now = datetime.now(UTC)
+        _require_visible_session(db, session_id, policy, now)
+        # Reject pagination errors only after the caller can see this session.
+        try:
+            page_size = _PAGE_LIMIT.validate_python(limit)
+        except ValidationError:
+            raise HTTPException(422, "Page size must be an integer from 1 to 100") from None
+        query = (
+            _scoped(select(observation, decision, assessment), observation, policy)
+            .where(observation.session_id == session_id, observation.expires_at > now)
+            .outerjoin(decision, and_(decision.event_id == observation.event_id, decision.expires_at > now))
+            .outerjoin(assessment, assessment.decision_id == decision.decision_id)
+            .options(
+                load_only(
+                    observation.event_id,
+                    observation.occurrence_id,
+                    observation.session_id,
+                    observation.agent,
+                    observation.agent_version,
+                    observation.native_profile,
+                    observation.received_at,
+                ),
+                load_only(
+                    decision.decision_id,
+                    decision.request_id,
+                    decision.status,
+                    decision.policy_revision,
+                    decision.mode,
+                    decision.input_state,
+                    decision.reason,
+                    decision.evaluated_action,
+                    decision.response_prepared,
+                    decision.returned_action,
+                ),
+                load_only(
+                    assessment.status,
+                    assessment.reason,
+                    assessment.profile,
+                    assessment.unsafe_score,
+                    assessment.score_kind,
+                    assessment.input_tokens,
+                ),
+            )
+        )
+        page = _page(
+            db,
+            query,
+            observation.received_at,
+            observation.event_id,
+            project_native_observation,
+            scope=policy,
+            query_id=f"native-prompts/{session_id}",
+            limit=page_size,
+            cursor=cursor,
+        )
+        attach_report_summaries(db, page["items"], now)
+        return page
 
 
 @router.get("/v1/agent-observations")

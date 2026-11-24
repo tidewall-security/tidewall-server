@@ -104,7 +104,8 @@ var API = (function () {
         sessions: '/v1/agent-sessions',
         unassigned: '/v1/agent-observations?unassigned=true',
         health: '/v1/collector-health',
-        observations: '/v1/agent-sessions/' + encodeURIComponent(sessionId) + '/observations'
+        observations: '/v1/agent-sessions/' + encodeURIComponent(sessionId) + '/observations',
+        'native-prompts': '/v1/agent-sessions/' + encodeURIComponent(sessionId) + '/native-prompts'
       };
       var path = paths[section];
       if (cursor) path += (path.includes('?') ? '&' : '?') + 'cursor=' + encodeURIComponent(cursor);
