@@ -90,8 +90,12 @@
     }
     if (assessment) card.append(element('p', 'Assessment profile ' + assessment.profile + ' · Reason ' + assessment.reason));
     if (assessment?.status === 'assessed') {
+      const model = assessment.model_identity;
       card.append(element('p', 'Raw unsafe score · ' + assessment.unsafe_score + ' · ' + assessment.score_kind +
-        ' · Input tokens ' + assessment.input_tokens));
+        ' · Input tokens ' + assessment.input_tokens),
+        element('p', 'Base model · ' + model.base + ' · Revision ' + model.base_revision),
+        element('p', 'Adapter · ' + model.adapter + ' · Revision ' + model.adapter_revision),
+        element('p', 'Scorer · ' + model.scoring_implementation));
     }
     const prepared = decision?.response_prepared;
     const preparedLabel = prepared == null ? 'unknown' : (prepared ? 'yes' : 'no');

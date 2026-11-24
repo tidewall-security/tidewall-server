@@ -113,13 +113,15 @@ it('shows native policy preparation and separately attributed reports with unkno
   expect(request).toBeDefined();
   const source = {event_id:'event', occurrence_id:'occurrence', agent:'claude-code', agent_version:'2.1.330',
     native_profile:'<img src=x>', prompt:'synthetic-forbidden-body', content_ref:'synthetic-forbidden-ref', received_at:'2026-01-01T00:00:00Z'};
+  const identity = {base:'<img alt="reported model">', base_revision:'historical-base-revision',
+    adapter:'historical-adapter', adapter_revision:'historical-adapter-revision', scoring_implementation:'<svg aria-label="reported scorer">'};
   const decision = {status:'committed', mode:'report', policy_revision:'actual-revision', reason:'classifier_positive',
     evaluated_action:'deny', prepared_action:'allow', response_prepared:true, assessment:{status:'assessed', unsafe_score:0,
-      score_kind:'two_class_softmax_uncalibrated', input_tokens:72, reason:'classifier_positive', profile:'test-profile'},
+      score_kind:'two_class_softmax_uncalibrated', input_tokens:72, reason:'classifier_positive', profile:'test-profile', model_identity:identity},
     delivery_reports:[{stage:'stdout_failed', evidence_source:'hook', report_count:2, token_count:0, marker_present:false,
       received_at:'2026-01-01T01:02:00Z'}]};
   request.resolve(page([{...source, decision}, {...source, decision:null},
-    {...source, decision:{...decision, assessment:{status:'unsupported', reason:'input_too_large', unsafe_score:0.99},
+    {...source, decision:{...decision, assessment:{status:'unsupported', reason:'input_too_large', unsafe_score:0.99, model_identity:identity},
       reason:'access_rule_block', delivery_reports:[]}}], 'next'));
   await tick();
   const panel = document.querySelector('#native-prompts');
@@ -128,7 +130,12 @@ it('shows native policy preparation and separately attributed reports with unkno
       'Prepared action · allow', 'Response prepared · yes', 'Raw unsafe score · 0', 'two_class_softmax_uncalibrated',
       'Reporter assertions', 'stdout_failed', 'hook', '2 reports', 'tokens 0', 'marker false',
       'Native acknowledgement · unknown', 'Controlled effect · unknown']) expect(assessed).toContain(value);
-  expect(panel.querySelector('img')).toBeNull();
+  for (const value of Object.values(identity)) {
+    expect(assessed).toContain(value);
+    expect(unsupported).not.toContain(value);
+    expect(bare).not.toContain(value);
+  }
+  expect(panel.querySelector('img, svg')).toBeNull();
   expect(panel.textContent).not.toContain('synthetic-forbidden');
   expect(bare).toContain('Not assessed');
   expect(unsupported).toContain('input_too_large');

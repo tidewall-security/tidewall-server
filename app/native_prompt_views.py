@@ -1,5 +1,6 @@
 """Metadata returned by the Sessions dashboard. A reported stage is a reporter's assertion."""
 
+import json
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -10,29 +11,19 @@ from sqlalchemy.orm import Session
 from app.db.models import NativePromptAssessment, NativePromptDecision, NativePromptDelivery, NativePromptObservation
 from app.native_prompt import (
     UUID4,
+    Assessed,
     Counter,
     Failed,
     Hex64,
     InputState,
     NotRequested,
-    Profile,
     Reason,
-    Score,
     SourceProfile,
     Stage,
     Unavailable,
     Unsupported,
 )
 from app.utils import as_utc
-
-
-class AssessedView(BaseModel):
-    status: Literal["assessed"]
-    reason: Literal["clean", "classifier_positive"]
-    profile: Profile
-    unsafe_score: Score
-    score_kind: Literal["two_class_softmax_uncalibrated"]
-    input_tokens: Annotated[int, Field(ge=1, le=1024)]
 
 
 class ReportSummary(BaseModel):
@@ -57,8 +48,7 @@ class DecisionView(BaseModel):
     response_prepared: bool
     prepared_action: Literal["allow", "deny"] | None
     assessment: (
-        Annotated[AssessedView | NotRequested | Unsupported | Unavailable | Failed, Field(discriminator="status")]
-        | None
+        Annotated[Assessed | NotRequested | Unsupported | Unavailable | Failed, Field(discriminator="status")] | None
     )
     delivery_reports: list[ReportSummary]
 
@@ -90,7 +80,10 @@ def project_native_observation(
         if assessment is not None:
             measured = dict(status=assessment.status, reason=assessment.reason, profile=assessment.profile)
             if assessment.status == "assessed":
+                if assessment.model_identity is None:
+                    raise ValueError("Assessed record is missing model identity")
                 measured.update(
+                    model_identity=json.loads(assessment.model_identity),
                     unsafe_score=assessment.unsafe_score,
                     score_kind=assessment.score_kind,
                     input_tokens=assessment.input_tokens,

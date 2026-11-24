@@ -1,11 +1,13 @@
 """Native investigations use a policy-scoped session, first receipt and reported evidence."""
 
 import asyncio
+import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import update
+from sqlalchemy import event, update
 
 from app.db.models import (
     AgentObservation,
@@ -111,6 +113,59 @@ def test_tied_receipts_page_by_occurrence_and_bind_cursors(native, fleet):
     other = next(r["session_id"] for r in read(c, SESSIONS, reader)["items"] if r["session_id"] != sid)
     assert read(c, path(other), reader)["items"] == []
     assert c.get(path(other) + "?cursor=" + cursor, headers=reader).status_code == 400
+
+
+def test_assessed_provenance_is_loaded_from_the_historical_record(native, fleet, monkeypatch):
+    from app import native_prompt
+
+    client, _, sessions, _, classifier, service = native
+    reply = decision(native)
+    with sessions() as db:
+        engine = db.get_bind()
+        stored = json.loads(db.get(NativePromptAssessment, reply["decision_id"]).model_identity)
+    assert stored == reply["assessment"]["model_identity"]
+    # The historical read must work even when today's model configuration is different.
+    replacement = replace(classifier.result.model_identity, adapter="synthetic-current-adapter")
+    monkeypatch.setattr(native_prompt, "MODEL_IDENTITY", replacement)
+    monkeypatch.setattr(native_prompt, "MODEL_IDENTITY_JSON", '{"adapter":"synthetic-current-adapter"}')
+    service.classifier = None
+    statements = []
+
+    def record_sql(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record_sql)
+    try:
+        latest = read(client, path(reply["session_id"]), fleet[4]["viewer", "A"])["items"][0]
+    finally:
+        event.remove(engine, "before_cursor_execute", record_sql)
+    assert latest["decision"]["assessment"]["model_identity"] == stored
+    assert any(
+        "native_prompt_assessments.model_identity" in sql and "JOIN native_prompt_decisions" in sql
+        for sql in statements
+    )
+
+
+@pytest.mark.parametrize(
+    "status, state",
+    [
+        ("not_requested", "capture_disabled"),
+        ("unsupported", "unsupported"),
+        ("unavailable", "complete"),
+        ("failed", "complete"),
+    ],
+)
+def test_every_unassessed_status_omits_model_evidence(native, fleet, status, state):
+    from app.services.prompt_classifier_client import AssessmentResult
+
+    client, _, _, _, classifier, service = native
+    if status == "unavailable":
+        service.classifier = None
+    elif status == "failed":
+        classifier.result = AssessmentResult("failed", "classifier_invalid")
+    reply = decision(native, state)
+    assessment = read(client, path(reply["session_id"]), fleet[4]["viewer", "A"])["items"][0]["decision"]["assessment"]
+    assert assessment["status"] == status and set(assessment) == {"status", "profile", "reason"}
 
 
 def test_historical_preparation_and_bounded_stage_source_assertions(native, fleet):

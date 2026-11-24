@@ -97,17 +97,19 @@ def test_native_content_never_reaches_retained_or_viewer_surfaces(native, tmp_pa
         caplog.text.encode(),
     ]
     assert all(value not in surface for value in raw for surface in artifacts)
+    native_page = surfaces[2].json()
+    historical_identity = native_page["items"][0]["decision"]["assessment"]["model_identity"]
+    assert historical_identity == reply["assessment"]["model_identity"]
+    assert historical_identity["prompt_sha256"] != hashlib.sha256(prompt.encode()).hexdigest()
     viewer_bytes = b" ".join(r.content for r in surfaces)
     for private in [
         *internal,
         "content_ref",
-        "prompt_sha256",
         "capability_hash",
         "owner_nonce",
         "inference_request_id",
         "session_token",
         "process_id",
         "raw_content",
-        "model_identity",
     ]:
         assert private.encode() not in viewer_bytes

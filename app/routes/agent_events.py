@@ -254,6 +254,7 @@ def session_native_prompts(
                     assessment.status,
                     assessment.reason,
                     assessment.profile,
+                    assessment.model_identity,
                     assessment.unsafe_score,
                     assessment.score_kind,
                     assessment.input_tokens,
