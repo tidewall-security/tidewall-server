@@ -476,6 +476,7 @@ def create_app() -> FastAPI:
     async def health() -> dict:
         return {"status": "ok"}
 
+    from app.native_prompt import NativeError
     from app.routes import (
         activity,
         agent_events,
@@ -489,6 +490,7 @@ def create_app() -> FastAPI:
         keys,
         logs,
         me,
+        native_prompt,
         policies,
         registration,
         settings,
@@ -497,6 +499,8 @@ def create_app() -> FastAPI:
 
     app.include_router(agent_events.router)
     app.include_router(collector_ingest.router)
+    app.add_exception_handler(NativeError, native_prompt.native_error_handler)
+    app.include_router(native_prompt.router)
     app.include_router(guard.router)
     app.include_router(unredact.router)
     app.include_router(logs.router)

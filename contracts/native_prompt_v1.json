@@ -1,0 +1,1557 @@
+{
+  "$defs": {
+    "Assessed": {
+      "additionalProperties": false,
+      "properties": {
+        "input_tokens": {
+          "maximum": 1024,
+          "minimum": 1,
+          "title": "Input Tokens",
+          "type": "integer"
+        },
+        "model_identity": {
+          "$ref": "#/$defs/PinnedModel"
+        },
+        "profile": {
+          "const": "tidewall.prompt-injection.1",
+          "title": "Profile",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "clean",
+            "classifier_positive"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "score_kind": {
+          "const": "two_class_softmax_uncalibrated",
+          "title": "Score Kind",
+          "type": "string"
+        },
+        "status": {
+          "const": "assessed",
+          "title": "Status",
+          "type": "string"
+        },
+        "unsafe_score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Unsafe Score",
+          "type": "number"
+        }
+      },
+      "required": [
+        "status",
+        "reason",
+        "profile",
+        "model_identity",
+        "unsafe_score",
+        "score_kind",
+        "input_tokens"
+      ],
+      "title": "Assessed",
+      "type": "object"
+    },
+    "Failed": {
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "const": "tidewall.prompt-injection.1",
+          "title": "Profile",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "classifier_invalid",
+            "prompt_list_failed"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "status": {
+          "const": "failed",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "reason",
+        "profile"
+      ],
+      "title": "Failed",
+      "type": "object"
+    },
+    "NativeConfigAck": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "generation": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "title": "Generation",
+          "type": "integer"
+        },
+        "policy_id": {
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "profile": {
+          "const": "tidewall.prompt-injection.1",
+          "title": "Profile",
+          "type": "string"
+        },
+        "threshold": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Threshold",
+          "type": "number"
+        }
+      },
+      "required": [
+        "enabled",
+        "profile",
+        "threshold",
+        "policy_id",
+        "generation"
+      ],
+      "title": "NativeConfigAck",
+      "type": "object",
+      "x-max-utf8-json-bytes": 2048
+    },
+    "NativeDecisionReply": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "clean"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "assessment": {
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "clean"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "classifier_positive"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "assessment": {
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "classifier_positive"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "access_rule_block"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "assessment": {
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "access_rule_block",
+                      "input_too_large",
+                      "input_unsupported"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "malicious_list"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "assessment": {
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "malicious_list"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "benign_override"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "assessment": {
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "benign_override"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "capture_disabled"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "assessment": {
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "capture_disabled"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "input_too_large"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "assessment": {
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "input_too_large"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "input_unsupported"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "assessment": {
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "input_unsupported"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "classifier_unavailable"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "assessment": {
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "classifier_unavailable"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "classifier_invalid"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "assessment": {
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "classifier_invalid"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "prompt_list_failed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "assessment": {
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "prompt_list_failed"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "deadline_exceeded"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "assessment": {
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "deadline_exceeded"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "policy_changed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "assessment": {
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "policy_changed"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "policy_unsupported"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "assessment": {
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "policy_unsupported"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "authority_changed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "assessment": {
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "authority_changed"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "storage_unavailable"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "assessment": {
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "storage_unavailable"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "request_retired"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "assessment": {
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "request_retired"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "returned_action": {
+                "const": "deny"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "evaluated_action": {
+                "const": "deny"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "access_rule_block"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "evaluated_action": {
+                "const": "deny"
+              },
+              "returned_action": {
+                "enum": [
+                  "deny",
+                  null
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "clean",
+                  "capture_disabled",
+                  "benign_override"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "evaluated_action": {
+                "const": "allow"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "policy_changed",
+                  "policy_unsupported",
+                  "authority_changed",
+                  "storage_unavailable",
+                  "request_retired"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "returned_action": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "classifier_positive",
+                  "malicious_list"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "evaluated_action": {
+                "enum": [
+                  "allow",
+                  "deny"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "report"
+              },
+              "reason": {
+                "enum": [
+                  "classifier_positive",
+                  "malicious_list"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "returned_action": {
+                "enum": [
+                  "allow",
+                  null
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "evaluated_action": {
+                "const": "deny"
+              },
+              "mode": {
+                "const": "enforce"
+              },
+              "reason": {
+                "enum": [
+                  "classifier_positive",
+                  "malicious_list"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "returned_action": {
+                "enum": [
+                  "deny",
+                  null
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "assessment": {
+          "discriminator": {
+            "mapping": {
+              "assessed": "#/$defs/Assessed",
+              "failed": "#/$defs/Failed",
+              "not_requested": "#/$defs/NotRequested",
+              "unavailable": "#/$defs/Unavailable",
+              "unsupported": "#/$defs/Unsupported"
+            },
+            "propertyName": "status"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Assessed"
+            },
+            {
+              "$ref": "#/$defs/NotRequested"
+            },
+            {
+              "$ref": "#/$defs/Unsupported"
+            },
+            {
+              "$ref": "#/$defs/Unavailable"
+            },
+            {
+              "$ref": "#/$defs/Failed"
+            }
+          ],
+          "title": "Assessment"
+        },
+        "decision_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "evaluated_action": {
+          "enum": [
+            "allow",
+            "deny",
+            "unknown"
+          ],
+          "title": "Evaluated Action",
+          "type": "string"
+        },
+        "event_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "grant_generation": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "title": "Grant Generation",
+          "type": "integer"
+        },
+        "grant_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Grant Id",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "report",
+            "enforce"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "occurrence_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Occurrence Id",
+          "type": "string"
+        },
+        "policy_revision": {
+          "maxLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Revision",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "clean",
+            "classifier_positive",
+            "access_rule_block",
+            "malicious_list",
+            "benign_override",
+            "capture_disabled",
+            "input_too_large",
+            "input_unsupported",
+            "classifier_unavailable",
+            "classifier_invalid",
+            "prompt_list_failed",
+            "deadline_exceeded",
+            "policy_changed",
+            "policy_unsupported",
+            "authority_changed",
+            "storage_unavailable",
+            "request_retired"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "request_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "returned_action": {
+          "anyOf": [
+            {
+              "enum": [
+                "allow",
+                "deny"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Returned Action"
+        },
+        "session_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "version": {
+          "maximum": 1,
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "request_id",
+        "occurrence_id",
+        "decision_id",
+        "event_id",
+        "session_id",
+        "grant_id",
+        "grant_generation",
+        "policy_revision",
+        "mode",
+        "assessment",
+        "evaluated_action",
+        "returned_action",
+        "reason"
+      ],
+      "title": "NativeDecisionReply",
+      "type": "object",
+      "x-max-utf8-json-bytes": 8192
+    },
+    "NativeDeliveryAck": {
+      "additionalProperties": false,
+      "properties": {
+        "decision_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "report_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Report Id",
+          "type": "string"
+        },
+        "version": {
+          "maximum": 1,
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "report_id",
+        "decision_id"
+      ],
+      "title": "NativeDeliveryAck",
+      "type": "object",
+      "x-max-utf8-json-bytes": 2048
+    },
+    "NativeDeliveryReport": {
+      "additionalProperties": false,
+      "properties": {
+        "decision_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "evidence_source": {
+          "enum": [
+            "hook",
+            "controlled_observer"
+          ],
+          "title": "Evidence Source",
+          "type": "string"
+        },
+        "marker_present": {
+          "title": "Marker Present",
+          "type": "boolean"
+        },
+        "occurrence_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Occurrence Id",
+          "type": "string"
+        },
+        "report_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Report Id",
+          "type": "string"
+        },
+        "request_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "stage": {
+          "enum": [
+            "stdout_flushed",
+            "allow_no_output",
+            "stdout_failed",
+            "native_ack_blocked",
+            "effect_allow_marker_verified",
+            "effect_deny_no_effect_verified",
+            "unknown"
+          ],
+          "title": "Stage",
+          "type": "string"
+        },
+        "token_count": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Token Count",
+          "type": "integer"
+        },
+        "tool_count": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Tool Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "report_id",
+        "decision_id",
+        "request_id",
+        "occurrence_id",
+        "evidence_source",
+        "stage"
+      ],
+      "title": "NativeDeliveryReport",
+      "type": "object",
+      "x-max-utf8-json-bytes": 2048
+    },
+    "NativeGrantIssued": {
+      "additionalProperties": false,
+      "else": {
+        "properties": {
+          "session_id": {
+            "type": "null"
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "capture_allowed": {
+            "const": true
+          }
+        }
+      },
+      "properties": {
+        "capability": {
+          "maxLength": 43,
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Capability",
+          "type": "string"
+        },
+        "capture_allowed": {
+          "title": "Capture Allowed",
+          "type": "boolean"
+        },
+        "device_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Device Id",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "maxLength": 32,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?\\+00:00$",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "grant_generation": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "title": "Grant Generation",
+          "type": "integer"
+        },
+        "grant_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Grant Id",
+          "type": "string"
+        },
+        "native_profile": {
+          "const": "claude-code.user-prompt-submit.1",
+          "title": "Native Profile",
+          "type": "string"
+        },
+        "policy_generation": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "title": "Policy Generation",
+          "type": "integer"
+        },
+        "policy_id": {
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "maxLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Session Id"
+        },
+        "session_token": {
+          "maxLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Session Token",
+          "type": "string"
+        }
+      },
+      "required": [
+        "capability",
+        "grant_id",
+        "grant_generation",
+        "policy_generation",
+        "policy_id",
+        "device_id",
+        "native_profile",
+        "session_token",
+        "session_id",
+        "capture_allowed",
+        "expires_at"
+      ],
+      "then": {
+        "properties": {
+          "session_id": {
+            "type": "string"
+          }
+        }
+      },
+      "title": "NativeGrantIssued",
+      "type": "object",
+      "x-max-utf8-json-bytes": 2048
+    },
+    "NativeGrantRequest": {
+      "additionalProperties": false,
+      "else": {
+        "not": {
+          "required": [
+            "session_id"
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "capture_allowed": {
+            "const": true
+          }
+        },
+        "required": [
+          "capture_allowed"
+        ]
+      },
+      "properties": {
+        "capture_allowed": {
+          "default": false,
+          "title": "Capture Allowed",
+          "type": "boolean"
+        },
+        "device_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Device Id",
+          "type": "string"
+        },
+        "native_profile": {
+          "const": "claude-code.user-prompt-submit.1",
+          "title": "Native Profile",
+          "type": "string"
+        },
+        "session_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "session_token": {
+          "maxLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Session Token",
+          "type": "string"
+        },
+        "ttl_seconds": {
+          "maximum": 1800,
+          "minimum": 1,
+          "title": "Ttl Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "device_id",
+        "session_token",
+        "native_profile",
+        "ttl_seconds"
+      ],
+      "then": {
+        "required": [
+          "session_id"
+        ]
+      },
+      "title": "NativeGrantRequest",
+      "type": "object",
+      "x-max-utf8-json-bytes": 2048
+    },
+    "NativeMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "const": "claude-code",
+          "title": "Agent",
+          "type": "string"
+        },
+        "agent_version": {
+          "const": "2.1.330",
+          "title": "Agent Version",
+          "type": "string"
+        },
+        "native_profile": {
+          "const": "claude-code.user-prompt-submit.1",
+          "title": "Native Profile",
+          "type": "string"
+        },
+        "occurrence_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Occurrence Id",
+          "type": "string"
+        },
+        "session_token": {
+          "maxLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Session Token",
+          "type": "string"
+        },
+        "version": {
+          "maximum": 1,
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "occurrence_id",
+        "agent",
+        "native_profile",
+        "agent_version",
+        "session_token"
+      ],
+      "title": "NativeMetadata",
+      "type": "object"
+    },
+    "NativeObservationAck": {
+      "additionalProperties": false,
+      "properties": {
+        "event_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "occurrence_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Occurrence Id",
+          "type": "string"
+        },
+        "session_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "version": {
+          "maximum": 1,
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "occurrence_id",
+        "event_id",
+        "session_id"
+      ],
+      "title": "NativeObservationAck",
+      "type": "object",
+      "x-max-utf8-json-bytes": 2048
+    },
+    "NativePolicySettings": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "profile": {
+          "const": "tidewall.prompt-injection.1",
+          "default": "tidewall.prompt-injection.1",
+          "title": "Profile",
+          "type": "string"
+        },
+        "threshold": {
+          "default": 0.5,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Threshold",
+          "type": "number"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "title": "NativePolicySettings",
+      "type": "object",
+      "x-max-utf8-json-bytes": 2048
+    },
+    "NativePromptRequest": {
+      "additionalProperties": false,
+      "else": {
+        "not": {
+          "required": [
+            "prompt"
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "input_state": {
+            "const": "complete"
+          }
+        }
+      },
+      "properties": {
+        "budget_ms": {
+          "maximum": 1800,
+          "minimum": 1,
+          "title": "Budget Ms",
+          "type": "integer"
+        },
+        "input_state": {
+          "enum": [
+            "complete",
+            "capture_disabled",
+            "input_too_large",
+            "unsupported"
+          ],
+          "title": "Input State",
+          "type": "string"
+        },
+        "observation": {
+          "$ref": "#/$defs/NativeMetadata"
+        },
+        "prompt": {
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Prompt",
+          "type": "string",
+          "x-forbidden-substrings": [
+            "<|endoftext|>",
+            "<|im_start|>",
+            "<|im_end|>",
+            "<|object_ref_start|>",
+            "<|object_ref_end|>",
+            "<|box_start|>",
+            "<|box_end|>",
+            "<|quad_start|>",
+            "<|quad_end|>",
+            "<|vision_start|>",
+            "<|vision_end|>",
+            "<|vision_pad|>",
+            "<|image_pad|>",
+            "<|video_pad|>"
+          ],
+          "x-max-decoded-utf8-bytes": 8000,
+          "x-reject-blank": true
+        },
+        "request_id": {
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "version": {
+          "maximum": 1,
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "request_id",
+        "observation",
+        "input_state",
+        "budget_ms"
+      ],
+      "then": {
+        "required": [
+          "prompt"
+        ]
+      },
+      "title": "NativePromptRequest",
+      "type": "object",
+      "x-max-utf8-json-bytes": 16384
+    },
+    "NativeRefusal": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "enum": [
+            "invalid_request",
+            "unauthorized",
+            "grant_expired",
+            "grant_revoked",
+            "identity_conflict",
+            "request_retired",
+            "deadline_exceeded",
+            "policy_changed",
+            "policy_unsupported",
+            "capacity",
+            "storage_unavailable"
+          ],
+          "title": "Code",
+          "type": "string"
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "maxLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Request Id"
+        },
+        "version": {
+          "maximum": 1,
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "request_id",
+        "code"
+      ],
+      "title": "NativeRefusal",
+      "type": "object",
+      "x-max-utf8-json-bytes": 256
+    },
+    "NotRequested": {
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "const": "tidewall.prompt-injection.1",
+          "title": "Profile",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "access_rule_block",
+            "malicious_list",
+            "benign_override",
+            "capture_disabled"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "status": {
+          "const": "not_requested",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "reason",
+        "profile"
+      ],
+      "title": "NotRequested",
+      "type": "object"
+    },
+    "PinnedModel": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "const": "abedegno/prompt-injection-classifier-qwen3-0p6b",
+          "title": "Adapter",
+          "type": "string"
+        },
+        "adapter_revision": {
+          "const": "5500c3bef53729ed4661b5cfae1b01adca96ca4c",
+          "title": "Adapter Revision",
+          "type": "string"
+        },
+        "base": {
+          "const": "Qwen/Qwen3-0.6B",
+          "title": "Base",
+          "type": "string"
+        },
+        "base_revision": {
+          "const": "c1899de289a04d12100db370d81485cdf75e47ca",
+          "title": "Base Revision",
+          "type": "string"
+        },
+        "class_token_ids": {
+          "const": [
+            38157,
+            18675,
+            19860,
+            6092
+          ],
+          "items": {
+            "type": "integer"
+          },
+          "title": "Class Token Ids",
+          "type": "array"
+        },
+        "prompt_sha256": {
+          "const": "3a0e693064509eb24773ba53af4831ecb4c6ca8cf741a28d2d10080384df5041",
+          "title": "Prompt Sha256",
+          "type": "string"
+        },
+        "scoring_implementation": {
+          "const": "qwen3_last_token_logits.1",
+          "title": "Scoring Implementation",
+          "type": "string"
+        },
+        "tokenizer_revision": {
+          "const": "c1899de289a04d12100db370d81485cdf75e47ca",
+          "title": "Tokenizer Revision",
+          "type": "string"
+        }
+      },
+      "required": [
+        "base",
+        "base_revision",
+        "tokenizer_revision",
+        "adapter",
+        "adapter_revision",
+        "prompt_sha256",
+        "scoring_implementation",
+        "class_token_ids"
+      ],
+      "title": "PinnedModel",
+      "type": "object"
+    },
+    "Unavailable": {
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "const": "tidewall.prompt-injection.1",
+          "title": "Profile",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "classifier_unavailable",
+            "deadline_exceeded",
+            "policy_changed",
+            "policy_unsupported",
+            "authority_changed",
+            "storage_unavailable",
+            "request_retired"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "status": {
+          "const": "unavailable",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "reason",
+        "profile"
+      ],
+      "title": "Unavailable",
+      "type": "object"
+    },
+    "Unsupported": {
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "const": "tidewall.prompt-injection.1",
+          "title": "Profile",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "input_unsupported",
+            "input_too_large"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "status": {
+          "const": "unsupported",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "reason",
+        "profile"
+      ],
+      "title": "Unsupported",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Select the definition named by each endpoint. Decode strict UTF-8. Reject duplicate fields at every depth, nonfinite numbers, and more than twelve nested containers. Integer fields require a JSON integer literal. Byte limits are checked before decoding. Only a validated, bound, timely committed decision may supply a directive.",
+  "title": "Tidewall native prompt v1",
+  "x-endpoints": {
+    "DELETE /v1/native-prompt/grants/{grant_id}": [
+      null,
+      null
+    ],
+    "POST /v1/native-prompt/decisions": [
+      "NativePromptRequest",
+      "NativeDecisionReply"
+    ],
+    "POST /v1/native-prompt/deliveries": [
+      "NativeDeliveryReport",
+      "NativeDeliveryAck"
+    ],
+    "POST /v1/native-prompt/grants": [
+      "NativeGrantRequest",
+      "NativeGrantIssued"
+    ],
+    "POST /v1/native-prompt/observations": [
+      "NativeMetadata",
+      "NativeObservationAck"
+    ],
+    "PUT /v1/policies/{policy_id}/native-prompt": [
+      "NativePolicySettings",
+      "NativeConfigAck"
+    ]
+  },
+  "x-error": "NativeRefusal"
+}

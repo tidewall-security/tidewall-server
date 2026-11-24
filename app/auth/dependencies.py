@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from fastapi import HTTPException, Request
 
+from app.native_prompt import NativeError
 from app.services.collector_identity import CollectorPrincipal
+from app.services.native_prompt_grants import NativePrincipal
 
 # Role hierarchy: admin > viewer > api > rt
 _ROLE_HIERARCHY = {"admin": 3, "viewer": 2, "api": 1, "rt": 0}
@@ -83,4 +85,11 @@ def require_collector(request: Request) -> CollectorPrincipal:
     principal = getattr(request.state, "collector_principal", None)
     if not isinstance(principal, CollectorPrincipal):
         raise HTTPException(status_code=403, detail="Collector authority required")
+    return principal
+
+
+def require_native(request: Request) -> NativePrincipal:
+    principal = getattr(request.state, "native_principal", None)
+    if not isinstance(principal, NativePrincipal):
+        raise NativeError("unauthorized", 403)
     return principal

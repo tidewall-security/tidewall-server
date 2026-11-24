@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from datetime import UTC
+import time
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from sqlalchemy.exc import SQLAlchemyError
@@ -15,7 +16,9 @@ from app.auth.dependencies import KNOWN_ROLES
 from app.auth.grants import GrantError, validate_grants
 from app.auth.key_utils import hash_key
 from app.db.models import AccessToken, APIKey, Device, RegistrationToken
+from app.native_prompt import NativeError
 from app.services.collector_identity import authorize_collector
+from app.services.native_prompt_grants import authorize_native
 from app.utils import as_utc
 
 # Paths served without a credential. Deliberately minimal: /docs, /redoc and
@@ -23,6 +26,10 @@ from app.utils import as_utc
 # control plane to anyone who could reach the port. The schema is still
 # retrievable with a bearer token.
 _COLLECTOR_WRITES = {"/v1/collector/observations", "/v1/collector/heartbeat"}
+
+_NATIVE_WRITES = frozenset(
+    {"/v1/native-prompt/observations", "/v1/native-prompt/decisions", "/v1/native-prompt/deliveries"}
+)
 
 _PUBLIC_PATHS = {"/health", "/favicon.ico"}
 
@@ -80,6 +87,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
             self._anonymous(request)
             return await call_next(request)
 
+        if request.url.path in _NATIVE_WRITES:
+            return await self._handle_native(request, call_next)
+
         # Extract Bearer token
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
@@ -100,6 +110,34 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await self._handle_dr_token(request, call_next, hashed)
         else:
             return await self._handle_ak_token(request, call_next, hashed)
+
+    async def _handle_native(self, request: Request, call_next):
+        from app.routes.native_prompt import native_refusal
+
+        request.state.native_started_at = time.monotonic()
+        if request.method != "POST":
+            return native_refusal(NativeError("unauthorized", 403))
+        bearers = request.headers.getlist("authorization")
+        capabilities = request.headers.getlist("x-tidewall-inline-capability")
+        if (
+            len(bearers) != 1
+            or not bearers[0].startswith("Bearer at_")
+            or len(capabilities) != 1
+            or not re.fullmatch(r"[A-Za-z0-9_-]{43}", capabilities[0])
+        ):
+            return native_refusal(NativeError("unauthorized", 401))
+        try:
+            with request.app.state.session_factory() as session:
+                principal = authorize_native(
+                    session, hash_key(bearers[0][7:]), hash_key(capabilities[0]), now=datetime.now(UTC)
+                )
+        except NativeError as exc:
+            return native_refusal(exc)
+        except SQLAlchemyError:
+            return native_refusal(NativeError("storage_unavailable", 503))
+        self._anonymous(request)
+        request.state.native_principal = principal
+        return await call_next(request)
 
     async def _handle_ak_token(self, request: Request, call_next, hashed: str):
         """Handle ak_ prefix API keys — existing behavior."""

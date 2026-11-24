@@ -141,7 +141,7 @@ def test_collection_revision_preserves_populated_prior_head_and_enforces_scope(t
     _, second = provision(sessions, other)
     _alembic(db, "upgrade", "head")
     with sqlite3.connect(db) as con:
-        assert con.execute("SELECT version_num FROM alembic_version").fetchone() == ("c81b0704d921",)
+        assert con.execute("SELECT version_num FROM alembic_version").fetchone() == ("9a42c7d3e601",)
     from app.services.agent_event_service import heartbeat, ingest
 
     for principal in [first, second]:

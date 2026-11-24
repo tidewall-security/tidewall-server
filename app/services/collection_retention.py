@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import AgentObservation, AgentSession, CollectorOutcome, CollectorProgress
+from app.db.models import AgentObservation, AgentSession, CollectorOutcome, CollectorProgress, NativePromptObservation
 
 
 def purge_collection(session: Session, now: datetime) -> int:
@@ -19,7 +19,12 @@ def purge_collection(session: Session, now: datetime) -> int:
     has_events = (
         select(AgentObservation.event_id).where(AgentObservation.session_id == AgentSession.session_id).exists()
     )
-    removed += session.query(AgentSession).filter(~has_events).delete(synchronize_session=False)
+    has_native = (
+        select(NativePromptObservation.event_id)
+        .where(NativePromptObservation.session_id == AgentSession.session_id)
+        .exists()
+    )
+    removed += session.query(AgentSession).filter(~has_events, ~has_native).delete(synchronize_session=False)
     removed += (
         session.query(CollectorProgress)
         .filter(CollectorProgress.heartbeat_expires_at <= now)
