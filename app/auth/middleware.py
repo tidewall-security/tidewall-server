@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from datetime import UTC, datetime
@@ -145,7 +146,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 )
 
         try:
-            principal = await run_in_threadpool(authenticate)
+            if request.url.path == "/v1/native-prompt/decisions":
+                async with asyncio.timeout(max(0, request.state.native_started_at + 1.8 - time.monotonic())):
+                    principal = await run_in_threadpool(authenticate)
+            else:
+                principal = await run_in_threadpool(authenticate)
+        except TimeoutError:
+            return native_refusal(NativeError("deadline_exceeded", 504))
         except NativeError as exc:
             return native_refusal(exc)
         except SQLAlchemyError:

@@ -315,7 +315,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             if classifier_settings is not None:
                 classifier = PromptClassifierClient(classifier_settings)
                 resources.push_async_callback(classifier.aclose)
+            from uuid import UUID
+
+            from app.services.native_prompt_decisions import NativeDecisionService
+
             app.state.prompt_classifier_client = classifier
+            native_decisions = NativeDecisionService(SessionLocal, classifier, process_id=UUID(process_lock.boot_id))
+            await resources.enter_async_context(native_decisions.lifecycle())
+            app.state.native_decisions = native_decisions
             logging.info("Tidewall ready")
             yield
     finally:
