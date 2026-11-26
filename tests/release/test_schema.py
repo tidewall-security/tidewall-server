@@ -81,11 +81,22 @@ def test_every_referential_action_is_pinned(conn):
     assert all(count == 1 for count in observed.values()), observed
 
 
-def test_twenty_one_relationships_of_which_twelve_write_on_delete(conn):
+def test_thirty_relationships_of_which_twenty_one_write_on_delete(conn):
     # Composite constraints count once, even when multiple columns carry scope.
     observed = referential_actions(conn)
-    assert sum(observed.values()) == 21
-    assert sum(count for fk, count in observed.items() if fk[5] in WRITING_ACTIONS) == 12
+    assert sum(observed.values()) == 30
+    assert sum(count for fk, count in observed.items() if fk[5] in WRITING_ACTIONS) == 21
+
+
+def test_native_index_slots_and_physical_session_token_copies(scratch):
+    locations = copy_map(scratch).locations(("agent_sessions", "native_session_token"))
+    assert locations == {"agent_sessions": 1, "sqlite_autoindex_agent_sessions_2": 1, "uq_native_session_scope": 1}
+    assert copy_map(scratch).locations(("native_prompt_deliveries", "decision_id")) == {
+        "native_prompt_deliveries": 1,
+        "ix_native_prompt_deliveries_decision_id": 1,
+    }
+    scratch.execute("CREATE INDEX unexpected_token_copy ON native_prompt_grants(session_token)")
+    assert any(v.kind == "native-index-slots" and v.detail == "native_prompt_grants" for v in invariant(scratch))
 
 
 def test_on_update_is_pinned_too(conn):
@@ -684,3 +695,13 @@ def test_entering_a_receipt_index_accounts_for_its_implicit_rowid_slot():
             "id",
             "ordinal",
         ]
+
+
+@pytest.mark.parametrize("change", ["COLLATE NOCASE", "DESC"])
+def test_native_parent_index_collation_and_direction_are_pinned(scratch, change):
+    scratch.execute("DROP INDEX uq_native_session_scope")
+    scratch.execute(
+        "CREATE UNIQUE INDEX uq_native_session_scope ON agent_sessions "
+        f"(session_id,device_id,policy_id,agent,native_session_token {change})"
+    )
+    assert any(v.kind == "native-index-slots" and v.detail == "agent_sessions" for v in invariant(scratch))

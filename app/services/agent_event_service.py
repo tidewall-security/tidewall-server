@@ -22,7 +22,14 @@ from app.agent_events import (
     Stored,
     canonical_observation_bytes,
 )
-from app.db.models import AgentObservation, AgentSession, CollectorOutcome, CollectorProgress, Device
+from app.db.models import (
+    AgentObservation,
+    AgentSession,
+    CollectorOutcome,
+    CollectorProgress,
+    Device,
+    NativePromptObservation,
+)
 from app.services.collector_identity import CollectorPrincipal, authorize_collector
 from app.utils import as_utc
 
@@ -73,7 +80,12 @@ def _retire_session(session: Session, session_id: str, received: datetime) -> bo
     """Forget a fully expired correlation while the writer holds BEGIN IMMEDIATE."""
     events = AgentObservation.session_id == session_id
     live = select(AgentObservation.event_id).where(events, AgentObservation.expires_at > received).exists()
-    if session.scalar(select(live)):
+    native_live = (
+        select(NativePromptObservation.event_id)
+        .where(NativePromptObservation.session_id == session_id, NativePromptObservation.expires_at > received)
+        .exists()
+    )
+    if session.scalar(select(live | native_live)):
         return False
     session.execute(delete(AgentObservation).where(events))
     session.execute(delete(AgentSession).where(AgentSession.session_id == session_id))

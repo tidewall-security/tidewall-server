@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ---------------------------------------------------------------------------
 # Settings (environment variables)
@@ -22,6 +22,9 @@ from app.services.nat64 import Pref64Posture, parse_pref64
 
 class Settings(BaseModel):
     """Application-level settings sourced from environment variables."""
+
+    # Model-level validation sees the complete environment override mapping, including credentials.
+    model_config = ConfigDict(hide_input_in_errors=True)
 
     POLICY_FILE: str = "policy.yaml"
     DB_URL: str = "sqlite:///data/tidewall.db"
@@ -36,6 +39,14 @@ class Settings(BaseModel):
     # Tidewall never generates this, because a generated value would have to be
     # emitted to logs or stdout to reach the operator, where it would persist.
     BOOTSTRAP_KEY: str | None = None
+    # Operator-only inference endpoint. These fields have no public configuration projection.
+    NATIVE_CLASSIFIER_ORIGIN: str | None = Field(default=None, repr=False, exclude=True)
+    NATIVE_CLASSIFIER_TENANT_ID: str | None = Field(default=None, repr=False, exclude=True)
+    NATIVE_CLASSIFIER_KEY_FILE: str | None = Field(default=None, repr=False, exclude=True)
+    NATIVE_CLASSIFIER_CA_FILE: str | None = Field(default=None, repr=False, exclude=True)
+    NATIVE_CLASSIFIER_ALLOW_LOOPBACK_HTTP: bool = Field(default=False, repr=False, exclude=True)
+    NATIVE_CLASSIFIER_TIMEOUT_MS: int = Field(default=1200, ge=1, le=1500, repr=False, exclude=True)
+
     # The deployment's declared NAT64 posture. Unset is not a default: content
     # export refuses rather than assume this network has no translation. See
     # app/services/nat64.py and the finding it names.

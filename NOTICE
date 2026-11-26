@@ -26,6 +26,11 @@ This product includes software developed by:
 - detect-secrets (https://github.com/Yelp/detect-secrets) — Apache License 2.0
 - spaCy (https://spacy.io/) — MIT License
 
+The native classifier HTTP client in app/services/prompt_classifier_client.py
+adapts OpenAIDR src/openaidr/server/prompt_classifier.py, source blob
+82e9f2e47b1a111312839043a0d02b01b7f8854a, under the Apache License 2.0.
+Copyright 2026 OpenSecura, Inc.
+
 This product distributes pre-trained model artifacts:
 
 The Docker image redistributes the following model artifacts under their own

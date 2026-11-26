@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
-from datetime import UTC
+import time
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from sqlalchemy.exc import SQLAlchemyError
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -15,7 +18,9 @@ from app.auth.dependencies import KNOWN_ROLES
 from app.auth.grants import GrantError, validate_grants
 from app.auth.key_utils import hash_key
 from app.db.models import AccessToken, APIKey, Device, RegistrationToken
+from app.native_prompt import NativeError
 from app.services.collector_identity import authorize_collector
+from app.services.native_prompt_grants import NativePrincipal, authorize_native
 from app.utils import as_utc
 
 # Paths served without a credential. Deliberately minimal: /docs, /redoc and
@@ -23,6 +28,16 @@ from app.utils import as_utc
 # control plane to anyone who could reach the port. The schema is still
 # retrievable with a bearer token.
 _COLLECTOR_WRITES = {"/v1/collector/observations", "/v1/collector/heartbeat"}
+
+_NATIVE_WRITES = frozenset(
+    {"/v1/native-prompt/observations", "/v1/native-prompt/decisions", "/v1/native-prompt/deliveries"}
+)
+
+_NATIVE_ADMIN_PATHS = {
+    "PUT": re.compile(r"/v1/policies/[^/]+/native-prompt"),
+    "POST": re.compile(r"/v1/native-prompt/grants"),
+    "DELETE": re.compile(r"/v1/native-prompt/grants/[^/]+"),
+}
 
 _PUBLIC_PATHS = {"/health", "/favicon.ico"}
 
@@ -80,6 +95,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
             self._anonymous(request)
             return await call_next(request)
 
+        if request.url.path in _NATIVE_WRITES:
+            return await self._handle_native(request, call_next)
+
+        admin_path = _NATIVE_ADMIN_PATHS.get(request.method)
+        if admin_path and admin_path.fullmatch(request.url.path):
+            return await self._handle_native_admin(request, call_next)
+
         # Extract Bearer token
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
@@ -101,8 +123,75 @@ class AuthMiddleware(BaseHTTPMiddleware):
         else:
             return await self._handle_ak_token(request, call_next, hashed)
 
+    async def _handle_native(self, request: Request, call_next):
+        from app.routes.native_prompt import native_refusal
+
+        request.state.native_started_at = time.monotonic()
+        if request.method != "POST":
+            return native_refusal(NativeError("unauthorized", 403))
+        bearers = request.headers.getlist("authorization")
+        capabilities = request.headers.getlist("x-tidewall-inline-capability")
+        if (
+            len(bearers) != 1
+            or not bearers[0].startswith("Bearer at_")
+            or len(capabilities) != 1
+            or not re.fullmatch(r"[A-Za-z0-9_-]{43}", capabilities[0])
+        ):
+            return native_refusal(NativeError("unauthorized", 401))
+
+        # A checkout may outlive the caller. The worker needs only the factory
+        # and hashes, never the request or its ASGI receive/body stream.
+        sessions = request.app.state.session_factory
+        collector_hash = hash_key(bearers[0][7:])
+        capability_hash = hash_key(capabilities[0])
+
+        def authenticate() -> NativePrincipal:
+            with sessions() as session:
+                return authorize_native(session, collector_hash, capability_hash, now=datetime.now(UTC))
+
+        try:
+            if request.url.path == "/v1/native-prompt/decisions":
+                async with asyncio.timeout(max(0, request.state.native_started_at + 1.8 - time.monotonic())):
+                    principal = await run_in_threadpool(authenticate)
+            else:
+                principal = await run_in_threadpool(authenticate)
+        except TimeoutError:
+            return native_refusal(NativeError("deadline_exceeded", 504))
+        except NativeError as exc:
+            return native_refusal(exc)
+        except SQLAlchemyError:
+            return native_refusal(NativeError("storage_unavailable", 503))
+        self._anonymous(request)
+        request.state.native_principal = principal
+        return await call_next(request)
+
+    async def _handle_native_admin(self, request: Request, call_next):
+        from app.routes.native_prompt import native_refusal
+
+        bearers = request.headers.getlist("authorization")
+        if len(bearers) != 1 or not bearers[0].startswith("Bearer "):
+            return native_refusal(NativeError("unauthorized", 401))
+        raw = bearers[0][7:]
+        if raw.startswith(("rt_", "at_", "dr_")):
+            return native_refusal(NativeError("unauthorized", 403))
+        try:
+            denied = await run_in_threadpool(self._authenticate_api_key, request, hash_key(raw))
+        except SQLAlchemyError:
+            return native_refusal(NativeError("storage_unavailable", 503))
+        if denied is not None:
+            return native_refusal(NativeError("unauthorized", denied.status_code))
+        if request.state.role != "admin":
+            return native_refusal(NativeError("unauthorized", 403))
+        return await call_next(request)
+
     async def _handle_ak_token(self, request: Request, call_next, hashed: str):
-        """Handle ak_ prefix API keys — existing behavior."""
+        denied = self._authenticate_api_key(request, hashed)
+        if denied is not None:
+            return denied
+        return await call_next(request)
+
+    @staticmethod
+    def _authenticate_api_key(request: Request, hashed: str) -> JSONResponse | None:
         session = request.app.state.session_factory()
         try:
             from datetime import datetime
@@ -137,7 +226,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         finally:
             session.close()
 
-        return await call_next(request)
+        return None
 
     async def _handle_rt_token(self, request: Request, call_next, hashed: str):
         """Handle rt_ prefix registration tokens.

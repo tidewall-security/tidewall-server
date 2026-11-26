@@ -24,7 +24,7 @@ import logging
 import os
 import pathlib
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -80,6 +80,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan: startup and shutdown logic."""
     settings = Settings.from_env()
 
+    from app.services.prompt_classifier_client import ClassifierSettings, PromptClassifierClient
+
+    classifier_settings = ClassifierSettings.from_settings(settings)
     logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
 
     # Validate authentication configuration BEFORE touching the database.
@@ -306,10 +309,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # shutdown the loop can close with one still in flight.
     app.state.export_settlements = set()
 
-    logging.info("Tidewall ready")
-
     try:
-        yield
+        async with AsyncExitStack() as resources:
+            classifier = None
+            if classifier_settings is not None:
+                classifier = PromptClassifierClient(classifier_settings)
+                resources.push_async_callback(classifier.aclose)
+            from uuid import UUID
+
+            from app.services.native_prompt_decisions import NativeDecisionService
+
+            app.state.prompt_classifier_client = classifier
+            native_decisions = NativeDecisionService(SessionLocal, classifier, process_id=UUID(process_lock.boot_id))
+            await resources.enter_async_context(native_decisions.lifecycle())
+            app.state.native_decisions = native_decisions
+            logging.info("Tidewall ready")
+            yield
     finally:
         # In a finally: an exception thrown into the lifespan context would
         # otherwise skip both, leaving the scheduler running against a disposed
@@ -468,6 +483,7 @@ def create_app() -> FastAPI:
     async def health() -> dict:
         return {"status": "ok"}
 
+    from app.native_prompt import NativeError
     from app.routes import (
         activity,
         agent_events,
@@ -481,14 +497,21 @@ def create_app() -> FastAPI:
         keys,
         logs,
         me,
+        native_prompt,
         policies,
         registration,
         settings,
         unredact,
     )
 
+    # Last registered so this gate runs outside CORS and every BaseHTTPMiddleware
+    # stream. It must see the final transport send for a native decision.
+    app.add_middleware(native_prompt.NativeDecisionOutputMiddleware)
+
     app.include_router(agent_events.router)
     app.include_router(collector_ingest.router)
+    app.add_exception_handler(NativeError, native_prompt.native_error_handler)
+    app.include_router(native_prompt.router)
     app.include_router(guard.router)
     app.include_router(unredact.router)
     app.include_router(logs.router)

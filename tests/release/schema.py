@@ -37,6 +37,64 @@ ForeignKey = tuple[str, tuple[str, ...], str, tuple[str, ...], str, str]
 
 REFERENTIAL_ACTIONS: frozenset[ForeignKey] = frozenset(
     {
+        (
+            "native_prompt_assessments",
+            ("decision_id", "device_id", "policy_id"),
+            "native_prompt_decisions",
+            ("decision_id", "device_id", "policy_id"),
+            "NO ACTION",
+            "CASCADE",
+        ),
+        (
+            "native_prompt_decisions",
+            ("event_id", "occurrence_id", "session_id", "device_id", "policy_id", "session_token"),
+            "native_prompt_observations",
+            ("event_id", "occurrence_id", "session_id", "device_id", "policy_id", "session_token"),
+            "NO ACTION",
+            "CASCADE",
+        ),
+        (
+            "native_prompt_decisions",
+            ("grant_id", "device_id", "policy_id", "session_token", "grant_generation", "policy_generation"),
+            "native_prompt_grants",
+            ("grant_id", "device_id", "policy_id", "session_token", "grant_generation", "policy_generation"),
+            "NO ACTION",
+            "CASCADE",
+        ),
+        (
+            "native_prompt_deliveries",
+            ("decision_id", "device_id", "policy_id", "request_id", "occurrence_id", "grant_id", "grant_generation"),
+            "native_prompt_decisions",
+            ("decision_id", "device_id", "policy_id", "request_id", "occurrence_id", "grant_id", "grant_generation"),
+            "NO ACTION",
+            "CASCADE",
+        ),
+        ("native_prompt_grants", ("device_id",), "devices", ("id",), "NO ACTION", "CASCADE"),
+        (
+            "native_prompt_grants",
+            ("policy_id",),
+            "native_prompt_policy_configs",
+            ("policy_id",),
+            "NO ACTION",
+            "CASCADE",
+        ),
+        (
+            "native_prompt_grants",
+            ("session_id", "device_id", "policy_id", "agent", "session_token"),
+            "agent_sessions",
+            ("session_id", "device_id", "policy_id", "agent", "native_session_token"),
+            "NO ACTION",
+            "CASCADE",
+        ),
+        (
+            "native_prompt_observations",
+            ("session_id", "device_id", "policy_id", "agent", "session_token"),
+            "agent_sessions",
+            ("session_id", "device_id", "policy_id", "agent", "native_session_token"),
+            "NO ACTION",
+            "CASCADE",
+        ),
+        ("native_prompt_policy_configs", ("policy_id",), "policies", ("id",), "NO ACTION", "CASCADE"),
         ("access_rules", ("rule_set_id",), "rule_sets", ("id",), "NO ACTION", "CASCADE"),
         # A device's refresh credential dies with the device. Leaving it would
         # keep a credential addressed to a device that no longer exists.
@@ -144,6 +202,60 @@ def cascade_map(conn: sqlite3.Connection) -> dict[tuple[str, str], set[tuple[str
                 for column, parent_column in zip(columns, parent_columns, strict=True):
                     out.setdefault((parent, parent_column), set()).add((table, column, event, action))
     return out
+
+
+# Ordinary physical key slots introduced or shared by native records. Exact index names
+# and ordered columns also pin the copies the release attribution oracle must explain.
+NATIVE_INDEXES = {
+    "agent_sessions": {
+        "ix_agent_sessions_policy_time": (False, ("policy_id", "received_at", "session_id")),
+        "sqlite_autoindex_agent_sessions_1": (True, ("session_id",)),
+        "sqlite_autoindex_agent_sessions_2": (True, ("device_id", "agent", "native_session_token")),
+        "sqlite_autoindex_agent_sessions_3": (True, ("session_id", "device_id", "policy_id", "agent")),
+        "uq_native_session_scope": (True, ("session_id", "device_id", "policy_id", "agent", "native_session_token")),
+    },
+    "native_prompt_assessments": {"sqlite_autoindex_native_prompt_assessments_1": (True, ("decision_id",))},
+    "native_prompt_decisions": {
+        "ix_native_prompt_decisions_expires_at": (False, ("expires_at",)),
+        "sqlite_autoindex_native_prompt_decisions_1": (True, ("decision_id",)),
+        "sqlite_autoindex_native_prompt_decisions_2": (True, ("decision_id", "device_id", "policy_id")),
+        "sqlite_autoindex_native_prompt_decisions_3": (
+            True,
+            ("decision_id", "device_id", "policy_id", "request_id", "occurrence_id", "grant_id", "grant_generation"),
+        ),
+        "sqlite_autoindex_native_prompt_decisions_4": (True, ("device_id", "request_id")),
+        "sqlite_autoindex_native_prompt_decisions_5": (True, ("event_id",)),
+        "sqlite_autoindex_native_prompt_decisions_6": (True, ("inference_request_id",)),
+    },
+    "native_prompt_deliveries": {
+        "ix_native_prompt_deliveries_decision_id": (False, ("decision_id",)),
+        "ix_native_prompt_deliveries_expires_at": (False, ("expires_at",)),
+        "sqlite_autoindex_native_prompt_deliveries_1": (True, ("report_id",)),
+    },
+    "native_prompt_grants": {
+        "sqlite_autoindex_native_prompt_grants_1": (True, ("grant_id",)),
+        "sqlite_autoindex_native_prompt_grants_2": (True, ("capability_hash",)),
+        "sqlite_autoindex_native_prompt_grants_3": (
+            True,
+            ("device_id", "policy_id", "session_token", "native_profile", "grant_generation"),
+        ),
+        "sqlite_autoindex_native_prompt_grants_4": (
+            True,
+            ("grant_id", "device_id", "policy_id", "session_token", "grant_generation", "policy_generation"),
+        ),
+    },
+    "native_prompt_observations": {
+        "ix_native_prompt_observations_expires_at": (False, ("expires_at",)),
+        "ix_native_prompt_observations_session_time": (False, ("session_id", "received_at", "event_id")),
+        "sqlite_autoindex_native_prompt_observations_1": (True, ("event_id",)),
+        "sqlite_autoindex_native_prompt_observations_2": (True, ("device_id", "occurrence_id")),
+        "sqlite_autoindex_native_prompt_observations_3": (
+            True,
+            ("event_id", "occurrence_id", "session_id", "device_id", "policy_id", "session_token"),
+        ),
+    },
+    "native_prompt_policy_configs": {"sqlite_autoindex_native_prompt_policy_configs_1": (True, ("policy_id",))},
+}
 
 
 RECEIPT_INDEX = "uq_collector_successful_ordinal"
@@ -270,6 +382,24 @@ def invariant(conn: sqlite3.Connection) -> list[InvariantViolation]:
         for kind in ("trigger", "view"):
             for (name,) in conn.execute(f"SELECT name FROM {source} WHERE type=?", (kind,)):
                 violations.append(InvariantViolation(f"{prefix}{kind}", name))
+
+    for table, pinned_indexes in NATIVE_INDEXES.items():
+        indexes = {}
+        for _, name, unique, _, _ in conn.execute(f"PRAGMA main.index_list('{table}')"):
+            # Bind the index name as data, including for drift introduced by an operator.
+            slots = tuple(
+                conn.execute(
+                    'SELECT name, coll, "desc" FROM pragma_index_xinfo(?, ?) WHERE key=1 ORDER BY seqno',
+                    (name, "main"),
+                )
+            )
+            indexes[name] = (bool(unique), slots)
+        # All native key terms are BINARY ascending, including the parent key used by scoped FKs.
+        expected_slots = {
+            name: (unique, tuple((col, "BINARY", 0) for col in cols)) for name, (unique, cols) in pinned_indexes.items()
+        }
+        if indexes != expected_slots:
+            violations.append(InvariantViolation("native-index-slots", table))
 
     observed = referential_actions(conn)
     expected = collections.Counter(REFERENTIAL_ACTIONS)

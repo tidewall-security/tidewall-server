@@ -55,6 +55,8 @@ from sqlalchemy.orm import (
 )
 from sqlalchemy.types import JSON
 
+from app.native_prompt import MODEL_IDENTITY_JSON
+
 
 def _uuid() -> str:
     return str(uuid.uuid4())
@@ -781,6 +783,15 @@ class AgentSession(Base):
     __table_args__ = (
         UniqueConstraint("device_id", "agent", "native_session_token"),
         UniqueConstraint("session_id", "device_id", "policy_id", "agent"),
+        Index(
+            "uq_native_session_scope",
+            "session_id",
+            "device_id",
+            "policy_id",
+            "agent",
+            "native_session_token",
+            unique=True,
+        ),
         Index("ix_agent_sessions_policy_time", "policy_id", "received_at", "session_id"),
     )
 
@@ -846,4 +857,278 @@ class CollectorOutcome(Base):
             "AND reason IN ('identity_conflict','retired_ordinal'))",
             name="ck_collector_disposition",
         ),
+    )
+
+
+# Native evidence uses bounded scalar columns throughout. Each child references
+# the whole parent scope so a valid UUID cannot be combined with a different tenant.
+def _hex64(column: str) -> CheckConstraint:
+    return CheckConstraint(
+        f"typeof({column})='text' AND length({column})=64 AND "
+        f"instr({column},char(0))=0 AND {column} NOT GLOB '*[^0-9a-f]*'"
+    )
+
+
+def _utc_timestamp(column: str) -> CheckConstraint:
+    # SQLite stores the ORM UTC instant as YYYY-MM-DD HH:MM:SS.ffffff.
+    # Round trip whole seconds to reject invalid dates; do not round fractions through julianday.
+    whole = f"substr({column},1,19)"
+    return CheckConstraint(
+        f"typeof({column})='text' AND length({column})=26 AND instr({column},char(0))=0 AND "
+        f"substr({column},1,4)!='0000' AND {whole} IS datetime(unixepoch({whole}), 'unixepoch') AND "
+        f"substr({column},20,1)='.' AND substr({column},21,6) NOT GLOB '*[^0-9]*'"
+    )
+
+
+def _uuid4_check(column: str) -> CheckConstraint:
+    digits = f"replace({column},'-','')"
+    return CheckConstraint(
+        f"typeof({column})='text' AND length({column})=36 AND instr({column},char(0))=0 AND "
+        f"length({digits})=32 AND "
+        f"{digits} NOT GLOB '*[^0-9a-f]*' AND substr({column},9,1)='-' AND substr({column},14,2)='-4' AND "
+        f"substr({column},19,1)='-' AND substr({column},20,1) IN ('8','9','a','b') AND substr({column},24,1)='-'"
+    )
+
+
+def _native_session_fk() -> ForeignKeyConstraint:
+    return ForeignKeyConstraint(
+        ["session_id", "device_id", "policy_id", "agent", "session_token"],
+        [
+            "agent_sessions.session_id",
+            "agent_sessions.device_id",
+            "agent_sessions.policy_id",
+            "agent_sessions.agent",
+            "agent_sessions.native_session_token",
+        ],
+        ondelete="CASCADE",
+    )
+
+
+def _int_range(column: str, low: int, high: int) -> CheckConstraint:
+    return CheckConstraint(f"typeof({column})='integer' AND {column} BETWEEN {low} AND {high}")
+
+
+def _scope_fk(columns: list[str], table: str) -> ForeignKeyConstraint:
+    return ForeignKeyConstraint(columns, [f"{table}.{col}" for col in columns], ondelete="CASCADE")
+
+
+class NativePromptPolicyConfig(Base):
+    __tablename__ = "native_prompt_policy_configs"
+    policy_id: Mapped[str] = mapped_column(ForeignKey("policies.id", ondelete="CASCADE"), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    profile: Mapped[str] = mapped_column(String, default="tidewall.prompt-injection.1")
+    threshold: Mapped[float] = mapped_column(Float, default=0.5)
+    generation: Mapped[int] = mapped_column(Integer)
+    __table_args__ = (
+        CheckConstraint("enabled IN (0,1) AND profile='tidewall.prompt-injection.1'"),
+        CheckConstraint("typeof(threshold) IN ('integer','real') AND threshold BETWEEN 0 AND 1"),
+        _int_range("generation", 1, 9007199254740991),
+    )
+
+
+class NativePromptGrant(Base):
+    __tablename__ = "native_prompt_grants"
+    grant_id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"))
+    policy_id: Mapped[str] = mapped_column(ForeignKey("native_prompt_policy_configs.policy_id", ondelete="CASCADE"))
+    session_token: Mapped[str] = mapped_column(String(64))
+    native_profile: Mapped[str] = mapped_column(String)
+    # Only capture grants reference a confirmed server session.
+    session_id: Mapped[str | None] = mapped_column(String)
+    agent: Mapped[str] = mapped_column(String, default="claude-code")
+    capability_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    grant_generation: Mapped[int] = mapped_column(Integer)
+    policy_generation: Mapped[int] = mapped_column(Integer)
+    capture_allowed: Mapped[bool] = mapped_column(Boolean)
+    issued_at: Mapped[datetime] = mapped_column(DateTime)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime)
+    __table_args__ = (
+        _native_session_fk(),
+        UniqueConstraint(
+            "grant_id", "device_id", "policy_id", "session_token", "grant_generation", "policy_generation"
+        ),
+        UniqueConstraint("device_id", "policy_id", "session_token", "native_profile", "grant_generation"),
+        CheckConstraint("native_profile='claude-code.user-prompt-submit.1' AND agent='claude-code'"),
+        CheckConstraint("(capture_allowed=1 AND session_id IS NOT NULL) OR (capture_allowed=0 AND session_id IS NULL)"),
+        _utc_timestamp("issued_at"),
+        _utc_timestamp("expires_at"),
+        CheckConstraint(
+            "((unixepoch(substr(expires_at,1,19))-unixepoch(substr(issued_at,1,19)))*1000000 + "
+            "CAST(substr(expires_at,21,6) AS INTEGER) - CAST(substr(issued_at,21,6) AS INTEGER)) "
+            "BETWEEN 1 AND 1800000000"
+        ),
+        _uuid4_check("grant_id"),
+        _hex64("session_token"),
+        _hex64("capability_hash"),
+        _int_range("grant_generation", 1, 9007199254740991),
+        _int_range("policy_generation", 1, 9007199254740991),
+    )
+
+
+class NativePromptObservation(Base):
+    __tablename__ = "native_prompt_observations"
+    event_id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    occurrence_id: Mapped[str] = mapped_column(String)
+    session_id: Mapped[str] = mapped_column(String)
+    session_token: Mapped[str] = mapped_column(String(64))
+    device_id: Mapped[str] = mapped_column(String)
+    policy_id: Mapped[str] = mapped_column(String)
+    agent: Mapped[str] = mapped_column(String)
+    agent_version: Mapped[str] = mapped_column(String)
+    native_profile: Mapped[str] = mapped_column(String)
+    received_at: Mapped[datetime] = mapped_column(DateTime)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    __table_args__ = (
+        _native_session_fk(),
+        UniqueConstraint("device_id", "occurrence_id"),
+        UniqueConstraint("event_id", "occurrence_id", "session_id", "device_id", "policy_id", "session_token"),
+        Index("ix_native_prompt_observations_session_time", "session_id", "received_at", "event_id"),
+        CheckConstraint(
+            "native_profile='claude-code.user-prompt-submit.1' AND agent='claude-code' AND agent_version='2.1.330'"
+        ),
+        _uuid4_check("event_id"),
+        _uuid4_check("occurrence_id"),
+        _hex64("session_token"),
+    )
+
+
+_NATIVE_REASONS = (
+    "'clean','classifier_positive','access_rule_block','malicious_list','benign_override',"
+    "'capture_disabled','input_too_large','input_unsupported','classifier_unavailable','classifier_invalid',"
+    "'prompt_list_failed','deadline_exceeded','policy_changed','policy_unsupported','authority_changed',"
+    "'storage_unavailable','request_retired'"
+)
+
+
+class NativePromptDecision(Base):
+    __tablename__ = "native_prompt_decisions"
+    decision_id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    event_id: Mapped[str] = mapped_column(String, unique=True)
+    request_id: Mapped[str] = mapped_column(String)
+    occurrence_id: Mapped[str] = mapped_column(String)
+    session_id: Mapped[str] = mapped_column(String)
+    device_id: Mapped[str] = mapped_column(String)
+    policy_id: Mapped[str] = mapped_column(String)
+    session_token: Mapped[str] = mapped_column(String(64))
+    grant_id: Mapped[str] = mapped_column(String)
+    grant_generation: Mapped[int] = mapped_column(Integer)
+    policy_generation: Mapped[int] = mapped_column(Integer)
+    policy_revision: Mapped[str] = mapped_column(String(64))
+    mode: Mapped[str] = mapped_column(String)
+    input_state: Mapped[str] = mapped_column(String)
+    process_id: Mapped[str] = mapped_column(String)
+    owner_nonce: Mapped[str] = mapped_column(String, default=_uuid)
+    inference_request_id: Mapped[str] = mapped_column(String, default=_uuid, unique=True)
+    status: Mapped[str] = mapped_column(String, default="pending")
+    evaluated_action: Mapped[str | None] = mapped_column(String)
+    returned_action: Mapped[str | None] = mapped_column(String)
+    reason: Mapped[str | None] = mapped_column(String)
+    response_prepared: Mapped[bool] = mapped_column(Boolean, default=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    __table_args__ = (
+        _scope_fk(
+            ["event_id", "occurrence_id", "session_id", "device_id", "policy_id", "session_token"],
+            "native_prompt_observations",
+        ),
+        _scope_fk(
+            ["grant_id", "device_id", "policy_id", "session_token", "grant_generation", "policy_generation"],
+            "native_prompt_grants",
+        ),
+        UniqueConstraint("device_id", "request_id"),
+        UniqueConstraint("decision_id", "device_id", "policy_id"),
+        UniqueConstraint(
+            "decision_id", "device_id", "policy_id", "request_id", "occurrence_id", "grant_id", "grant_generation"
+        ),
+        CheckConstraint(
+            "input_state IN ('complete','capture_disabled','input_too_large','unsupported') AND mode IN ('report',"
+            "'enforce')"
+        ),
+        CheckConstraint("status IN ('pending','committed','abandoned') AND response_prepared IN (0,1)"),
+        CheckConstraint("evaluated_action IN ('allow','deny','unknown') AND returned_action IN ('allow','deny')"),
+        CheckConstraint(f"reason IN ({_NATIVE_REASONS})"),
+        CheckConstraint(
+            "(status='pending' AND reason IS NULL AND evaluated_action IS NULL AND returned_action IS NULL AND "
+            "response_prepared=0) OR "
+            "(status='committed' AND reason IS NOT NULL AND evaluated_action IS NOT NULL AND "
+            "response_prepared=(returned_action IS NOT NULL)) OR "
+            "(status='abandoned' AND reason IS NOT NULL AND returned_action IS NULL AND response_prepared=0)"
+        ),
+        _int_range("policy_generation", 1, 9007199254740991),
+        _hex64("policy_revision"),
+        *(_uuid4_check(c) for c in ("decision_id", "request_id", "process_id", "owner_nonce", "inference_request_id")),
+    )
+
+
+class NativePromptAssessment(Base):
+    __tablename__ = "native_prompt_assessments"
+    decision_id: Mapped[str] = mapped_column(String, primary_key=True)
+    device_id: Mapped[str] = mapped_column(String)
+    policy_id: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String)
+    reason: Mapped[str] = mapped_column(String)
+    profile: Mapped[str] = mapped_column(String)
+    # Only the exact pinned identity bytes can be stored on assessed records.
+    model_identity: Mapped[str | None] = mapped_column(String)
+    unsafe_score: Mapped[float | None] = mapped_column(Float)
+    score_kind: Mapped[str | None] = mapped_column(String)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    __table_args__ = (
+        _scope_fk(["decision_id", "device_id", "policy_id"], "native_prompt_decisions"),
+        CheckConstraint("profile='tidewall.prompt-injection.1'"),
+        CheckConstraint(
+            "(status='assessed' AND reason IN ('clean','classifier_positive')) OR "
+            "(status='unsupported' AND reason IN ('input_unsupported','input_too_large')) OR "
+            "(status='not_requested' AND reason IN ('capture_disabled','access_rule_block','malicious_list',"
+            "'benign_override')) OR "
+            "(status='failed' AND reason IN ('classifier_invalid','prompt_list_failed')) OR "
+            "(status='unavailable' AND reason IN ('classifier_unavailable','deadline_exceeded','policy_changed',"
+            "'policy_unsupported','authority_changed','storage_unavailable','request_retired'))"
+        ),
+        CheckConstraint(
+            f"(status='assessed' AND model_identity IS NOT NULL AND model_identity='{MODEL_IDENTITY_JSON}' AND "
+            "score_kind IS NOT NULL AND "
+            "score_kind='two_class_softmax_uncalibrated' AND typeof(unsafe_score) IN ('integer','real') AND "
+            "unsafe_score BETWEEN 0 AND 1 AND "
+            "typeof(input_tokens)='integer' AND input_tokens BETWEEN 1 AND 1024) OR "
+            "(status!='assessed' AND model_identity IS NULL AND score_kind IS NULL AND unsafe_score IS NULL AND "
+            "input_tokens IS NULL)"
+        ),
+    )
+
+
+class NativePromptDelivery(Base):
+    __tablename__ = "native_prompt_deliveries"
+    report_id: Mapped[str] = mapped_column(String, primary_key=True)
+    decision_id: Mapped[str] = mapped_column(String, index=True)
+    device_id: Mapped[str] = mapped_column(String)
+    policy_id: Mapped[str] = mapped_column(String)
+    grant_id: Mapped[str] = mapped_column(String)
+    grant_generation: Mapped[int] = mapped_column(Integer)
+    request_id: Mapped[str] = mapped_column(String)
+    occurrence_id: Mapped[str] = mapped_column(String)
+    evidence_source: Mapped[str] = mapped_column(String)
+    stage: Mapped[str] = mapped_column(String)
+    tool_count: Mapped[int | None] = mapped_column(Integer)
+    token_count: Mapped[int | None] = mapped_column(Integer)
+    marker_present: Mapped[bool | None] = mapped_column(Boolean)
+    received_at: Mapped[datetime] = mapped_column(DateTime)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    __table_args__ = (
+        _scope_fk(
+            ["decision_id", "device_id", "policy_id", "request_id", "occurrence_id", "grant_id", "grant_generation"],
+            "native_prompt_decisions",
+        ),
+        CheckConstraint(
+            "evidence_source IN ('hook','controlled_observer') AND stage IN ('stdout_flushed','allow_no_output',"
+            "'stdout_failed','native_ack_blocked','effect_allow_marker_verified','effect_deny_no_effect_verified',"
+            "'unknown')"
+        ),
+        CheckConstraint("tool_count IS NULL OR (typeof(tool_count)='integer' AND tool_count BETWEEN 0 AND 2147483647)"),
+        CheckConstraint(
+            "token_count IS NULL OR (typeof(token_count)='integer' AND token_count BETWEEN 0 AND 2147483647)"
+        ),
+        _uuid4_check("report_id"),
+        CheckConstraint("marker_present IN (0,1)"),
     )

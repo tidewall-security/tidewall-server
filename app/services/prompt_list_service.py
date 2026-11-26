@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
@@ -19,6 +20,65 @@ class PromptListConfigError(ValueError):
     Distinct from an operational failure: the calling detector records this as
     CONFIG_INVALID, because the fix is to correct the row, not to retry.
     """
+
+
+@dataclass(frozen=True)
+class FrozenPromptEntry:
+    match_type: str
+    pattern: str = field(repr=False)
+
+    def compile_regex(self):
+        return compile_pattern(self.pattern, case_insensitive=True)
+
+
+def preflight_prompt_entries(entries: tuple[FrozenPromptEntry, ...], list_type: str) -> None:
+    """Check frozen regex entries with the exact compiler used for matching."""
+    for entry in entries:
+        if entry.match_type == "regex":
+            try:
+                entry.compile_regex()
+            except UnsafePatternError as exc:
+                logger.error("Invalid regex in stored %s prompt list entry", list_type)
+                raise PromptListConfigError("invalid regex in prompt list") from exc
+
+
+def match_prompt_entries(text: str, entries: tuple[FrozenPromptEntry, ...]) -> bool:
+    """Match a bounded list with the same interpreter used by the guard."""
+    text_lower = text.lower()
+
+    for entry in entries:
+        pattern_lower = entry.pattern.lower()
+
+        # release:component prompt_list/match_substring -- substring containment
+        if entry.match_type == "substring":
+            if pattern_lower in text_lower:
+                return True
+        # release:component prompt_list/match_exact -- whole-string equality
+        elif entry.match_type == "exact":
+            if text_lower == pattern_lower:
+                return True
+        # release:component prompt_list/match_regex -- compiled pattern search
+        elif entry.match_type == "regex":
+            try:
+                # Compiled per read rather than cached: list rows are
+                # mutable independently of the engine cache, so a cache
+                # without invalidation would keep matching a pattern the
+                # administrator has already changed.
+                if entry.compile_regex().search(text):
+                    return True
+            except UnsafePatternError as exc:
+                # Skipping meant a malicious-list entry simply never
+                # matched. Raise so the calling detector records a failure
+                # instead of reporting a confident "no match".
+                #
+                # A distinct type, not a bare ValueError: this is invalid
+                # *configuration*, and the detector must record it as
+                # CONFIG_INVALID rather than as an operational scan failure.
+                # The two say different things to whoever has to fix it.
+                logger.error("Invalid regex in stored prompt list entry")
+                raise PromptListConfigError("invalid regex in prompt list") from exc
+
+    return False
 
 
 class PromptListService:
@@ -59,7 +119,7 @@ class PromptListService:
         self._session.commit()
         return entry
 
-    def _bounded_entries(self, list_type: str) -> list[GlobalPromptList]:
+    def frozen_entries(self, list_type: str, *, deterministic_ties: bool = False) -> tuple[FrozenPromptEntry, ...]:
         """Fetch at most one row past the budget, and fail if it exists.
 
         Checking the length of a full fetch is not a bound: the scan is capped
@@ -70,19 +130,20 @@ class PromptListService:
         The extra row is what distinguishes "at budget" from "over budget"
         without a second COUNT round trip.
         """
-        entries = (
-            self._session.query(GlobalPromptList)
+        query = (
+            self._session.query(GlobalPromptList.match_type, GlobalPromptList.pattern)
             .filter_by(list_type=list_type)
             .order_by(GlobalPromptList.created_at.desc())
-            .limit(MAX_PATTERNS + 1)
-            .all()
         )
+        if deterministic_ties:
+            query = query.order_by(GlobalPromptList.id)
+        entries = query.limit(MAX_PATTERNS + 1).all()
         if len(entries) > MAX_PATTERNS:
             # Create-time counting is not a hard invariant — two concurrent
             # inserts can both pass it, and rows can be written directly. The
             # scan path has to fail closed rather than do unbounded work.
             raise PromptListConfigError(f"{list_type} prompt list holds more than the {MAX_PATTERNS}-entry limit")
-        return entries
+        return tuple(FrozenPromptEntry(row.match_type, row.pattern) for row in entries)
 
     def preflight(self, list_type: str) -> None:
         """Compile every stored pattern for a list type without scanning.
@@ -95,13 +156,7 @@ class PromptListService:
         Visibility only: nothing currently refuses to serve an engine on the
         strength of it.
         """
-        for entry in self._bounded_entries(list_type):
-            if entry.match_type == "regex":
-                try:
-                    compile_pattern(entry.pattern, case_insensitive=True)
-                except UnsafePatternError as exc:
-                    logger.error("Invalid regex in stored %s prompt list entry", list_type)
-                    raise PromptListConfigError("invalid regex in prompt list") from exc
+        preflight_prompt_entries(self.frozen_entries(list_type), list_type)
 
     def list_entries(self, list_type: str | None = None) -> list[GlobalPromptList]:
         query = self._session.query(GlobalPromptList)
@@ -154,39 +209,4 @@ class PromptListService:
 
         Matching is case-insensitive for all match types.
         """
-        entries = self._bounded_entries(list_type)
-        text_lower = text.lower()
-
-        for entry in entries:
-            pattern_lower = entry.pattern.lower()
-
-            # release:component prompt_list/match_substring -- substring containment
-            if entry.match_type == "substring":
-                if pattern_lower in text_lower:
-                    return True
-            # release:component prompt_list/match_exact -- whole-string equality
-            elif entry.match_type == "exact":
-                if text_lower == pattern_lower:
-                    return True
-            # release:component prompt_list/match_regex -- compiled pattern search
-            elif entry.match_type == "regex":
-                try:
-                    # Compiled per read rather than cached: list rows are
-                    # mutable independently of the engine cache, so a cache
-                    # without invalidation would keep matching a pattern the
-                    # administrator has already changed.
-                    if compile_pattern(entry.pattern, case_insensitive=True).search(text):
-                        return True
-                except UnsafePatternError as exc:
-                    # Skipping meant a malicious-list entry simply never
-                    # matched. Raise so the calling detector records a failure
-                    # instead of reporting a confident "no match".
-                    #
-                    # A distinct type, not a bare ValueError: this is invalid
-                    # *configuration*, and the detector must record it as
-                    # CONFIG_INVALID rather than as an operational scan failure.
-                    # The two say different things to whoever has to fix it.
-                    logger.error("Invalid regex in stored prompt list entry")
-                    raise PromptListConfigError("invalid regex in prompt list") from exc
-
-        return False
+        return match_prompt_entries(text, self.frozen_entries(list_type))
